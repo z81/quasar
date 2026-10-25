@@ -2,7 +2,7 @@
 
 Rust-переписывание [alice-server](../alice-server) — эмулятора backend-сервера Яндекс.Станции с голосовым ассистентом, у которого все AI-вызовы (STT, TTS, диалоговый «мозг») идут через один токен OpenRouter.
 
-## Статус: фаза 1 из 3 — рабочий скелет голосового конвейера
+## Статус: фазы 1–2 из 3 — голосовой конвейер + эмуляция доменов
 
 **Готово:**
 - protobuf-кодген из оригинальных схем quasar (protox + prost, без системного protoc) — `TClientMessage`/`TServerMessage` и вся ветка NAlice
@@ -12,9 +12,9 @@ Rust-переписывание [alice-server](../alice-server) — эмулят
 - агент: JSON-протокол LLM (`function_calls` с `schedule`, `text`, `continue_dialog`, `can_cache`), агентский цикл с возвратом результатов функций, LRU-кэш первого хода, handlebars-промпты (те же файлы, что в TS-версии)
 - ответ станции: AsrResult, AliceResponse, TtsSpeak + потоковое аудио, StreamControl
 
-**Фаза 2 (следующее):** HTTP-эмуляция доменов (`quasar.yandex.net`: check_updates/register/device_list/glagol-токены, `get_sync_info`, заглушки), PostgreSQL-хранилище, генерация TLS-сертификатов, API управления (`/devices`), полная форма AliceResponse (настройки/карточки — сверить с прошивкой).
+**Фаза 2 (готово):** эмуляция доменов — `quasar.yandex.net` (register, check_updates, update_device_state, glagol/token + check_token v1/v2 на HS256-JWT, glagol/device_list, get_sync_info, push_subscribe), `oauth.yandex.ru/token`, `clck.yandex.net`, `rpc.alice.yandex.net` (пустой protobuf), `scbh` (generate_204), заглушки startup/appmetrica; реестр станций in-memory с самоподписанными сертификатами (rcgen). Хранилище PostgreSQL — фаза 3.
 
-**Фаза 3:** remote function/state-серверы и MCP, обновления прошивки (updates-config.yml), Docker.
+**Фаза 3 (следующее):** PostgreSQL-хранилище, remote function/state-серверы и MCP, обновления прошивки (updates-config.yml), API управления (`/devices`), полная форма AliceResponse, Docker.
 
 > До окончания фазы 2 станцию подключать к этой версии нельзя — используйте TS-версию (`../alice-server`).
 

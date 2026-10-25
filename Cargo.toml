@@ -7,6 +7,10 @@ license = "GPL-3.0"
 
 [dependencies]
 anyhow = "1"
+hex = "0.4"
+jsonwebtoken = "9"
+rcgen = "0.13"
+sha2 = "0.10"
 bytes = "1"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }

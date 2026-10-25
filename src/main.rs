@@ -3,6 +3,8 @@ mod audio;
 mod config;
 mod openrouter;
 mod prompt;
+mod quasar_router;
+mod stations;
 mod proto;
 mod uniproxy;
 
@@ -46,6 +48,11 @@ async fn main() -> Result<()> {
     });
 
     let port = context.config.port;
+    let quasar_state = Arc::new(quasar_router::QuasarState {
+        stations: stations::StationStore::shared(),
+        glagol_jwt_key: std::env::var("GLAGOL_JWT_KEY").unwrap_or_default().into_bytes(),
+    });
+
     let app = Router::new()
         .route(
             "/uniproxy.alice.yandex.net/uni.ws",
@@ -54,7 +61,8 @@ async fn main() -> Result<()> {
             }),
         )
         .route("/health", get(|| async { "ok" }))
-        .with_state(context);
+        .with_state(context)
+        .merge(quasar_router::router(quasar_state));
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
     tracing::info!("uni.ws listening on {}", listener.local_addr()?);

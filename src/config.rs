@@ -5,8 +5,11 @@ use std::env;
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    pub port: u16,
+    pub allow_updates: bool,
     pub api_port: u16,
+    pub port: u16,
+    pub postgres_url: String,
+    pub updates_config_path: Option<String>,
     pub openrouter_api_key: String,
     pub openrouter_base_url: String,
     pub openrouter_timeout_ms: u64,
@@ -33,7 +36,10 @@ fn opt_var(name: &str) -> Option<String> {
 impl Config {
     pub fn from_env() -> Self {
         Self {
+            allow_updates: var_or("ALLOW_UPDATES", "false").eq_ignore_ascii_case("true"),
             port: var_or("PORT", "31115").parse().expect("PORT must be a number"),
+            postgres_url: var_or("POSTGRES_URL", "postgres://quasar:quasar@localhost/quasar"),
+            updates_config_path: opt_var("UPDATES_CONFIG_PATH"),
             api_port: var_or("API_PORT", "31116").parse().expect("API_PORT must be a number"),
             openrouter_api_key: env::var("OPENROUTER_API_KEY")
                 .expect("OPENROUTER_API_KEY is required: STT, TTS and the dialog processor all go through OpenRouter"),

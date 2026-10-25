@@ -14,20 +14,22 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::stations::StationStore;
+use crate::storage::Storage;
 
 pub struct QuasarState {
-    pub stations: Arc<StationStore>,
+    pub storage: Arc<Storage>,
     pub glagol_jwt_key: Vec<u8>,
+    pub updates: Arc<crate::updates::UpdatesConfig>,
 }
 
 #[derive(Deserialize)]
 struct DeviceParameters {
     device_id: Option<String>,
     platform: Option<String>,
+    version: Option<String>,
 }
 
-pub fn router(state: Arc<QuasarState>) -> Router {
+pub fn router() -> Router<crate::AppState> {
     Router::new()
         .route("/quasar.yandex.net/register", post(register))
         .route("/quasar.yandex.net/check_updates", get(check_updates))
@@ -47,19 +49,23 @@ pub fn router(state: Arc<QuasarState>) -> Router {
         .route("/startup.mobile.yandex.net/analytics/startup", get(StatusCode::INTERNAL_SERVER_ERROR))
         .route("/report.appmetrica.yandex.net/report", post(StatusCode::INTERNAL_SERVER_ERROR))
         .fallback(not_found_500)
-        .with_state(state)
 }
 
-async fn register(Query(parameters): Query<DeviceParameters>) -> Json<Value> {
+async fn register(Query(_parameters): Query<DeviceParameters>) -> Json<Value> {
     Json(json!({ "hasCriticalUpdate": false, "status": "ok" }))
 }
 
-async fn check_updates() -> Json<Value> {
-    Json(json!({ "hasUpdate": false }))
+async fn check_updates(
+    State(state): State<crate::AppState>,
+    Query(parameters): Query<DeviceParameters>,
+) -> Json<Value> {
+    let platform = parameters.platform.unwrap_or_default();
+    let version = parameters.version.unwrap_or_default();
+    Json(state.quasar.updates.response_for(&platform, &version))
 }
 
 async fn update_device_state(
-    State(state): State<Arc<QuasarState>>,
+    State(state): State<crate::AppState>,
     Query(parameters): Query<DeviceParameters>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
@@ -67,21 +73,21 @@ async fn update_device_state(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     let platform = parameters.platform.unwrap_or_default();
-    let _ = state.stations.register(&device_id, &platform).await;
+    let _ = state.quasar.storage.register(&device_id, &platform).await;
     let network_info: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    state.stations.update_network_info(&device_id, network_info).await;
+    state.quasar.storage.update_network_info(&device_id, network_info).await;
     Json(json!({ "status": "ok" })).into_response()
 }
 
 async fn glagol_token(
-    State(state): State<Arc<QuasarState>>,
+    State(state): State<crate::AppState>,
     Query(parameters): Query<DeviceParameters>,
 ) -> impl IntoResponse {
     let Some(device_id) = parameters.device_id.filter(|id| !id.is_empty()) else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     let platform = parameters.platform.unwrap_or_default();
-    let _ = state.stations.register(&device_id, &platform).await;
+    let _ = state.quasar.storage.register(&device_id, &platform).await;
 
     #[derive(serde::Serialize)]
     struct GlagolClaims {
@@ -108,54 +114,44 @@ async fn glagol_token(
     match jsonwebtoken::encode(
         &Header::new(jsonwebtoken::Algorithm::HS256),
         &claims,
-        &EncodingKey::from_secret(&state.glagol_jwt_key),
+        &EncodingKey::from_secret(&state.quasar.glagol_jwt_key),
     ) {
         Ok(token) => Json(json!({ "status": "ok", "token": token })).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
-async fn check_token(State(state): State<Arc<QuasarState>>, body: String) -> impl IntoResponse {
-    let valid = decode_glagol(&state, &body);
+async fn check_token(State(state): State<crate::AppState>, body: String) -> impl IntoResponse {
+    let valid = decode_glagol(&state.quasar, &body);
     Json(json!({ "status": "ok", "valid": valid })).into_response()
 }
 
-async fn check_token_v2(State(state): State<Arc<QuasarState>>, body: String) -> impl IntoResponse {
-    let owner = decode_glagol(&state, &body);
+async fn check_token_v2(State(state): State<crate::AppState>, body: String) -> impl IntoResponse {
+    let owner = decode_glagol(&state.quasar, &body);
     Json(json!({ "guest": false, "owner": owner, "status": "ok" })).into_response()
 }
 
-async fn device_list(State(state): State<Arc<QuasarState>>) -> impl IntoResponse {
-    Json(state.stations.device_list().await).into_response()
+async fn device_list(State(state): State<crate::AppState>) -> impl IntoResponse {
+    Json(state.quasar.storage.device_list_json().await).into_response()
 }
 
 async fn get_sync_info(
-    State(state): State<Arc<QuasarState>>,
+    State(state): State<crate::AppState>,
     Query(parameters): Query<DeviceParameters>,
 ) -> impl IntoResponse {
     let Some(device_id) = parameters.device_id.filter(|id| !id.is_empty()) else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    let Some(mut device) = state.stations.get(&device_id).await else {
+    let Some(mut device) = state.quasar.storage.get(&device_id).await else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    let Some(config) = device["config"].as_object_mut() else {
+    let Some(object) = device.as_object_mut() else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    config.insert("dndMode".into(), json!({ "enabled": false, "features": { "allowIncomingCalls": false } }));
-    config.insert("led".into(), json!({
-        "brightness": { "auto": true, "value": 0.5 },
-        "idle_animation": false,
-        "time_visualization": { "format": "24h" },
-    }));
-    config.insert("standby".into(), json!({
-        "deepStandbyEnabled": true, "deepStandbyTimeoutMinutes": 240,
-    }));
-    device.as_object_mut().unwrap().insert("status".into(), json!("ok"));
-    device.as_object_mut().unwrap().insert(
-        "alice_pro_subscription".into(),
-        json!({ "enabled": false }),
-    );
+    object.insert("status".into(), json!("ok"));
+    object.insert("alice_pro_subscription".into(), json!({ "enabled": false }));
+    object.insert("subscription".into(), json!({ "mode": "transaction" }));
+    object.insert("tags".into(), json!([]));
     Json(device).into_response()
 }
 

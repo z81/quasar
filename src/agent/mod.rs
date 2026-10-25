@@ -18,7 +18,6 @@ use crate::openrouter::{ChatMessage, OpenRouter};
 
 const MAX_AGENT_ITERATIONS: usize = 5;
 const ITERATION_TIMEOUT: Duration = Duration::from_secs(30);
-const ERROR_RESPONSE_TEXT: &str = "Извините, что-то пошло не так. Попробуйте ещё раз.";
 
 /// A function the LLM can call: either a station directive (pass-through) or
 /// a remote callable
@@ -154,6 +153,9 @@ impl Agent {
                 state.first_request = false;
             }
 
+            if finished {
+                tracing::info!("agent finished: '{}'", structured.text);
+            }
             outputs.push(AgentOutput {
                 directives,
                 finished,

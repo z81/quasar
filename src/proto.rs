@@ -1,5 +1,7 @@
 //! Generated protobuf types for the station protocol (build.rs, protox + prost)
 
+#![allow(dead_code)]
+
 pub mod google {
     pub mod protobuf {
         include!(concat!(env!("OUT_DIR"), "/google.protobuf.rs"));

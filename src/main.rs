@@ -1,24 +1,64 @@
+//! alice-server (Rust): Yandex Station emulator with an OpenRouter-powered
+//! voice assistant. The main server emulates Yandex domains (uni.ws + HTTP),
+//! API_PORT serves the management API.
+
 mod agent;
+mod api;
 mod audio;
 mod config;
+mod connections;
 mod openrouter;
 mod prompt;
-mod quasar_router;
-mod stations;
 mod proto;
+mod quasar_router;
+mod remote;
+mod stations;
+mod storage;
 mod uniproxy;
+mod updates;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::State;
+use axum::extract::{FromRequestParts, State};
+use axum::http::request::Parts;
 use axum::routing::get;
-use axum::Router;
-use prompt::PromptGenerator;
 
-use crate::prompt::builtin_directive_functions;
+use crate::agent::FunctionDefinition;
+use crate::api::ApiState;
+use crate::connections::ConnectionRegistry;
+use crate::prompt::{builtin_directive_functions, PromptGenerator};
+use crate::quasar_router::QuasarState;
+use crate::remote::RemoteServers;
 use crate::uniproxy::UniproxyContext;
+use crate::updates::UpdatesConfig;
+
+/// Single axum state for the whole main server
+#[derive(Clone)]
+pub struct AppState {
+    pub context: Arc<UniproxyContext>,
+    pub quasar: Arc<QuasarState>,
+    pub registry: ConnectionRegistry,
+}
+
+/// The station identifies itself with the x-uprx-device-id header on upgrade
+struct DeviceId(String);
+
+impl<S: Send + Sync> FromRequestParts<S> for DeviceId {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let device_id = parts
+            .headers
+            .get("x-uprx-device-id")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("unknown")
+            .to_string();
+        Ok(Self(device_id))
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -37,35 +77,95 @@ async fn main() -> Result<()> {
         &config.openrouter_api_key,
         config.openrouter_timeout_ms,
     )?;
+
+    let remote = Arc::new(RemoteServers::new(
+        csv_urls("PROCESSOR_FUNCTION_SERVER_URLS"),
+        csv_urls("PROCESSOR_STATE_SERVER_URLS"),
+    ));
+
+    // function catalog: station directives + remote servers
+    let mut functions: HashMap<String, FunctionDefinition> =
+        builtin_directive_functions()
+            .iter()
+            .map(|(name, definition)| (name.clone(), definition.clone()))
+            .collect();
+    for (name, definition) in remote.functions().await {
+        if functions.contains_key(&name) {
+            tracing::warn!("duplicate function '{name}' from a remote server, keeping the builtin one");
+            continue;
+        }
+        functions.insert(name, definition);
+    }
+
+    let storage = Arc::new(storage::Storage::connect(&config.postgres_url).await);
+    let updates = Arc::new(UpdatesConfig::load(
+        config.allow_updates,
+        &config.updates_config_path,
+    ));
+    let registry = ConnectionRegistry::default();
+
     let context = Arc::new(UniproxyContext {
         prompt_generator: PromptGenerator::new(
             &config.processor_prompt_path,
             &config.processor_state_prompt_path,
         ),
-        functions: builtin_directive_functions(),
+        functions: Arc::new(functions),
         openrouter,
+        remote,
         config,
     });
 
-    let port = context.config.port;
-    let quasar_state = Arc::new(quasar_router::QuasarState {
-        stations: stations::StationStore::shared(),
+    let quasar_state = Arc::new(QuasarState {
+        storage: storage.clone(),
         glagol_jwt_key: std::env::var("GLAGOL_JWT_KEY").unwrap_or_default().into_bytes(),
+        updates,
     });
 
-    let app = Router::new()
+    let port = context.config.port;
+    let api_port = context.config.api_port;
+
+    let app_state = AppState {
+        context: context.clone(),
+        quasar: quasar_state,
+        registry: registry.clone(),
+    };
+    let app = quasar_router::router()
         .route(
             "/uniproxy.alice.yandex.net/uni.ws",
-            get(|State(context): State<Arc<UniproxyContext>>, upgrade: WebSocketUpgrade| async move {
-                upgrade.on_upgrade(move |socket| uniproxy::handle_socket(socket, context))
-            }),
+            get(
+                |State(state): State<AppState>, device: DeviceId, upgrade: WebSocketUpgrade| async move {
+                    tracing::info!("uni.ws connection for device {}", device.0);
+                    upgrade.on_upgrade(move |socket| {
+                        uniproxy::handle_socket(socket, state.context, device.0, state.registry)
+                    })
+                },
+            ),
         )
         .route("/health", get(|| async { "ok" }))
-        .with_state(context)
-        .merge(quasar_router::router(quasar_state));
+        .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
-    tracing::info!("uni.ws listening on {}", listener.local_addr()?);
-    axum::serve(listener, app).await?;
+    tracing::info!("quasar (uni.ws + domains) listening on {}", listener.local_addr()?);
+
+    let api = api::router(Arc::new(ApiState {
+        registry: registry.clone(),
+        storage,
+    }));
+    let api_listener = tokio::net::TcpListener::bind(("0.0.0.0", api_port)).await?;
+    tracing::info!("management API listening on {}", api_listener.local_addr()?);
+
+    tokio::select! {
+        result = axum::serve(listener, app) => result?,
+        result = axum::serve(api_listener, api) => result?,
+    }
     Ok(())
+}
+
+fn csv_urls(name: &str) -> Vec<String> {
+    std::env::var(name)
+        .unwrap_or_default()
+        .split(',')
+        .filter(|url| !url.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }

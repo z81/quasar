@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package NAlice.NData;
+
+option java_package = "ru.yandex.alice.protos.data.dialog_type";
+option go_package = "a.yandex-team.ru/alice/protos/data/dialog_type";
+
+enum EDialogType {
+  UNKNOWN = 0;
+  EXTERNAL_SKILL = 1;
+  DEDICATED_CHAT = 2;
+  ENGLISH_TUTOR = 3;
+  EXTERNAL_MODEL_PROXY = 4;
+  GO = 5;
+  PRO = 6;
+  WEATHER = 7;
+  EATS = 8;
+  BOOKS = 9;
+  CHERRY = 10;
+  NEUROEXPERT = 11;
+  MAPS = 12;
+  NOTA = 13;
+  CHARACTER = 14;
+}
+

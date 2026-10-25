@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package NAlice.NAliceApi;
+
+option java_package = "ru.yandex.alice.protos.api.alicekit.events.common.event_header";
+option java_outer_classname = "EventHeader";
+option java_multiple_files = true;
+option go_package = "a.yandex-team.ru/alice/protos/api/alicekit/events/common/event_header";
+
+import "yt/yt_proto/yt/formats/extension.proto";
+
+message TEventHeader {
+  reserved "EventId";
+  reserved "SequenceNumber";
+  reserved "RefStreamId";
+  reserved "Namespace";
+  reserved "Name";
+  reserved 3;
+  reserved 6;
+  reserved 7;
+  reserved 9;
+  reserved 10;
+  message TSubRequestRef {
+    string MessageId = 1;
+    string RequestId = 2;
+  }
+
+  string MessageId = 1;
+  string RefMessageId = 2;
+  .NAlice.NAliceApi.TEventHeader.TSubRequestRef SubRequestRef = 13;
+  optional int64 StreamId = 4;
+  optional int64 Ack = 5;
+  optional string RtLogId = 8;
+  optional string SubRequestId = 11;
+  optional uint32 RetryNumber = 12;
+}
+

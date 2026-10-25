@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package NAlice;
+
+option java_package = "ru.yandex.alice.protos.endpoint.capabilities";
+option java_outer_classname = "TIotOccupancyCapabilityProto";
+option java_multiple_files = true;
+option go_package = "a.yandex-team.ru/alice/protos/endpoint/capabilities/iot_occupancy;occupancypb";
+
+import "google/protobuf/descriptor.proto";
+import "google/protobuf/wrappers.proto";
+import "alice/protos/endpoint/capability.proto";
+import "yt/yt_proto/yt/formats/extension.proto";
+
+message TIotOccupancyCapability {
+  message TParameters {
+  }
+
+  message TSonarDetection {
+    double DistanceMeters = 1;
+  }
+
+  message TRadarDetection {
+    uint32 ID = 1;
+  }
+
+  message TDetection {
+    oneof Detection {
+      .NAlice.TIotOccupancyCapability.TSonarDetection SonarDetection = 1;
+      .NAlice.TIotOccupancyCapability.TRadarDetection RadarDetection = 2;
+    }
+  }
+
+  message TObject {
+    .NAlice.TIotOccupancyCapability.TDetection Detection = 1;
+  }
+
+  message TState {
+    repeated .NAlice.TIotOccupancyCapability.TObject Objects = 1;
+  }
+
+  message TUpdateStateEvent {
+    .NAlice.TIotOccupancyCapability Capability = 1;
+  }
+
+  message TIotOccupancyEnterEvent {
+  }
+
+  message TIotOccupancyLeaveEvent {
+  }
+
+  message TCondition {
+    reserved "Events";
+    reserved 1;
+    oneof Condition {
+      .google.protobuf.DoubleValue LowerBound = 2;
+      .google.protobuf.DoubleValue UpperBound = 3;
+      .google.protobuf.DoubleValue Delta = 4;
+    }
+  }
+
+  .NAlice.TCapability.TMeta Meta = 1;
+  .NAlice.TIotOccupancyCapability.TParameters Parameters = 2;
+  .NAlice.TIotOccupancyCapability.TState State = 3;
+}
+

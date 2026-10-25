@@ -39,6 +39,8 @@ pub type Functions = Arc<std::collections::HashMap<String, FunctionDefinition>>;
 /// One spoken answer chunk with the directives collected along the way
 pub struct AgentOutput {
     pub directives: Vec<DirectiveResult>,
+    /// true when no function results are pending (the turn is complete)
+    #[allow(dead_code)]
     pub finished: bool,
     pub should_listen: bool,
     pub text: String,

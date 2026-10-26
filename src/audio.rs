@@ -1,6 +1,7 @@
 //! ffmpeg-based audio transcoding: PCM -> OGG/Opus (streaming, for TTS),
-//! OGG/Opus -> PCM (streaming, for gigastt) and OGG/Opus -> WAV (for STT
-//! providers that reject Opus).
+//! MP3 -> PCM (streaming, for TTS that answers in MP3), OGG/Opus -> PCM
+//! (streaming, for gigastt) and OGG/Opus -> WAV (for STT providers that
+//! reject Opus).
 
 use std::process::Stdio;
 use std::time::Duration;
@@ -46,6 +47,20 @@ fn ogg_to_pcm_arguments() -> Vec<String> {
         .iter()
         .map(ToString::to_string)
         .collect()
+}
+
+/// MP3 at whatever rate it was encoded -> mono PCM16 at `sample_rate`, decoded
+/// as it arrives. Without the probing limits ffmpeg reads ~1.4 s of a piped
+/// MP3 before it decodes anything; its MP3 demuxer still takes 1024-byte
+/// packets (64 ms at 128 kbit/s)
+fn mp3_to_pcm_arguments(sample_rate: u32) -> Vec<String> {
+    [
+        "-probesize", "32", "-analyzeduration", "0", "-f", "mp3", "-i", "pipe:0",
+        "-f", "s16le", "-ar", &sample_rate.to_string(), "-ac", "1", "pipe:1",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect()
 }
 
 /// Decodes an OGG/Opus utterance into a 16 kHz mono 16-bit WAV file — the
@@ -143,6 +158,11 @@ impl Transcoder {
     /// The station's OGG/Opus in, 16 kHz mono PCM16 out
     pub fn ogg_to_pcm() -> Result<(Self, ChildStdin, ChildStdout)> {
         Self::spawn(&ogg_to_pcm_arguments())
+    }
+
+    /// One MP3 in, mono PCM16 at `sample_rate` out
+    pub fn mp3_to_pcm(sample_rate: u32) -> Result<(Self, ChildStdin, ChildStdout)> {
+        Self::spawn(&mp3_to_pcm_arguments(sample_rate))
     }
 
     fn spawn(arguments: &[String]) -> Result<(Self, ChildStdin, ChildStdout)> {

@@ -12,6 +12,18 @@ pub enum SttProvider {
     GigaAm,
 }
 
+/// What OpenRouter's speech synthesis returns
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TtsFormat {
+    /// raw PCM16 at OPENROUTER_TTS_PCM_SAMPLE_RATE
+    Pcm,
+    /// MP3, decoded by ffmpeg chunk by chunk: its frames carry their own rate
+    Mp3,
+}
+
+/// The reasoning efforts of OPENROUTER_PROCESSOR_REASONING
+const REASONING_EFFORTS: [&str; 5] = ["none", "minimal", "low", "medium", "high"];
+
 /// Who decides that the user stopped speaking
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EndOfSpeech {
@@ -46,11 +58,15 @@ pub struct Config {
     pub tts_voice: String,
     pub tts_instructions: Option<String>,
     pub tts_pcm_sample_rate: u32,
+    pub tts_format: TtsFormat,
     pub tts_speed: f32,
     /// speak an answer while the LLM still writes it (the TS fork's
     /// OPENROUTER_TTS_STREAMING); false: the whole text once it is complete
     pub tts_streaming: bool,
     pub processor_model: String,
+    /// the dialog LLM's reasoning effort, sent as `reasoning: {effort}`; None:
+    /// no `reasoning` field, the model's default
+    pub processor_reasoning: Option<String>,
     pub processor_prompt_path: String,
     pub processor_state_prompt_path: String,
     pub processor_cache_size: u64,
@@ -119,9 +135,22 @@ impl Config {
             tts_voice: var_or("OPENROUTER_TTS_VOICE", "Kore"),
             tts_instructions: opt_var("OPENROUTER_TTS_INSTRUCTIONS"),
             tts_pcm_sample_rate: var_or("OPENROUTER_TTS_PCM_SAMPLE_RATE", "24000").parse().expect("OPENROUTER_TTS_PCM_SAMPLE_RATE must be a number"),
+            tts_format: match var_or("OPENROUTER_TTS_FORMAT", "pcm").trim().to_ascii_lowercase().as_str() {
+                "pcm" => TtsFormat::Pcm,
+                "mp3" => TtsFormat::Mp3,
+                other => panic!("OPENROUTER_TTS_FORMAT must be pcm or mp3, not '{other}'"),
+            },
             tts_speed: var_or("OPENROUTER_TTS_SPEED", "1").parse().expect("OPENROUTER_TTS_SPEED must be a number"),
             tts_streaming: var_or("OPENROUTER_TTS_STREAMING", "true").trim().eq_ignore_ascii_case("true"),
             processor_model: var_or("OPENROUTER_PROCESSOR_MODEL", "google/gemini-3.8-flash"),
+            processor_reasoning: opt_var("OPENROUTER_PROCESSOR_REASONING")
+                .map(|effort| effort.trim().to_ascii_lowercase())
+                .filter(|effort| !effort.is_empty())
+                .inspect(|effort| {
+                    if !REASONING_EFFORTS.contains(&effort.as_str()) {
+                        panic!("OPENROUTER_PROCESSOR_REASONING must be one of {}, not '{effort}'", REASONING_EFFORTS.join("|"));
+                    }
+                }),
             processor_prompt_path: var_or("PROCESSOR_PROMPT_TEMPLATE_PATH", "prompt.handlebars"),
             // TS name first; the earlier Rust-only name keeps working
             processor_state_prompt_path: opt_var("PROCESSOR_PROMPT_STATE_TEMPLATE_PATH")

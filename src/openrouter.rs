@@ -1,14 +1,21 @@
 //! OpenRouter client: chat completions (SSE streaming), speech synthesis
-//! (raw PCM byte stream) and transcription (JSON with base64 audio).
+//! (a byte stream of raw PCM or MP3) and transcription (JSON with base64 audio).
 
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use futures_util::StreamExt;
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+use crate::config::TtsFormat;
+
+/// At most this many characters of an error body go into a log line
+const ERROR_BODY_CHARS: usize = 600;
 
 #[derive(Clone)]
 pub struct OpenRouter {
@@ -16,6 +23,15 @@ pub struct OpenRouter {
     base_url: String,
     api_key: String,
     timeout: Duration,
+    /// OPENROUTER_PROCESSOR_REASONING, for the chat completions
+    reasoning: Option<Arc<Reasoning>>,
+}
+
+/// The reasoning effort asked of the dialog LLM, until OpenRouter refuses it
+struct Reasoning {
+    effort: String,
+    /// refused once: every later request goes without it
+    refused: AtomicBool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -53,7 +69,8 @@ struct TranscriptionResponse {
 }
 
 impl OpenRouter {
-    pub fn new(base_url: &str, api_key: &str, timeout_ms: u64) -> Result<Self> {
+    /// `reasoning`: the effort of OPENROUTER_PROCESSOR_REASONING, if set
+    pub fn new(base_url: &str, api_key: &str, timeout_ms: u64, reasoning: Option<&str>) -> Result<Self> {
         let timeout = Duration::from_millis(timeout_ms);
         // no total timeout on the client: it would also cap reading streamed
         // bodies (LLM SSE, TTS PCM); stalls are caught by the read timeout and
@@ -68,56 +85,90 @@ impl OpenRouter {
             api_key: api_key.to_string(),
             base_url: base_url.trim_end_matches('/').to_string(),
             timeout,
+            reasoning: reasoning
+                .map(|effort| Arc::new(Reasoning { effort: effort.to_string(), refused: AtomicBool::new(false) })),
         })
     }
 
-    /// Streams chat completion content deltas over SSE
-    pub async fn chat_stream(
-        &self,
-        model: &str,
-        messages: &[ChatMessage],
-    ) -> Result<impl futures_util::Stream<Item = Result<ChatDelta>>> {
-        let response = self
-            .client
-            .post(format!("{}/chat/completions", self.base_url))
-            .bearer_auth(&self.api_key)
-            .header("X-Title", "alice-server")
-            .json(&json!({
-                "model": model,
-                "stream": true,
-                "messages": messages,
-            }))
-            .send()
-            .await
-            .context("chat completions request failed")?;
+    /// Streams chat completion content deltas over SSE. A reasoning effort
+    /// OpenRouter refuses (a 4xx that names it, or one a request without it
+    /// does not get) costs one retry without it and is not sent again
+    pub async fn chat_stream(&self, model: &str, messages: &[ChatMessage]) -> Result<ChatStream> {
+        let started = Instant::now();
+        let mut reasoning = self.reasoning.as_deref().filter(|reasoning| !reasoning.refused.load(Ordering::Relaxed));
+        let mut response = self.post_chat(model, messages, reasoning).await?;
+        if let Some(asked) = reasoning.filter(|_| refuses_request(response.status())) {
+            let status = response.status();
+            let refusal = readable_error(&response.text().await.unwrap_or_default());
+            response = self.post_chat(model, messages, None).await?;
+            reasoning = None;
+            let blamed = names_reasoning(&refusal) || response.status().is_success();
+            if blamed && !asked.refused.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    "OpenRouter refused OPENROUTER_PROCESSOR_REASONING={} for {model} ({status}: {refusal}); \
+                     the dialog LLM is asked without it from now on",
+                    asked.effort
+                );
+            }
+        }
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            bail!("chat completions failed: {status}: {body}");
+            bail!("chat completions failed: {status}: {}", readable_error(&body));
         }
 
-        Ok(SseDeltaStream {
+        Ok(ChatStream {
             stream: Box::pin(response.bytes_stream()),
             buffer: Vec::new(),
             done: false,
+            reasoning: reasoning.map(|reasoning| reasoning.effort.clone()),
+            timing: ChatTiming { started, response: started.elapsed(), first_event: None, first_content: None },
         })
     }
 
-    /// Streams synthesized speech as raw signed 16-bit little-endian mono PCM
+    async fn post_chat(
+        &self,
+        model: &str,
+        messages: &[ChatMessage],
+        reasoning: Option<&Reasoning>,
+    ) -> Result<reqwest::Response> {
+        let mut body = json!({
+            "model": model,
+            "stream": true,
+            "messages": messages,
+        });
+        if let Some(reasoning) = reasoning {
+            body["reasoning"] = json!({ "effort": reasoning.effort });
+        }
+        self.client
+            .post(format!("{}/chat/completions", self.base_url))
+            .bearer_auth(&self.api_key)
+            .header("X-Title", "alice-server")
+            .json(&body)
+            .send()
+            .await
+            .context("chat completions request failed")
+    }
+
+    /// Streams synthesized speech: raw signed 16-bit little-endian mono PCM, or MP3
     pub async fn speech_stream(
         &self,
         model: &str,
         voice: &str,
         instructions: &Option<String>,
         speed: f32,
+        format: TtsFormat,
         text: &str,
     ) -> Result<impl futures_util::Stream<Item = Result<bytes::Bytes>>> {
         let mut body = json!({
             "model": model,
             "input": text,
             "voice": voice,
-            "response_format": "pcm",
+            "response_format": match format {
+                TtsFormat::Pcm => "pcm",
+                TtsFormat::Mp3 => "mp3",
+            },
         });
         if (speed - 1.0).abs() > f32::EPSILON {
             body["speed"] = json!(speed);
@@ -139,7 +190,7 @@ impl OpenRouter {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            bail!("speech synthesis failed: {status}: {body}");
+            bail!("speech synthesis failed: {status}: {}", readable_error(&body));
         }
 
         Ok(response.bytes_stream().map(|chunk| chunk.map_err(anyhow::Error::from)))
@@ -173,7 +224,7 @@ impl OpenRouter {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            bail!("transcription failed: {status}: {body}");
+            bail!("transcription failed: {status}: {}", readable_error(&body));
         }
 
         let parsed: TranscriptionResponse = response.json().await.context("invalid transcription response")?;
@@ -181,15 +232,78 @@ impl OpenRouter {
     }
 }
 
-struct SseDeltaStream {
+/// A 4xx about the request itself, not about the account (401, 402, 403) or the load (408, 429)
+fn refuses_request(status: StatusCode) -> bool {
+    status.is_client_error() && !matches!(status.as_u16(), 401 | 402 | 403 | 408 | 429)
+}
+
+/// Whether an error is about reasoning; Gemini calls it thinking
+fn names_reasoning(error: &str) -> bool {
+    let error = error.to_lowercase();
+    ["reasoning", "effort", "thinking"].iter().any(|word| error.contains(word))
+}
+
+/// An error body as one readable line: OpenRouter's message and the
+/// provider's own error it wraps (`metadata.raw`, often JSON itself)
+fn readable_error(body: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        return one_line(body);
+    };
+    let Some(message) = value["error"]["message"].as_str() else {
+        return one_line(&value.to_string());
+    };
+    let metadata = &value["error"]["metadata"];
+    let raw = match &metadata["raw"] {
+        Value::Null => return one_line(message),
+        Value::String(raw) => serde_json::from_str::<Value>(raw).map_or_else(|_| raw.clone(), |raw| raw.to_string()),
+        raw => raw.to_string(),
+    };
+    one_line(&format!("{message} ({}: {raw})", metadata["provider_name"].as_str().unwrap_or("provider")))
+}
+
+fn one_line(text: &str) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match line.char_indices().nth(ERROR_BODY_CHARS) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line,
+    }
+}
+
+/// A streamed chat completion: its content deltas, and when they came
+pub struct ChatStream {
     stream: std::pin::Pin<Box<dyn futures_util::Stream<Item = reqwest::Result<bytes::Bytes>> + Send>>,
     /// raw bytes: a multi-byte character (Cyrillic) may be split between
     /// network chunks, so lines are decoded only once complete
     buffer: Vec<u8>,
     done: bool,
+    /// the reasoning effort the request asked for
+    reasoning: Option<String>,
+    timing: ChatTiming,
 }
 
-impl futures_util::Stream for SseDeltaStream {
+/// When a chat completion's parts came, since its request
+#[derive(Clone, Copy)]
+pub struct ChatTiming {
+    pub started: Instant,
+    /// the response headers (after a refused reasoning effort: of the retry)
+    pub response: Duration,
+    /// the first SSE event of any kind (reasoning, role, content)
+    pub first_event: Option<Duration>,
+    /// the first content token
+    pub first_content: Option<Duration>,
+}
+
+impl ChatStream {
+    pub fn timing(&self) -> ChatTiming {
+        self.timing
+    }
+
+    pub fn reasoning(&self) -> Option<&str> {
+        self.reasoning.as_deref()
+    }
+}
+
+impl futures_util::Stream for ChatStream {
     type Item = Result<ChatDelta>;
 
     fn poll_next(
@@ -213,6 +327,8 @@ impl futures_util::Stream for SseDeltaStream {
                         return Poll::Ready(None);
                     }
                     if let Ok(value) = serde_json::from_str::<Value>(data) {
+                        let elapsed = self.timing.started.elapsed();
+                        self.timing.first_event.get_or_insert(elapsed);
                         // OpenRouter reports mid-stream failures as an error event
                         if let Some(error) = value.get("error") {
                             self.done = true;
@@ -220,6 +336,7 @@ impl futures_util::Stream for SseDeltaStream {
                         }
                         if let Value::String(content) = &value["choices"][0]["delta"]["content"] {
                             if !content.is_empty() {
+                                self.timing.first_content.get_or_insert(elapsed);
                                 return Poll::Ready(Some(Ok(ChatDelta(content.clone()))));
                             }
                         }

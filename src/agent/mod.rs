@@ -9,7 +9,7 @@ pub mod protocol;
 mod stream;
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use futures_util::future::BoxFuture;
@@ -19,7 +19,7 @@ use serde_json::Value;
 use stream::{AnswerScanner, TextChunker};
 use tokio::sync::{Mutex, mpsc};
 
-use crate::openrouter::{ChatMessage, OpenRouter};
+use crate::openrouter::{ChatMessage, ChatStream, OpenRouter};
 
 const MAX_AGENT_ITERATIONS: usize = 5;
 const ITERATION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -268,8 +268,29 @@ impl Agent {
             }
             Ok::<(), anyhow::Error>(())
         };
-        tokio::time::timeout(ITERATION_TIMEOUT, read).await??;
+        let read = tokio::time::timeout(ITERATION_TIMEOUT, read).await;
+        self.log_timing(&stream, answer.text_started_at);
+        read??;
         Ok(response)
+    }
+
+    /// How long an answer took, in ms since its request: OpenRouter's
+    /// response, the first SSE event of any kind (a reasoning model may
+    /// stream its reasoning first), the first content, the start of the
+    /// spoken text, the end
+    fn log_timing(&self, stream: &ChatStream, text_started_at: Option<Instant>) {
+        let timing = stream.timing();
+        let ms = |duration: Option<Duration>| duration.map_or_else(|| "-".to_string(), |duration| duration.as_millis().to_string());
+        tracing::info!(
+            "LLM {} (reasoning {}): response {} ms, first delta {} ms, first content {} ms, text {} ms, done {} ms",
+            self.model,
+            stream.reasoning().unwrap_or("default"),
+            timing.response.as_millis(),
+            ms(timing.first_event),
+            ms(timing.first_content),
+            ms(text_started_at.map(|at| at.saturating_duration_since(timing.started))),
+            timing.started.elapsed().as_millis()
+        );
     }
 
     /// Follows one piece of the answer: once `function_calls`,
@@ -284,6 +305,9 @@ impl Agent {
         outputs: &mpsc::UnboundedSender<AgentOutput>,
     ) {
         let scanned = answer.scanner.push(piece);
+        if scanned.text_started {
+            answer.text_started_at = Some(Instant::now());
+        }
         if scanned.text_started && self.stream_text {
             match header(&answer.scanner.fields) {
                 Some((calls, continue_dialog)) => {
@@ -393,6 +417,8 @@ struct StreamedAnswer {
     scanner: AnswerScanner,
     /// The part that went out as soon as its header was known
     part: Option<StreamingPart>,
+    /// When the `text` string began
+    text_started_at: Option<Instant>,
 }
 
 /// A part whose header is out while its text still streams

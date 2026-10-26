@@ -80,6 +80,7 @@ async fn main() -> Result<()> {
         &config.openrouter_base_url,
         &config.openrouter_api_key,
         config.openrouter_timeout_ms,
+        config.processor_reasoning.as_deref(),
     )?;
 
     let remote = Arc::new(RemoteServers::new(

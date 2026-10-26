@@ -10,6 +10,7 @@ mod connections;
 mod directives;
 mod gigastt;
 mod music;
+mod piper;
 mod openrouter;
 mod prompt;
 mod proto;
@@ -126,6 +127,7 @@ async fn main() -> Result<()> {
         remote,
         music,
         gigastt: gigastt::Gigastt::from_config(&config),
+        piper: piper::Piper::from_config(&config),
         config,
     });
 

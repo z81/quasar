@@ -2,25 +2,29 @@
 //! the next ones while the current one is still being encoded, and their PCM
 //! goes through one ffmpeg encoder whose OGG/Opus pages make the part's single
 //! LazyTtsStreaming stream (one TtsSpeak, one closing StreamControl). Speech
-//! in MP3 (OPENROUTER_TTS_FORMAT=mp3) is decoded chunk by chunk, each by its
-//! own ffmpeg, to PCM at one rate whatever the provider's.
+//! that is not raw PCM at the encoder's rate — MP3 (OPENROUTER_TTS_FORMAT=mp3),
+//! Piper's WAV (TTS_PROVIDER=piper) — is decoded chunk by chunk, each by its
+//! own ffmpeg, to PCM at one rate whatever the provider's. A chunk Piper
+//! fails on is spoken by OpenRouter instead (PIPER_FALLBACK).
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::ChildStdin;
+use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
 use super::UniproxyContext;
 use super::outbox::Outbox;
-use crate::audio::Transcoder;
+use crate::audio::{Encoded, Transcoder};
 use crate::config::TtsFormat;
+use crate::piper::Piper;
 
 /// Chunks synthesized ahead of the one being encoded, so the next words are
 /// ready by the time the current ones end
@@ -30,8 +34,8 @@ const PREFETCH: usize = 2;
 /// stream and ffmpeg alive forever
 const SPEECH_LIFETIME: Duration = Duration::from_secs(120);
 
-/// The rate MP3 speech is decoded to, whatever rate it was encoded at
-const MP3_PCM_RATE: u32 = 24_000;
+/// The rate decoded speech (MP3, Piper's WAV) is brought to, whatever rate it was encoded at
+const SPEECH_RATE: u32 = 24_000;
 
 /// At most this much of a chunk's text goes into its log line
 const LOGGED_TEXT_CHARS: usize = 40;
@@ -172,29 +176,30 @@ async fn feed(
     Ok(())
 }
 
-/// The rate of the PCM the chunks are synthesized or decoded to
+/// The rate of the PCM the part's encoder takes: OpenRouter's raw PCM as it
+/// comes, anything decoded at SPEECH_RATE
 fn pcm_rate(context: &UniproxyContext) -> u32 {
-    match context.config.tts_format {
-        TtsFormat::Pcm => context.config.tts_pcm_sample_rate,
-        TtsFormat::Mp3 => MP3_PCM_RATE,
+    match (&context.piper, context.config.tts_format) {
+        (None, TtsFormat::Pcm) => context.config.tts_pcm_sample_rate,
+        _ => SPEECH_RATE,
     }
 }
 
 /// Requests the synthesis of a chunk; its PCM comes through the returned
 /// channel as it arrives. Dropping the set aborts the task, which kills its
-/// MP3 decoder
+/// decoder
 fn synthesize(context: &Arc<UniproxyContext>, text: String, syntheses: &mut JoinSet<()>) -> Pcm {
     let (pcm, receiver) = mpsc::unbounded_channel();
     let context = context.clone();
     syntheses.spawn(async move {
         tracing::debug!("synthesizing '{text}'");
         let started = Instant::now();
-        let synthesized = match context.config.tts_format {
-            TtsFormat::Pcm => synthesize_pcm(&context, &text, &pcm, started).await,
-            TtsFormat::Mp3 => synthesize_mp3(&context, &text, &pcm, started).await,
+        let synthesized = match &context.piper {
+            Some(piper) => synthesize_piper(&context, piper, &text, &pcm, started).await,
+            None => synthesize_openrouter(&context, &text, &pcm, started).await,
         };
         match synthesized {
-            Ok(synthesis) => synthesis.log(&text, context.config.tts_format, pcm_rate(&context)),
+            Ok(synthesis) => synthesis.log(&text, pcm_rate(&context)),
             Err(error) => {
                 let failed = format!("synthesis failed after {} ms", started.elapsed().as_millis());
                 let _ = pcm.send(Err(error.context(failed)));
@@ -204,20 +209,81 @@ fn synthesize(context: &Arc<UniproxyContext>, text: String, syntheses: &mut Join
     receiver
 }
 
-/// The chunk as raw PCM, forwarded as it arrives
-async fn synthesize_pcm(
+/// The chunk by Piper, its WAV decoded by its own ffmpeg. A chunk Piper
+/// fails on before any of it was heard is spoken by OpenRouter instead
+/// (PIPER_FALLBACK=openrouter), so the station never falls silent
+async fn synthesize_piper(
+    context: &UniproxyContext,
+    piper: &Piper,
+    text: &str,
+    pcm: &mpsc::UnboundedSender<Result<Bytes>>,
+    started: Instant,
+) -> Result<Synthesis> {
+    let heard = AtomicBool::new(false);
+    let attempt = async {
+        // starts while the request is on its way; dropping it kills ffmpeg
+        let decoder = Transcoder::decode_to_pcm(Encoded::Wav, SPEECH_RATE)?;
+        let wav = piper.synthesize(text).await?;
+        decode(decoder, wav, pcm, started, &heard).await
+    };
+    match attempt.await {
+        Ok(synthesis) => Ok(synthesis.labelled("piper".to_string())),
+        Err(error) if piper.falls_back() && !heard.load(Ordering::Relaxed) => {
+            tracing::warn!(
+                "Piper failed on '{}' after {} ms ({error:#}): OpenRouter speaks it instead",
+                shown(text),
+                started.elapsed().as_millis()
+            );
+            let synthesis = synthesize_openrouter(context, text, pcm, Instant::now()).await?;
+            let label = match synthesis.label.as_str() {
+                "" => "OpenRouter instead of Piper".to_string(),
+                label => format!("OpenRouter instead of Piper, {label}"),
+            };
+            Ok(synthesis.labelled(label))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// The chunk by OpenRouter: raw PCM at the encoder's rate forwarded as it
+/// comes, MP3 or PCM at another rate decoded by its own ffmpeg
+async fn synthesize_openrouter(
     context: &UniproxyContext,
     text: &str,
     pcm: &mpsc::UnboundedSender<Result<Bytes>>,
     started: Instant,
 ) -> Result<Synthesis> {
     let config = &context.config;
+    let rate = pcm_rate(context);
+    let encoded = match config.tts_format {
+        TtsFormat::Mp3 => Some(Encoded::Mp3),
+        TtsFormat::Pcm if config.tts_pcm_sample_rate == rate => None,
+        TtsFormat::Pcm => Some(Encoded::Pcm(config.tts_pcm_sample_rate)),
+    };
+    // a decoder starts while the request is on its way; dropping it kills ffmpeg
+    let decoder = encoded.map(|encoded| Transcoder::decode_to_pcm(encoded, rate)).transpose()?;
     let speech = context
         .openrouter
-        .speech_stream(&config.tts_model, &config.tts_voice, &config.tts_instructions, config.tts_speed, TtsFormat::Pcm, text)
+        .speech_stream(&config.tts_model, &config.tts_voice, &config.tts_instructions, config.tts_speed, config.tts_format, text)
         .await?;
+    let Some(decoder) = decoder else {
+        return forward(speech, pcm, started).await;
+    };
+    let label = match config.tts_format {
+        TtsFormat::Mp3 => "mp3",
+        TtsFormat::Pcm => "pcm, resampled",
+    };
+    Ok(decode(decoder, speech, pcm, started, &AtomicBool::new(false)).await?.labelled(label.to_string()))
+}
+
+/// Raw PCM at the encoder's rate, forwarded as it arrives
+async fn forward(
+    speech: impl Stream<Item = Result<Bytes>>,
+    pcm: &mpsc::UnboundedSender<Result<Bytes>>,
+    started: Instant,
+) -> Result<Synthesis> {
     tokio::pin!(speech);
-    let mut synthesis = Synthesis::new(started);
+    let mut synthesis = Synthesis::new(started, false);
     while let Some(piece) = speech.next().await {
         let piece = piece?;
         synthesis.received.add(started, piece.len());
@@ -229,31 +295,25 @@ async fn synthesize_pcm(
     Ok(synthesis)
 }
 
-/// The chunk as MP3, decoded by its own ffmpeg as it arrives: no MP3 bytes
-/// of two answers ever meet in one decoder, so their frames, encoder delays
-/// and rates stay apart
-async fn synthesize_mp3(
-    context: &UniproxyContext,
-    text: &str,
+/// Encoded speech decoded by its own ffmpeg as it arrives: no bytes of two
+/// answers ever meet in one decoder, so their headers, frames, encoder
+/// delays and rates stay apart. `heard` turns true with the first PCM sent on
+async fn decode(
+    (decoder, mut input, mut output): (Transcoder, ChildStdin, ChildStdout),
+    speech: impl Stream<Item = Result<Bytes>>,
     pcm: &mpsc::UnboundedSender<Result<Bytes>>,
     started: Instant,
+    heard: &AtomicBool,
 ) -> Result<Synthesis> {
-    let config = &context.config;
-    // starts while the request is on its way; dropping it kills ffmpeg
-    let (decoder, mut input, mut output) = Transcoder::mp3_to_pcm(MP3_PCM_RATE)?;
-    let speech = context
-        .openrouter
-        .speech_stream(&config.tts_model, &config.tts_voice, &config.tts_instructions, config.tts_speed, TtsFormat::Mp3, text)
-        .await?;
     let feed = async {
         tokio::pin!(speech);
         let mut received = Flow::default();
         while let Some(piece) = speech.next().await {
             let piece = piece?;
             received.add(started, piece.len());
-            input.write_all(&piece).await.context("writing MP3 to ffmpeg")?;
+            input.write_all(&piece).await.context("writing speech to ffmpeg")?;
         }
-        // the end of the MP3: the decoder flushes and exits
+        // the end of the speech: the decoder flushes and exits
         drop(input);
         Ok::<_, anyhow::Error>(received)
     };
@@ -267,20 +327,25 @@ async fn synthesize_mp3(
             }
             decoded.add(started, read);
             pcm.send(Ok(Bytes::copy_from_slice(&buffer[..read]))).map_err(|_| anyhow!("the speech is over"))?;
+            heard.store(true, Ordering::Relaxed);
         }
     };
     let (received, decoded) = tokio::try_join!(feed, drain)?;
     decoder.finish().await?;
-    Ok(Synthesis { started, received, decoded })
+    Ok(Synthesis { started, received, decoded, decoded_apart: true, label: String::new() })
 }
 
 /// What one chunk's synthesis took
 struct Synthesis {
     started: Instant,
-    /// OpenRouter's answer
+    /// the provider's answer
     received: Flow,
     /// the PCM it made
     decoded: Flow,
+    /// decoded by its own ffmpeg, not forwarded as it came
+    decoded_apart: bool,
+    /// who spoke it in which form, for the log
+    label: String,
 }
 
 /// Bytes as they came, and when the first of them did
@@ -298,31 +363,33 @@ impl Flow {
 }
 
 impl Synthesis {
-    fn new(started: Instant) -> Self {
-        Self { started, received: Flow::default(), decoded: Flow::default() }
+    fn new(started: Instant, decoded_apart: bool) -> Self {
+        Self { started, received: Flow::default(), decoded: Flow::default(), decoded_apart, label: String::new() }
     }
 
-    fn log(&self, text: &str, format: TtsFormat, rate: u32) {
-        let ms = |duration: Option<Duration>| duration.map_or_else(|| "-".to_string(), |duration| duration.as_millis().to_string());
-        let shown: String = text.chars().take(LOGGED_TEXT_CHARS).collect();
-        let ellipsis = if text.chars().count() > LOGGED_TEXT_CHARS { "…" } else { "" };
-        let speech = self.decoded.bytes as f64 / f64::from(rate * 2);
-        match format {
-            TtsFormat::Pcm => tracing::info!(
-                "TTS '{shown}{ellipsis}': first byte {} ms, {} bytes in {} ms, {speech:.2} s of speech",
-                ms(self.received.first),
-                self.received.bytes,
-                self.started.elapsed().as_millis()
-            ),
-            TtsFormat::Mp3 => tracing::info!(
-                "TTS '{shown}{ellipsis}' (mp3): first byte {} ms, first PCM {} ms, {} bytes in {} ms, {speech:.2} s of speech",
-                ms(self.received.first),
-                ms(self.decoded.first),
-                self.received.bytes,
-                self.started.elapsed().as_millis()
-            ),
-        }
+    fn labelled(self, label: String) -> Self {
+        Self { label, ..self }
     }
+
+    fn log(&self, text: &str, rate: u32) {
+        let ms = |duration: Option<Duration>| duration.map_or_else(|| "-".to_string(), |duration| duration.as_millis().to_string());
+        let label = if self.label.is_empty() { String::new() } else { format!(" ({})", self.label) };
+        let speech = self.decoded.bytes as f64 / f64::from(rate * 2);
+        let first_pcm = if self.decoded_apart { format!(", first PCM {} ms", ms(self.decoded.first)) } else { String::new() };
+        tracing::info!(
+            "TTS '{}'{label}: first byte {} ms{first_pcm}, {} bytes in {} ms, {speech:.2} s of speech",
+            shown(text),
+            ms(self.received.first),
+            self.received.bytes,
+            self.started.elapsed().as_millis()
+        );
+    }
+}
+
+/// A chunk's text for a log line: its start
+fn shown(text: &str) -> String {
+    let start: String = text.chars().take(LOGGED_TEXT_CHARS).collect();
+    if text.chars().count() > LOGGED_TEXT_CHARS { format!("{start}…") } else { start }
 }
 
 async fn next_pcm(started: &mut VecDeque<Pcm>) -> Option<Result<Bytes>> {

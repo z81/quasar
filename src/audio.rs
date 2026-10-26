@@ -1,7 +1,7 @@
 //! ffmpeg-based audio transcoding: PCM -> OGG/Opus (streaming, for TTS),
-//! MP3 -> PCM (streaming, for TTS that answers in MP3), OGG/Opus -> PCM
-//! (streaming, for gigastt) and OGG/Opus -> WAV (for STT providers that
-//! reject Opus).
+//! MP3, WAV or PCM at another rate -> PCM (streaming, for TTS answers to
+//! decode), OGG/Opus -> PCM (streaming, for gigastt) and OGG/Opus -> WAV (for
+//! STT providers that reject Opus).
 
 use std::process::Stdio;
 use std::time::Duration;
@@ -49,13 +49,37 @@ fn ogg_to_pcm_arguments() -> Vec<String> {
         .collect()
 }
 
-/// MP3 at whatever rate it was encoded -> mono PCM16 at `sample_rate`, decoded
-/// as it arrives. Without the probing limits ffmpeg reads ~1.4 s of a piped
-/// MP3 before it decodes anything; its MP3 demuxer still takes 1024-byte
-/// packets (64 ms at 128 kbit/s)
-fn mp3_to_pcm_arguments(sample_rate: u32) -> Vec<String> {
+/// Synthesized speech to decode
+#[derive(Clone, Copy, Debug)]
+pub enum Encoded {
+    Mp3,
+    Wav,
+    /// mono PCM16 at a rate
+    Pcm(u32),
+}
+
+/// Encoded speech -> mono PCM16 at `sample_rate`, decoded as it arrives.
+/// MP3 and WAV tell their own rate. Without the probing limits ffmpeg reads
+/// ~1.4 s of a piped MP3 before it decodes anything; its MP3 demuxer still
+/// takes 1024-byte packets (64 ms at 128 kbit/s)
+fn decode_arguments(input: Encoded, sample_rate: u32) -> Vec<String> {
+    let mut arguments: Vec<String> = match input {
+        Encoded::Mp3 => vec!["-probesize", "32", "-analyzeduration", "0", "-f", "mp3"],
+        Encoded::Wav => vec!["-probesize", "32", "-analyzeduration", "0", "-f", "wav"],
+        Encoded::Pcm(rate) => return pcm_resample_arguments(rate, sample_rate),
+    }
+    .into_iter()
+    .map(ToString::to_string)
+    .collect();
+    arguments.extend(
+        ["-i", "pipe:0", "-f", "s16le", "-ar", &sample_rate.to_string(), "-ac", "1", "pipe:1"].iter().map(ToString::to_string),
+    );
+    arguments
+}
+
+fn pcm_resample_arguments(rate: u32, sample_rate: u32) -> Vec<String> {
     [
-        "-probesize", "32", "-analyzeduration", "0", "-f", "mp3", "-i", "pipe:0",
+        "-f", "s16le", "-ar", &rate.to_string(), "-ac", "1", "-i", "pipe:0",
         "-f", "s16le", "-ar", &sample_rate.to_string(), "-ac", "1", "pipe:1",
     ]
     .iter()
@@ -160,9 +184,9 @@ impl Transcoder {
         Self::spawn(&ogg_to_pcm_arguments())
     }
 
-    /// One MP3 in, mono PCM16 at `sample_rate` out
-    pub fn mp3_to_pcm(sample_rate: u32) -> Result<(Self, ChildStdin, ChildStdout)> {
-        Self::spawn(&mp3_to_pcm_arguments(sample_rate))
+    /// One synthesized answer in, mono PCM16 at `sample_rate` out
+    pub fn decode_to_pcm(input: Encoded, sample_rate: u32) -> Result<(Self, ChildStdin, ChildStdout)> {
+        Self::spawn(&decode_arguments(input, sample_rate))
     }
 
     fn spawn(arguments: &[String]) -> Result<(Self, ChildStdin, ChildStdout)> {

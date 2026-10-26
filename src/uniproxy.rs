@@ -58,6 +58,8 @@ pub struct UniproxyContext {
     pub music: MusicManager,
     /// streaming recognition (STT_PROVIDER=gigaam); None: OpenRouter after the end of speech
     pub gigastt: Option<Gigastt>,
+    /// speech synthesis by Piper (TTS_PROVIDER=piper); None: OpenRouter
+    pub piper: Option<crate::piper::Piper>,
 }
 
 /// Guards memory against a voice stream that never ends: far more than any

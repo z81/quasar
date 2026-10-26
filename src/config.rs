@@ -12,6 +12,31 @@ pub enum SttProvider {
     GigaAm,
 }
 
+/// Who synthesizes speech
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TtsProvider {
+    /// OpenRouter's /audio/speech (OPENROUTER_TTS_*)
+    OpenRouter,
+    /// a Piper HTTP server (PIPER_*), OpenRouter as fallback
+    Piper,
+}
+
+/// TTS_PROVIDER=piper: the Piper HTTP server and how it speaks
+#[derive(Clone)]
+pub struct PiperConfig {
+    /// the server's address, e.g. http://piper:5000
+    pub url: String,
+    /// a voice the server has (its -m voice when unset)
+    pub voice: Option<String>,
+    /// the speaker of a multi-speaker voice, by name or by id
+    pub speaker: Option<String>,
+    pub speaker_id: Option<u32>,
+    /// the speaking pace: below 1 faster, above 1 slower
+    pub length_scale: Option<f32>,
+    /// a chunk Piper fails on is spoken by OpenRouter (PIPER_FALLBACK=openrouter)
+    pub fallback: bool,
+}
+
 /// What OpenRouter's speech synthesis returns
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TtsFormat {
@@ -60,6 +85,9 @@ pub struct Config {
     pub tts_pcm_sample_rate: u32,
     pub tts_format: TtsFormat,
     pub tts_speed: f32,
+    pub tts_provider: TtsProvider,
+    /// set with TTS_PROVIDER=piper
+    pub piper: Option<PiperConfig>,
     /// speak an answer while the LLM still writes it (the TS fork's
     /// OPENROUTER_TTS_STREAMING); false: the whole text once it is complete
     pub tts_streaming: bool,
@@ -96,8 +124,48 @@ fn end_of_speech(stt_provider: SttProvider) -> EndOfSpeech {
     }
 }
 
+/// PIPER_*: read only with TTS_PROVIDER=piper; an invalid value stops the server at start
+fn piper_config(tts_speed: f32) -> PiperConfig {
+    let url = opt_var("PIPER_URL").map(|url| url.trim().trim_end_matches('/').to_string());
+    let url = url.expect("PIPER_URL is required with TTS_PROVIDER=piper, e.g. http://piper:5000");
+    match reqwest::Url::parse(&url) {
+        Ok(parsed) if matches!(parsed.scheme(), "http" | "https") => {}
+        _ => panic!("PIPER_URL must be an http(s) address, not '{url}'"),
+    }
+    let text = |name: &str| opt_var(name).map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+    let length_scale = match text("PIPER_LENGTH_SCALE") {
+        Some(value) => match value.parse::<f32>() {
+            Ok(scale) if scale.is_finite() && scale > 0.0 => Some(scale),
+            _ => panic!("PIPER_LENGTH_SCALE must be a positive number, not '{value}'"),
+        },
+        // the speed set for OpenRouter, as Piper's phoneme length
+        None if tts_speed.is_finite() && tts_speed > 0.0 && (tts_speed - 1.0).abs() > f32::EPSILON => Some(1.0 / tts_speed),
+        None => None,
+    };
+    PiperConfig {
+        url,
+        voice: text("PIPER_VOICE"),
+        speaker: text("PIPER_SPEAKER"),
+        speaker_id: text("PIPER_SPEAKER_ID").map(|value| {
+            value.parse().unwrap_or_else(|_| panic!("PIPER_SPEAKER_ID must be a whole number, not '{value}'"))
+        }),
+        length_scale,
+        fallback: match var_or("PIPER_FALLBACK", "openrouter").trim().to_ascii_lowercase().as_str() {
+            "openrouter" => true,
+            "none" => false,
+            other => panic!("PIPER_FALLBACK must be openrouter or none, not '{other}'"),
+        },
+    }
+}
+
 impl Config {
     pub fn from_env() -> Self {
+        let tts_speed: f32 = var_or("OPENROUTER_TTS_SPEED", "1").parse().expect("OPENROUTER_TTS_SPEED must be a number");
+        let tts_provider = match var_or("TTS_PROVIDER", "openrouter").trim().to_ascii_lowercase().as_str() {
+            "openrouter" => TtsProvider::OpenRouter,
+            "piper" => TtsProvider::Piper,
+            other => panic!("TTS_PROVIDER must be openrouter or piper, not '{other}'"),
+        };
         let stt_provider = match var_or("STT_PROVIDER", "openrouter").trim().to_ascii_lowercase().as_str() {
             "openrouter" => SttProvider::OpenRouter,
             "gigaam" => SttProvider::GigaAm,
@@ -140,7 +208,9 @@ impl Config {
                 "mp3" => TtsFormat::Mp3,
                 other => panic!("OPENROUTER_TTS_FORMAT must be pcm or mp3, not '{other}'"),
             },
-            tts_speed: var_or("OPENROUTER_TTS_SPEED", "1").parse().expect("OPENROUTER_TTS_SPEED must be a number"),
+            tts_speed,
+            tts_provider,
+            piper: (tts_provider == TtsProvider::Piper).then(|| piper_config(tts_speed)),
             tts_streaming: var_or("OPENROUTER_TTS_STREAMING", "true").trim().eq_ignore_ascii_case("true"),
             processor_model: var_or("OPENROUTER_PROCESSOR_MODEL", "google/gemini-3.8-flash"),
             processor_reasoning: opt_var("OPENROUTER_PROCESSOR_REASONING")

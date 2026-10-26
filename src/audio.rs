@@ -1,5 +1,6 @@
-//! ffmpeg-based audio transcoding: PCM -> OGG/Opus (streaming, for TTS) and
-//! OGG/Opus -> WAV (for STT providers that reject Opus).
+//! ffmpeg-based audio transcoding: PCM -> OGG/Opus (streaming, for TTS),
+//! OGG/Opus -> PCM (streaming, for gigastt) and OGG/Opus -> WAV (for STT
+//! providers that reject Opus).
 
 use std::process::Stdio;
 use std::time::Duration;
@@ -37,6 +38,14 @@ fn pcm_to_ogg_arguments(sample_rate: u32) -> Vec<String> {
     .iter()
     .map(ToString::to_string)
     .collect()
+}
+
+/// The station's OGG/Opus -> 16 kHz mono PCM16, decoded as it arrives
+fn ogg_to_pcm_arguments() -> Vec<String> {
+    ["-f", "ogg", "-i", "pipe:0", "-f", "s16le", "-ar", "16000", "-ac", "1", "pipe:1"]
+        .iter()
+        .map(ToString::to_string)
+        .collect()
 }
 
 /// Decodes an OGG/Opus utterance into a 16 kHz mono 16-bit WAV file — the
@@ -119,16 +128,25 @@ let result = tokio::time::timeout(Duration::from_millis(FFMPEG_TIMEOUT_MS), asyn
     Ok(output)
 }
 
-/// A PCM -> OGG/Opus encoder driven by its owner: signed 16-bit little-endian
-/// mono PCM goes into `input`, OGG pages come out of `output` as soon as they
-/// are encoded. Dropping the encoder kills ffmpeg
-pub struct OggEncoder {
+/// A streaming ffmpeg driven by its owner: data goes into `input` and comes
+/// out of `output` as soon as it is transcoded. Dropping it kills ffmpeg
+pub struct Transcoder {
     child: Child,
 }
 
-impl OggEncoder {
-    pub fn spawn(sample_rate: u32) -> Result<(Self, ChildStdin, ChildStdout)> {
-        let mut child = spawn_ffmpeg(&pcm_to_ogg_arguments(sample_rate))?;
+impl Transcoder {
+    /// Signed 16-bit little-endian mono PCM in, OGG/Opus pages out
+    pub fn pcm_to_ogg(sample_rate: u32) -> Result<(Self, ChildStdin, ChildStdout)> {
+        Self::spawn(&pcm_to_ogg_arguments(sample_rate))
+    }
+
+    /// The station's OGG/Opus in, 16 kHz mono PCM16 out
+    pub fn ogg_to_pcm() -> Result<(Self, ChildStdin, ChildStdout)> {
+        Self::spawn(&ogg_to_pcm_arguments())
+    }
+
+    fn spawn(arguments: &[String]) -> Result<(Self, ChildStdin, ChildStdout)> {
+        let mut child = spawn_ffmpeg(arguments)?;
         let input = child.stdin.take().context("ffmpeg stdin")?;
         let output = child.stdout.take().context("ffmpeg stdout")?;
         Ok((Self { child }, input, output))

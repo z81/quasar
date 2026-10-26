@@ -8,6 +8,7 @@ mod audio;
 mod config;
 mod connections;
 mod directives;
+mod gigastt;
 mod music;
 mod openrouter;
 mod prompt;
@@ -122,6 +123,7 @@ async fn main() -> Result<()> {
         openrouter,
         remote,
         music,
+        gigastt: gigastt::Gigastt::from_config(&config),
         config,
     });
 

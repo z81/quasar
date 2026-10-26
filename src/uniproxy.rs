@@ -18,6 +18,7 @@ mod text_input;
 
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures_util::StreamExt;
@@ -30,6 +31,7 @@ use crate::agent::{Agent, Functions, ResponseCache};
 use crate::config::Config;
 use crate::connections::{ConnectionRegistry, StationCommand};
 use crate::directives::{self, WrappedDirective};
+use crate::gigastt::{Gigastt, Recognition};
 use crate::music::MusicManager;
 use crate::openrouter::OpenRouter;
 use crate::prompt::PromptGenerator;
@@ -50,6 +52,8 @@ pub struct UniproxyContext {
     pub remote: Arc<crate::remote::RemoteServers>,
     pub cache: ResponseCache,
     pub music: MusicManager,
+    /// streaming recognition (STT_PROVIDER=gigaam); None: OpenRouter after the end of speech
+    pub gigastt: Option<Gigastt>,
 }
 
 /// Guards memory against a voice stream that never ends: far more than any
@@ -109,8 +113,11 @@ struct VoiceInput {
     agent: Arc<Agent>,
     device_state: Option<Vec<u8>>,
     biometry: BiometrySlot,
+    /// buffered for OpenRouter: the provider, or the fallback of gigastt
     ogg: Vec<u8>,
     truncated: bool,
+    /// gigastt recognizing while the station records
+    recognition: Option<Recognition>,
 }
 
 impl VoiceInput {
@@ -123,6 +130,9 @@ impl VoiceInput {
             return;
         }
         self.ogg.extend_from_slice(audio);
+        if let Some(recognition) = &self.recognition {
+            recognition.push_audio(audio);
+        }
     }
 }
 
@@ -234,6 +244,7 @@ impl Connection {
             biometry: self.biometry.clone(),
             ogg: Vec::new(),
             truncated: false,
+            recognition: self.context.gigastt.as_ref().map(Gigastt::start),
         });
     }
 
@@ -261,7 +272,12 @@ impl Connection {
         if let Some(input) = self.voice_input.take_if(|input| input.stream_id == stream_id) {
             tracing::info!("voice input stream {stream_id} finished: {} bytes", input.ogg.len());
             let request = self.request(input.target, input.device_state);
-            let utterance = Utterance { ogg: input.ogg, biometry: input.biometry };
+            let utterance = Utterance {
+                ogg: input.ogg,
+                biometry: input.biometry,
+                recognition: input.recognition,
+                ended_at: Instant::now(),
+            };
             let task = self.spawn_turn(request.answer_voice(input.agent, utterance));
             self.answering_stream = Some((stream_id, task));
         }

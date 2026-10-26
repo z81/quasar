@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::future::BoxFuture;
 use serde_json::Value;
@@ -25,9 +25,14 @@ use crate::agent::protocol::FunctionCall;
 use crate::agent::{Agent, AgentOutput, AgentTurn, ERROR_RESPONSE_TEXT, FunctionExecutor, OutputText};
 use crate::audio;
 use crate::directives::{self, WrappedDirective};
+use crate::gigastt::Recognition;
 use crate::prompt::system_state;
 use crate::proto::n_alice::n_alice_api::TDirective;
 use crate::remote::RemoteServers;
+
+/// How long the end of speech waits for gigastt's final transcript before
+/// OpenRouter transcribes the buffered audio instead
+const FINAL_TRANSCRIPT_WAIT: Duration = Duration::from_secs(3);
 
 /// How long a request waits for an answer part before the station is asked
 /// to come back for it (TS MAX_WAIT)
@@ -173,6 +178,10 @@ fn new_agent(context: &UniproxyContext) -> Agent {
 pub struct Utterance {
     pub ogg: Vec<u8>,
     pub biometry: BiometrySlot,
+    /// gigastt's recognition of it, if that is the provider
+    pub recognition: Option<Recognition>,
+    /// when the station closed the stream: the end of speech
+    pub ended_at: Instant,
 }
 
 /// A request of the station and what answering it needs
@@ -190,8 +199,7 @@ pub struct Request {
 impl Request {
     /// VoiceInput: transcribe, report the recognition, answer through the agent
     pub async fn answer_voice(self, agent: Arc<Agent>, utterance: Utterance) {
-        let text = transcribe(&self.context, &utterance.ogg).await;
-        tracing::info!("transcribed: '{text}'");
+        let text = transcribe(&self.context, utterance.recognition, &utterance.ogg, utterance.ended_at).await;
         if let Err(error) = self.outbox.asr_result(&text, &self.target.reference_message_id) {
             tracing::warn!("{error:#}");
             return;
@@ -356,8 +364,31 @@ impl Request {
     }
 }
 
-/// Transcribes the whole utterance; failures count as "nothing heard"
-async fn transcribe(context: &UniproxyContext, ogg: &[u8]) -> String {
+/// The text of an utterance: gigastt's streamed recognition if it delivers in
+/// time, otherwise (and with STT_PROVIDER=openrouter) OpenRouter on the
+/// buffered audio
+async fn transcribe(
+    context: &UniproxyContext,
+    recognition: Option<Recognition>,
+    ogg: &[u8],
+    ended_at: Instant,
+) -> String {
+    let (text, provider) = match recognition {
+        Some(recognition) => match recognition.finish(FINAL_TRANSCRIPT_WAIT.saturating_sub(ended_at.elapsed())).await {
+            Ok(text) => (text, "gigastt"),
+            Err(error) => {
+                tracing::warn!("gigastt failed ({error:#}), transcribing with OpenRouter instead");
+                (transcribe_buffered(context, ogg).await, "OpenRouter (fallback)")
+            }
+        },
+        None => (transcribe_buffered(context, ogg).await, "OpenRouter"),
+    };
+    tracing::info!("transcribed by {provider} {} ms after the end of speech: '{text}'", ended_at.elapsed().as_millis());
+    text
+}
+
+/// Transcribes the whole buffered utterance with OpenRouter; failures count as "nothing heard"
+async fn transcribe_buffered(context: &UniproxyContext, ogg: &[u8]) -> String {
     if ogg.is_empty() {
         return String::new();
     }

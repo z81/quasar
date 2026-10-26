@@ -3,6 +3,15 @@
 
 use std::env;
 
+/// Who turns the station's speech into text
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SttProvider {
+    /// one /audio/transcriptions request after the end of speech
+    OpenRouter,
+    /// a gigastt server recognizing while the station records (OpenRouter as fallback)
+    GigaAm,
+}
+
 #[derive(Clone)]
 pub struct Config {
     pub allow_updates: bool,
@@ -16,6 +25,9 @@ pub struct Config {
     pub openrouter_timeout_ms: u64,
     pub stt_model: String,
     pub stt_language: Option<String>,
+    pub stt_provider: SttProvider,
+    /// the gigastt server's HTTP address (STT_PROVIDER=gigaam), e.g. http://gigastt:9876
+    pub gigastt_url: Option<String>,
     pub tts_model: String,
     pub tts_voice: String,
     pub tts_instructions: Option<String>,
@@ -63,6 +75,12 @@ impl Config {
                 Ok(value) => Some(value),
                 Err(_) => Some("ru".to_string()),
             },
+            stt_provider: match var_or("STT_PROVIDER", "openrouter").trim().to_ascii_lowercase().as_str() {
+                "openrouter" => SttProvider::OpenRouter,
+                "gigaam" => SttProvider::GigaAm,
+                other => panic!("STT_PROVIDER must be openrouter or gigaam, not '{other}'"),
+            },
+            gigastt_url: opt_var("GIGASTT_URL"),
             tts_model: var_or("OPENROUTER_TTS_MODEL", "google/gemini-3.8-flash-lite-tts"),
             tts_voice: var_or("OPENROUTER_TTS_VOICE", "Kore"),
             tts_instructions: opt_var("OPENROUTER_TTS_INSTRUCTIONS"),

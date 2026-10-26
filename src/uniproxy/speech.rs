@@ -17,7 +17,7 @@ use tokio::task::JoinSet;
 
 use super::UniproxyContext;
 use super::outbox::Outbox;
-use crate::audio::OggEncoder;
+use crate::audio::Transcoder;
 
 /// Chunks synthesized ahead of the one being encoded, so the next words are
 /// ready by the time the current ones end
@@ -64,7 +64,7 @@ async fn stream_speech(
 ) -> Result<()> {
     // dropping the guard closes the stream, dropping the encoder kills ffmpeg
     let stream = outbox.open_tts_stream(reference_message_id)?;
-    let (encoder, input, mut output) = OggEncoder::spawn(context.config.tts_pcm_sample_rate)?;
+    let (encoder, input, mut output) = Transcoder::pcm_to_ogg(context.config.tts_pcm_sample_rate)?;
     let drain = async {
         let mut buffer = vec![0; 16_384];
         loop {

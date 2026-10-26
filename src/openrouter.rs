@@ -15,6 +15,7 @@ pub struct OpenRouter {
     client: Client,
     base_url: String,
     api_key: String,
+    timeout: Duration,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -53,14 +54,20 @@ struct TranscriptionResponse {
 
 impl OpenRouter {
     pub fn new(base_url: &str, api_key: &str, timeout_ms: u64) -> Result<Self> {
+        let timeout = Duration::from_millis(timeout_ms);
+        // no total timeout on the client: it would also cap reading streamed
+        // bodies (LLM SSE, TTS PCM); stalls are caught by the read timeout and
+        // the agent's per-iteration budget, like openai-node in TS
         let client = Client::builder()
-            .timeout(Duration::from_millis(timeout_ms))
+            .connect_timeout(timeout)
+            .read_timeout(timeout)
             .build()
             .context("failed to build HTTP client")?;
         Ok(Self {
             client,
             api_key: api_key.to_string(),
             base_url: base_url.trim_end_matches('/').to_string(),
+            timeout,
         })
     }
 
@@ -92,7 +99,7 @@ impl OpenRouter {
 
         Ok(SseDeltaStream {
             stream: Box::pin(response.bytes_stream()),
-            buffer: String::new(),
+            buffer: Vec::new(),
             done: false,
         })
     }
@@ -139,21 +146,26 @@ impl OpenRouter {
     }
 
     /// Transcribes an OGG/Opus utterance (converted to WAV by the caller)
-    pub async fn transcribe(&self, model: &str, language: &str, wav: &[u8]) -> Result<String> {
+    pub async fn transcribe(&self, model: &str, language: Option<&str>, wav: &[u8]) -> Result<String> {
         let audio_base64 = base64::engine::general_purpose::STANDARD.encode(wav);
+        let mut body = json!({
+            "model": model,
+            "input_audio": {
+                "data": audio_base64,
+                "format": "wav",
+            },
+        });
+        if let Some(language) = language {
+            body["language"] = json!(language);
+        }
         let response = self
             .client
             .post(format!("{}/audio/transcriptions", self.base_url))
             .bearer_auth(&self.api_key)
             .header("X-Title", "alice-server")
-            .json(&json!({
-                "model": model,
-                "language": language,
-                "input_audio": {
-                    "data": audio_base64,
-                    "format": "wav",
-                },
-            }))
+            // a plain JSON answer, so a total deadline is fine here
+            .timeout(self.timeout)
+            .json(&body)
             .send()
             .await
             .context("transcription request failed")?;
@@ -171,7 +183,9 @@ impl OpenRouter {
 
 struct SseDeltaStream {
     stream: std::pin::Pin<Box<dyn futures_util::Stream<Item = reqwest::Result<bytes::Bytes>> + Send>>,
-    buffer: String,
+    /// raw bytes: a multi-byte character (Cyrillic) may be split between
+    /// network chunks, so lines are decoded only once complete
+    buffer: Vec<u8>,
     done: bool,
 }
 
@@ -189,21 +203,25 @@ impl futures_util::Stream for SseDeltaStream {
         }
 
         loop {
-            if let Some(newline) = self.buffer.find('\n') {
-                let line: String = self.buffer.drain(..=newline).collect();
+            if let Some(newline) = self.buffer.iter().position(|byte| *byte == b'\n') {
+                let raw_line: Vec<u8> = self.buffer.drain(..=newline).collect();
+                let line = String::from_utf8_lossy(&raw_line);
                 let line = line.trim();
-                if let Some(data) = line.strip_prefix("data: ") {
+                if let Some(data) = line.strip_prefix("data:").map(str::trim_start) {
                     if data == "[DONE]" {
                         self.done = true;
                         return Poll::Ready(None);
                     }
-                    if let Ok(Value::String(content)) =
-                        serde_json::from_str::<Value>(data).map(|value| {
-                            value["choices"][0]["delta"]["content"].clone()
-                        })
-                    {
-                        if !content.is_empty() {
-                            return Poll::Ready(Some(Ok(ChatDelta(content))));
+                    if let Ok(value) = serde_json::from_str::<Value>(data) {
+                        // OpenRouter reports mid-stream failures as an error event
+                        if let Some(error) = value.get("error") {
+                            self.done = true;
+                            return Poll::Ready(Some(Err(anyhow::anyhow!("chat completions stream error: {error}"))));
+                        }
+                        if let Value::String(content) = &value["choices"][0]["delta"]["content"] {
+                            if !content.is_empty() {
+                                return Poll::Ready(Some(Ok(ChatDelta(content.clone()))));
+                            }
                         }
                     }
                 }
@@ -212,7 +230,7 @@ impl futures_util::Stream for SseDeltaStream {
 
             match self.stream.as_mut().poll_next(cx) {
                 Poll::Ready(Some(Ok(bytes))) => {
-                    self.buffer.push_str(&String::from_utf8_lossy(&bytes));
+                    self.buffer.extend_from_slice(&bytes);
                 }
                 Poll::Ready(Some(Err(error))) => {
                     self.done = true;

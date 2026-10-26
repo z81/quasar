@@ -7,6 +7,7 @@ mod api;
 mod audio;
 mod config;
 mod connections;
+mod directives;
 mod openrouter;
 mod prompt;
 mod proto;
@@ -101,15 +102,19 @@ async fn main() -> Result<()> {
     let updates = Arc::new(UpdatesConfig::load(
         config.allow_updates,
         &config.updates_config_path,
-    ));
+    )?);
     let registry = ConnectionRegistry::default();
 
+    let prompt_generator = PromptGenerator::new(
+        &config.processor_prompt_path,
+        &config.processor_state_prompt_path,
+    );
+    prompt_generator.check_templates()?;
+
     let context = Arc::new(UniproxyContext {
-        prompt_generator: PromptGenerator::new(
-            &config.processor_prompt_path,
-            &config.processor_state_prompt_path,
-        ),
+        prompt_generator,
         functions: Arc::new(functions),
+        cache: agent::new_response_cache(config.processor_cache_size as usize),
         openrouter,
         remote,
         config,
@@ -117,7 +122,7 @@ async fn main() -> Result<()> {
 
     let quasar_state = Arc::new(QuasarState {
         storage: storage.clone(),
-        glagol_jwt_key: std::env::var("GLAGOL_JWT_KEY").unwrap_or_default().into_bytes(),
+        glagol_jwt_key: context.config.glagol_jwt_key.clone(),
         updates,
     });
 
@@ -154,11 +159,38 @@ async fn main() -> Result<()> {
     let api_listener = tokio::net::TcpListener::bind(("0.0.0.0", api_port)).await?;
     tracing::info!("management API listening on {}", api_listener.local_addr()?);
 
+    // stop on SIGINT/SIGTERM: as PID 1 in Docker there is no default handler,
+    // so without this `docker stop` waits 10 s and kills the process
     tokio::select! {
         result = axum::serve(listener, app) => result?,
         result = axum::serve(api_listener, api) => result?,
+        () = shutdown_signal() => tracing::info!("shutting down"),
     }
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => {
+                tracing::warn!("cannot listen for SIGTERM: {error}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        () = ctrl_c => {}
+        () = terminate => {}
+    }
 }
 
 fn csv_urls(name: &str) -> Vec<String> {

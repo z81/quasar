@@ -4,10 +4,12 @@
 
 use std::collections::BTreeMap;
 
+use anyhow::Context;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateEntry {
     pub version: String,
     pub download_url: String,
@@ -28,14 +30,30 @@ pub struct UpdatesConfig {
 }
 
 impl UpdatesConfig {
-    pub fn load(enabled: bool, path: &Option<String>) -> Self {
-        let updates = path
-            .as_ref()
-            .and_then(|path| std::fs::read_to_string(path).ok())
-            .and_then(|content| serde_yaml::from_str::<UpdatesFile>(&content).ok())
-            .map(|file| file.updates)
-            .unwrap_or_default();
-        Self { enabled, updates }
+    /// Like TS: the file is read only with ALLOW_UPDATES and UPDATES_CONFIG_PATH
+    /// set, and a broken file stops the server instead of silently offering nothing
+    pub fn load(enabled: bool, path: &Option<String>) -> anyhow::Result<Self> {
+        let updates = match path {
+            Some(path) if enabled => {
+                let content = std::fs::read_to_string(path)
+                    .with_context(|| format!("reading updates config {path}"))?;
+                serde_yaml::from_str::<UpdatesFile>(&content)
+                    .with_context(|| format!("parsing updates config {path}"))?
+                    .updates
+            }
+            _ => BTreeMap::new(),
+        };
+        tracing::info!("updates: {} for {} platform(s)", if enabled { "allowed" } else { "disabled" }, updates.len());
+        Ok(Self { enabled, updates })
+    }
+
+    /// register's hasCriticalUpdate: the station runs another version than the pinned one
+    pub fn has_critical_update(&self, platform: &str, firmware_version: &str) -> bool {
+        self.enabled
+            && self
+                .updates
+                .get(platform)
+                .is_some_and(|update| update.version != firmware_version)
     }
 
     /// The check_updates response for a platform at its current version

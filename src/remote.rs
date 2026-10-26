@@ -35,7 +35,12 @@ impl RemoteServers {
             function_urls,
             owners: std::sync::RwLock::new(HashMap::new()),
             state_urls,
-            client: reqwest::Client::new(),
+            // a hung function/state server must not freeze startup or a dialog turn
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .expect("HTTP client for remote servers"),
         }
     }
 

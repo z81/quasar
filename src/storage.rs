@@ -21,9 +21,11 @@ impl Storage {
                         tracing::error!("postgres connection error: {error}");
                     }
                 });
+                // own table name: the TypeScript server keeps an incompatible
+                // "stations" table, and both may share one database
                 if let Err(error) = client
                     .execute(
-                        "CREATE TABLE IF NOT EXISTS stations (\
+                        "CREATE TABLE IF NOT EXISTS alice_stations (\
                          duid TEXT PRIMARY KEY, platform TEXT NOT NULL, name TEXT NOT NULL, \
                          network_info JSONB, certificate TEXT NOT NULL, private_key TEXT NOT NULL)",
                         &[],
@@ -48,21 +50,22 @@ impl Storage {
             Self::Memory(store) => store.register(duid, platform).await,
             Self::Postgres(client) => {
                 let row = client
-                    .query_opt("SELECT duid FROM stations WHERE duid = $1", &[&duid])
+                    .query_opt("SELECT duid FROM alice_stations WHERE duid = $1", &[&duid])
                     .await?;
                 if row.is_some() {
                     return Ok(());
                 }
                 let (certificate, private_key) = crate::stations::generate_certificate()?;
                 let index: i64 = client
-                    .query_one("SELECT count(*) FROM stations", &[])
+                    .query_one("SELECT count(*) FROM alice_stations", &[])
                     .await?
                     .get(0);
                 let name = format!("My Favourite Yandex Station No. {index:05}");
                 client
                     .execute(
-                        "INSERT INTO stations (duid, platform, name, certificate, private_key) \
-                         VALUES ($1, $2, $3, $4, $5)",
+                        // two first-contact requests may race; the first one wins
+                        "INSERT INTO alice_stations (duid, platform, name, certificate, private_key) \
+                         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (duid) DO NOTHING",
                         &[&duid, &platform, &name, &certificate, &private_key],
                     )
                     .await?;
@@ -74,17 +77,17 @@ impl Storage {
     pub async fn update_network_info(&self, duid: &str, network_info: Value) -> bool {
         match self {
             Self::Memory(store) => store.update_network_info(duid, network_info).await,
-            Self::Postgres(client) => {
-                let info = network_info.to_string();
-                client
-                    .execute(
-                        "UPDATE stations SET network_info = $2 WHERE duid = $1",
-                        &[&duid, &info],
-                    )
-                    .await
-                    .map(|affected| affected > 0)
-                    .unwrap_or(false)
-            }
+            Self::Postgres(client) => client
+                .execute(
+                    "UPDATE alice_stations SET network_info = $2 WHERE duid = $1",
+                    &[&duid, &network_info],
+                )
+                .await
+                .map(|affected| affected > 0)
+                .unwrap_or_else(|error| {
+                    tracing::error!("failed to store network info of {duid}: {error}");
+                    false
+                }),
         }
     }
 
@@ -94,7 +97,7 @@ impl Storage {
             Self::Postgres(client) => client
                 .query(
                     "SELECT duid, platform, name, network_info, certificate, private_key \
-                     FROM stations",
+                     FROM alice_stations",
                     &[],
                 )
                 .await
@@ -104,16 +107,16 @@ impl Storage {
                             certificate_pem: row.get(4),
                             duid: row.get(0),
                             name: row.get(2),
-                            network_info: row
-                                .try_get::<_, String>(3)
-                                .ok()
-                                .and_then(|value| serde_json::from_str(&value).ok()),
+                            network_info: row.try_get::<_, Option<Value>>(3).ok().flatten(),
                             platform: row.get(1),
                             private_key_pem: row.get(5),
                         })
                         .collect()
                 })
-                .unwrap_or_default(),
+                .unwrap_or_else(|error| {
+                    tracing::error!("failed to list stations: {error}");
+                    Vec::new()
+                }),
         }
     }
 

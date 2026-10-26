@@ -1,0 +1,75 @@
+# latest working versions with bad certificates
+
+updates:
+  chiron:
+    downloadUrl: https://quasar.s3.yandex.net/chiron/ota/user/df047795-61dc-428f-9a38-555d244f28b5/5000001289.zip
+    version: '5000001289'
+    crc32: 3994367539
+    updateId: '154158'
+  cucumber:
+    downloadUrl: https://cdnriqbxswemmatxzibl.svc.cdn.yandex.net/cucumber/ota/user/8e1e25f9-1ff0-45cc-b30f-f920200539a5/0.369.1.46.4778262955.20261013.160.zip
+    crc32: 3103154577
+    version: 0.369.1.46.4778262955.20261013.160
+    fallbackUrl: https://quasar.s3.yandex.net/cucumber/ota/user/8e1e25f9-1ff0-45cc-b30f-f920200539a5/0.369.1.46.4778262955.20261013.160.zip
+    updateId: '150426'
+  magritte:
+    downloadUrl: https://quasar.s3.yandex.net/magritte/ota/user/e8587e49-87f4-4c11-b526-4a92e52af229/5000001589.zip
+    version: '5000001589'
+    crc32: 3409490000
+    updateId: '154151'
+  malevich:
+    downloadUrl: https://quasar.s3.yandex.net/malevich/ota/user/063d22a8-1864-4330-ac85-f200c8f27aa8/5000001072.zip
+    crc32: 2649215308
+    version: '5000001072'
+    updateId: '154153'
+  monet:
+    downloadUrl: https://quasar.s3.yandex.net/monet/ota/user/4a39ce09-6414-4937-855e-c15c32439af4/5000001070.zip
+    crc32: 1478840719
+    version: '5000001070'
+    updateId: '150068'
+  yandexmicro:
+    downloadUrl: https://cdnriqbxswemmatxzibl.svc.cdn.yandex.net/yandexmicro/ota/user/dbb517ff-eac2-4ba7-acb6-da7f21c3de80/0.372.1.8.4790672876.20261019.300.zip
+    crc32: 3616950701
+    version: 0.372.1.8.4790672876.20261019.300
+    fallbackUrl: https://quasar.s3.yandex.net/yandexmicro/ota/user/dbb517ff-eac2-4ba7-acb6-da7f21c3de80/0.372.1.8.4790672876.20261019.300.zip
+    updateId: '154280'
+  yandexmidi:
+    downloadUrl: https://cdnriqbxswemmatxzibl.svc.cdn.yandex.net/yandexmidi/ota/user/c0e1b863-7db9-46af-9c0f-41b30e0a63f1/0.372.1.8.4790676133.20261019.298.zip
+    crc32: 150213430
+    version: 0.372.1.8.4790676133.20261019.298
+    fallbackUrl: https://quasar.s3.yandex.net/yandexmidi/ota/user/c0e1b863-7db9-46af-9c0f-41b30e0a63f1/0.372.1.8.4790676133.20261019.298.zip
+    updateId: '154282'
+  yandexmini:
+    downloadUrl: https://cdnriqbxswemmatxzibl.svc.cdn.yandex.net/yandexmini/ota/release/30cc9b87-109a-4a18-84fc-d2e7ab8f8e8f/1.372.4.8.4790753534.20261019.zip
+    crc32: 2832295028
+    version: 1.372.4.8.4790753534.20261019
+    fallbackUrl: https://quasar.s3.yandex.net/yandexmini/ota/release/30cc9b87-109a-4a18-84fc-d2e7ab8f8e8f/1.372.4.8.4790753534.20261019.zip
+    updateId: '154286'
+  yandexmini_2:
+    downloadUrl: https://cdnriqbxswemmatxzibl.svc.cdn.yandex.net/yandexmini_2/ota/user/07756f40-2d2c-4d08-83be-5c35372c5e7c/0.372.1.8.4790679165.20261019.302.zip
+    crc32: 3591206777
+    version: 0.372.1.8.4790679165.20261019.302
+    fallbackUrl: https://quasar.s3.yandex.net/yandexmini_2/ota/user/07756f40-2d2c-4d08-83be-5c35372c5e7c/0.372.1.8.4790679165.20261019.302.zip
+    updateId: '154290'
+  yandexmodule:
+    downloadUrl: https://quasar.s3.yandex.net/yandexmodule/ota/user/6acf4699-0538-4920-b770-a5efc97c01bf/quasar-1.3.2.18.840268003.20201207.zip
+    crc32: 1864078162
+    version: 1.3.2.18.840268003.20201207
+    updateId: '7973'
+  yandexmodule_2:
+    downloadUrl: https://quasar.s3.yandex.net/yandexmodule_2/ota/user/1a675fba-b6d6-4b5f-812f-7b26ee0d3e14/5000000751.zip
+    crc32: 3468004492
+    version: '5000000751'
+    updateId: '147127'
+  yandexstation:
+    downloadUrl: https://quasar.s3.yandex.net/yandexstation/ota/user/ac1a0f1d-4e76-4d5e-b4dc-67798e8d2c94/2.372.5.8.4790795839.20261019.52.zip
+    crc32: 4052885966
+    version: '2.372.5.8.4790795839.20261019.52'
+    updateId: '154299'
+  yandexstation_2:
+    downloadUrl: https://quasar.s3.yandex.net/yandexstation_2/ota/user/e54d4f1c-aefe-4a6b-b0bb-f4a2531770ef/5000000896.zip
+    crc32: 1400680302
+    version: '5000000896'
+    updateId: '153966'
+
+  

@@ -61,7 +61,8 @@ pub fn parse_llm_response(raw: &str) -> anyhow::Result<StructuredResponse> {
             .map(|call| FunctionCall {
                 name: call.name,
                 arguments: call.args,
-                schedule_ms: call.schedule.as_deref().map(parse_schedule),
+                // an empty or unparsable schedule means "now", as in TS
+                schedule_ms: call.schedule.as_deref().map(parse_schedule).filter(|milliseconds| *milliseconds > 0),
             })
             .collect(),
         require_more_input: raw.continue_dialog.unwrap_or(false),
@@ -80,11 +81,13 @@ fn strip_code_fence(raw: &str) -> &str {
         .unwrap_or(trimmed)
 }
 
-/// Parses human schedules like "1h 20m", "5m", "30s"
+/// Parses human schedules like "1h 20m", "5m", "30s", "1.5h"
 pub fn parse_schedule(schedule: &str) -> u64 {
     let mut total_ms = 0u64;
     for part in schedule.split_whitespace() {
-        let (digits, suffix) = part.split_at(part.find(|character: char| !character.is_ascii_digit()).unwrap_or(part.len()));
+        let (digits, suffix) = part.split_at(
+            part.find(|character: char| !character.is_ascii_digit() && character != '.').unwrap_or(part.len()),
+        );
         let value: f64 = digits.parse().unwrap_or(0.0);
         let milliseconds = match suffix {
             "ms" => value,

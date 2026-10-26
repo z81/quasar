@@ -45,8 +45,7 @@ impl PromptGenerator {
             .with_context(|| format!("reading {}", self.prompt_path))?;
         let mut data = BTreeMap::new();
         data.insert("functionsText".to_string(), functions_text);
-        let handlebars = handlebars::Handlebars::new();
-        Ok(handlebars.render_template(&template, &data)?)
+        Ok(unescaped_handlebars().render_template(&template, &data)?)
     }
 
     pub fn generate_state(&self, state: &BTreeMap<String, String>) -> Result<String> {
@@ -59,9 +58,24 @@ impl PromptGenerator {
             .join("\n");
         let mut data = BTreeMap::new();
         data.insert("stateText".to_string(), state_text);
-        let handlebars = handlebars::Handlebars::new();
-        Ok(handlebars.render_template(&template, &data)?)
+        Ok(unescaped_handlebars().render_template(&template, &data)?)
     }
+
+    /// Fails early when a template is missing, like TS does at startup
+    pub fn check_templates(&self) -> Result<()> {
+        for path in [&self.prompt_path, &self.state_prompt_path] {
+            std::fs::metadata(path).with_context(|| format!("prompt template {path} is not readable"))?;
+        }
+        Ok(())
+    }
+}
+
+/// Prompts are plain text for the LLM, so HTML escaping (the Handlebars
+/// default) would turn JSON schemas into `&quot;` soup; TS uses noEscape too
+fn unescaped_handlebars() -> handlebars::Handlebars<'static> {
+    let mut handlebars = handlebars::Handlebars::new();
+    handlebars.register_escape_fn(handlebars::no_escape);
+    handlebars
 }
 
 /// The state shown to the LLM every turn (mirrors the system state server)
@@ -73,32 +87,9 @@ pub fn system_state() -> BTreeMap<String, String> {
     state
 }
 
+/// Local time (honours TZ, e.g. Europe/Moscow) — the LLM answers "который час" from it
 fn chrono_like_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-    // days since epoch -> civil date (Howard Hinnant's algorithm)
-    let days = (seconds / 86_400) as i64;
-    let time_of_day = seconds % 86_400;
-    let (year, month, day) = civil_from_days(days);
-    format!(
-        "{day:02}-{month:02}-{year} {:02}:{:02}:{:02}",
-        time_of_day / 3600,
-        (time_of_day % 3600) / 60,
-        time_of_day % 60
-    )
-}
-
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if month <= 2 { year + 1 } else { year }, month, day)
+    chrono::Local::now().format("%d-%m-%Y %H:%M:%S").to_string()
 }
 
 
@@ -115,15 +106,23 @@ pub fn builtin_directive_functions() -> Functions {
             },
         );
     };
-    add("smart_speaker_player_play", "Starts music, or continues if was paused", None);
+    // music play/next/previous need the music manager, which is not ported yet,
+    // so they are not offered to the LLM (it would claim success while nothing plays)
     add("smart_speaker_player_pause", "Pause music if it is playing", None);
-    add("smart_speaker_player_next_track", "Switch to next track", None);
-    add("smart_speaker_player_previous_track", "Switch to previous track", None);
+    add("smart_speaker_player_rewind", "Rewind music if it is playing",
+        Some(serde_json::json!({"type":"object","properties":{
+            "amountMs":{"type":"integer","exclusiveMinimum":0,"description":"Amount to rewind in ms (always positive)"},
+            "direction":{"type":"string","enum":["Forward","Backward"]}},
+            "required":["amountMs","direction"]})));
     add("smart_speaker_bluetooth", "Enable or disable Bluetooth on the smart speaker",
-        Some(serde_json::json!({"type":"object","properties":{"enable":{"type":"boolean"}}})));
-    add("smart_speaker_set_sound_volume", "Set volume on the smart speaker (1..10)",
-        Some(serde_json::json!({"type":"object","properties":{"volume":{"type":"number"}}})));
-    add("smart_speaker_set_sound_volume_louder", "Make the smart speaker volume louder", None);
-    add("smart_speaker_set_sound_volume_quieter", "Make the smart speaker volume quieter", None);
+        Some(serde_json::json!({"type":"object","properties":{"enable":{"type":"boolean"}},"required":["enable"]})));
+    add("smart_speaker_set_sound_volume", "Set volume on the smart speaker",
+        Some(serde_json::json!({"type":"object","properties":{"volume":{"type":"integer","minimum":1,"maximum":10}},"required":["volume"]})));
+    add("smart_speaker_set_sound_volume_louder", "Atomically make the smart speaker volume louder", None);
+    add("smart_speaker_set_sound_volume_quieter", "Atomically make the smart speaker volume quieter", None);
+    add("smart_speaker_play_iot_sound", "Play IoT power on/power off sound on the smart speaker",
+        Some(serde_json::json!({"type":"object","properties":{
+            "isPowerOn":{"type":"boolean","description":"true if \"on\" sound, false if \"off\" sound"}},
+            "required":["isPowerOn"]})));
     Arc::new(functions.into_iter().collect())
 }

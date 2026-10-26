@@ -36,6 +36,15 @@ pub struct FunctionDefinition {
 
 pub type Functions = Arc<std::collections::HashMap<String, FunctionDefinition>>;
 
+/// Answers to first requests of a dialog, shared by all dialogs (as in TS)
+pub type ResponseCache = Arc<Mutex<LruCache<String, String>>>;
+
+pub fn new_response_cache(size: usize) -> ResponseCache {
+    Arc::new(Mutex::new(LruCache::new(
+        std::num::NonZeroUsize::new(size).expect("cache size must be positive"),
+    )))
+}
+
 /// One spoken answer chunk with the directives collected along the way
 pub struct AgentOutput {
     pub directives: Vec<DirectiveResult>,
@@ -50,7 +59,7 @@ pub struct Agent {
     openrouter: OpenRouter,
     model: String,
     functions: Functions,
-    cache: Arc<Mutex<LruCache<String, String>>>,
+    cache: ResponseCache,
     state: Arc<Mutex<AgentState>>,
 }
 
@@ -71,11 +80,8 @@ impl Agent {
         functions: Functions,
         system_prompt: String,
         initial_state_prompt: String,
-        cache_size: usize,
+        cache: ResponseCache,
     ) -> Self {
-        let cache = Arc::new(Mutex::new(LruCache::new(
-            std::num::NonZeroUsize::new(cache_size).expect("cache size must be positive"),
-        )));
         let state = Arc::new(Mutex::new(AgentState {
             messages: vec![
                 ChatMessage::system(system_prompt),
@@ -95,7 +101,7 @@ impl Agent {
     ) -> Result<Vec<AgentOutput>> {
         let text = turn.text.trim().to_string();
 
-        {
+        let first_request = {
             let mut state = self.state.lock().await;
             state.messages.push(ChatMessage::system(state_prompt));
             state.messages.push(if turn.external_event {
@@ -103,11 +109,14 @@ impl Agent {
             } else {
                 ChatMessage::user(text.clone())
             });
-        }
+            state.first_request
+        };
 
-        let cached = {
-            let mut cache = self.cache.lock().await;
-            if cache.contains(&text) { cache.get(&text).cloned() } else { None }
+        // only the first request of a dialog is context-free enough to reuse
+        let cached = if first_request {
+            self.cache.lock().await.get(&text).cloned()
+        } else {
+            None
         };
 
         let mut outputs = Vec::new();
@@ -147,10 +156,10 @@ impl Agent {
             {
                 let mut state = self.state.lock().await;
                 state.messages.push(ChatMessage::assistant(response.clone()));
-                if !structured.require_more_input && structured.can_cache && state.first_request && finished {
-                    if cached.is_none() {
-                        self.cache.lock().await.put(text.clone(), response.clone());
-                    }
+                if !structured.require_more_input && structured.can_cache && state.first_request && finished
+                    && cached.is_none()
+                {
+                    self.cache.lock().await.put(text.clone(), response.clone());
                 }
                 state.first_request = false;
             }

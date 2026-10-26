@@ -11,12 +11,14 @@ use futures_util::{SinkExt, StreamExt};
 use prost::Message as _;
 use uuid::Uuid;
 
-use crate::agent::{Agent, AgentTurn, Functions};
+use crate::agent::{Agent, AgentOutput, AgentTurn, Functions, ResponseCache};
 use crate::audio;
 use crate::config::Config;
+use crate::directives;
 use crate::openrouter::OpenRouter;
 use crate::proto::n_alice::n_alice_api::t_client_message;
 use crate::proto::n_alice::n_alice_api::t_server_message;
+use crate::proto::n_alice::n_alice_api::t_stream_control::{self, t_action_close::EReason};
 use crate::proto::n_alice::n_alice_api::t_alice_response_proto::t_voice_response::TOutputSpeech;
 use crate::proto::n_alice::n_alice_api::t_alice_response_proto::{
     THeader as ResponseHeader, TResponse as ResponseBody, TVoiceResponse,
@@ -33,6 +35,18 @@ pub struct UniproxyContext {
     pub prompt_generator: PromptGenerator,
     pub functions: Functions,
     pub remote: Arc<crate::remote::RemoteServers>,
+    pub cache: ResponseCache,
+}
+
+/// Spoken when the LLM or transcription fails, instead of leaving the station silent (as in TS)
+const ERROR_RESPONSE_TEXT: &str = "Извините, что-то пошло не так. Попробуйте спросить ещё раз.";
+
+/// What an AliceResponse answers to
+struct ResponseTarget<'a> {
+    dialog_id: &'a str,
+    request_id: &'a str,
+    sequence_number: u32,
+    reference_message_id: &'a str,
 }
 
 struct VoiceInputSession {
@@ -56,7 +70,7 @@ pub async fn handle_socket(
     let mut agent: Option<Arc<Agent>> = None;
     let (command_sender, mut command_receiver) =
         tokio::sync::mpsc::unbounded_channel::<crate::connections::StationCommand>();
-    registry.register(&device_id, command_sender);
+    let connection_id = registry.register(&device_id, command_sender);
 
     loop {
         let payload = tokio::select! {
@@ -73,6 +87,10 @@ pub async fn handle_socket(
                             &reference_message_id, &mut output_stream_id).await {
                             tracing::error!("push event failed: {error:#}");
                         }
+                        continue;
+                    }
+                    Some(crate::connections::StationCommand::Directives { directives }) => {
+                        tracing::warn!("pushing {} directive(s) is not implemented yet", directives.len());
                         continue;
                     }
                     None => break,
@@ -138,22 +156,41 @@ pub async fn handle_socket(
                     }
                 }
                 Some(t_client_message::Message::StreamControl(stream_control)) => {
-                    let closed_voice_stream = voice_input
+                    let is_voice_stream = voice_input
                         .as_ref()
                         .map(|session| session.stream_id == stream_control.stream_id)
                         .unwrap_or(false);
-                    if closed_voice_stream {
-                        let session = voice_input.take().expect("checked above");
-                        let current_agent = ensure_agent(&context, &mut agent);
-
-                        let outcome = finish_voice_input(
-                            &context, &mut sender, &session, &reference_message_id,
-                            &mut output_stream_id, &current_agent,
-                        )
-                        .await;
-                        if let Err(error) = outcome {
-                            tracing::error!("voice input processing failed: {error:#}");
+                    // only Close ends the voice input (other actions like SpotterEnd do
+                    // not); its reason OK is 0, so presence matters, not the value
+                    let close_reason = match stream_control.action {
+                        Some(t_stream_control::Action::Close(close)) => Some(close.reason),
+                        _ => None,
+                    };
+                    match close_reason {
+                        Some(reason) if is_voice_stream && reason == EReason::Cancel as i32 => {
+                            tracing::info!("voice input stream {} cancelled by the station", stream_control.stream_id);
+                            voice_input = None;
+                            agent = None;
                         }
+                        Some(_) if is_voice_stream => {
+                            let session = voice_input.take().expect("checked above");
+                            let current_agent = ensure_agent(&context, &mut agent);
+
+                            let dialog_continues = finish_voice_input(
+                                &context, &mut sender, &session, &reference_message_id,
+                                &mut output_stream_id, &current_agent,
+                            )
+                            .await
+                            .unwrap_or_else(|error| {
+                                tracing::error!("voice input processing failed: {error:#}");
+                                false
+                            });
+                            // a finished dialog starts the next one with a fresh history
+                            if !dialog_continues {
+                                agent = None;
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 None => {}
@@ -175,22 +212,44 @@ pub async fn handle_socket(
         }
     }
 
-    registry.unregister(&device_id);
+    registry.unregister(&device_id, connection_id);
 }
 
-/// Creates the per-connection dialog agent on first use
+/// Creates the dialog agent on first use; it is dropped when a dialog ends
 fn ensure_agent(context: &Arc<UniproxyContext>, agent: &mut Option<Arc<Agent>>) -> Arc<Agent> {
     agent.get_or_insert_with(|| {
+        let system_prompt = context.prompt_generator.generate(&context.functions).unwrap_or_else(|error| {
+            tracing::error!("failed to render the system prompt: {error:#}");
+            String::new()
+        });
+        let state_prompt = context.prompt_generator.generate_state(&system_state()).unwrap_or_else(|error| {
+            tracing::error!("failed to render the state prompt: {error:#}");
+            String::new()
+        });
         Arc::new(Agent::new(
             context.openrouter.clone(),
             context.config.processor_model.clone(),
             context.functions.clone(),
-            context.prompt_generator.generate(&context.functions).unwrap_or_default(),
-            context.prompt_generator.generate_state(&system_state()).unwrap_or_default(),
-            context.config.processor_cache_size as usize,
+            system_prompt,
+            state_prompt,
+            context.cache.clone(),
         ))
     })
         .clone()
+}
+
+/// Runs remote functions in the background; station directives come back in the outputs
+fn remote_executor(context: &Arc<UniproxyContext>) -> impl Fn(crate::agent::protocol::FunctionCall) -> Result<()> + Send + Sync + 'static {
+    let remote = context.remote.clone();
+    move |call| {
+        let remote = remote.clone();
+        tokio::spawn(async move {
+            if let Err(error) = remote.call_by_name(&call.name, &call.arguments).await {
+                tracing::warn!("remote function '{}' failed: {error:#}", call.name);
+            }
+        });
+        Ok(())
+    }
 }
 
 /// Runs a pushed external event through the agent and speaks the answer
@@ -202,11 +261,13 @@ async fn process_event(
     reference_message_id: &str,
     output_stream_id: &mut i64,
 ) -> Result<()> {
+    // remote functions run as for voice; station directives of pushed events
+    // still need the push/semantic-frame path, which is not ported yet
     let outputs = agent
         .run_turn(
             AgentTurn { external_event: true, text: text.to_string() },
-            context.prompt_generator.generate_state(&dialog_state(&context).await)?,
-            |_call| Ok(()),
+            context.prompt_generator.generate_state(&dialog_state(context).await)?,
+            remote_executor(context),
         )
         .await
         .context("agent turn failed")?;
@@ -226,112 +287,130 @@ async fn finish_voice_input(
     reference_message_id: &str,
     output_stream_id: &mut i64,
     agent: &Arc<Agent>,
-) -> Result<()> {
-    // 1. transcribe the whole utterance
+) -> Result<bool> {
+    let target = ResponseTarget {
+        dialog_id: &session.dialog_id,
+        request_id: &session.request_id,
+        sequence_number: session.sequence_number,
+        reference_message_id,
+    };
+
+    // 1. transcribe the whole utterance; failures count as "nothing heard"
     let ogg: Vec<u8> = session.audio_chunks.iter().flatten().copied().collect();
     let mut text = String::new();
     if !ogg.is_empty() {
-        let wav = audio::ogg_to_wav(&ogg).await.context("transcoding utterance")?;
-        text = context
-            .openrouter
-            .transcribe(&context.config.stt_model, &context.config.stt_language, &wav)
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!("transcription failed: {error:#}");
-                String::new()
-            });
+        match audio::ogg_to_wav(&ogg).await {
+            Ok(wav) => {
+                text = context
+                    .openrouter
+                    .transcribe(&context.config.stt_model, context.config.stt_language.as_deref(), &wav)
+                    .await
+                    .unwrap_or_else(|error| {
+                        tracing::warn!("transcription failed: {error:#}");
+                        String::new()
+                    });
+            }
+            Err(error) => tracing::warn!("transcoding the utterance failed: {error:#}"),
+        }
     }
     tracing::info!("transcribed: '{text}'");
 
     send_asr_result(sender, &text, reference_message_id).await?;
 
+    // nothing recognized: close the request with an empty answer so the station does not wait for one
     if text.is_empty() {
-        return Ok(());
+        send_alice_response(sender, &target, "", false, Vec::new()).await?;
+        return Ok(false);
     }
 
-    // 2. run the agent
+    // 2. run the agent; on failure apologize instead of going silent
     let state_prompt = context
         .prompt_generator
-        .generate_state(&dialog_state(&context).await)?;
-    let remote = context.remote.clone();
-    let outputs = agent
-        .run_turn(
-            AgentTurn { external_event: false, text },
-            state_prompt,
-            move |call| {
-                // remote functions are fire-and-forget in the protocol
-                let remote = remote.clone();
-                tokio::spawn(async move {
-                    if let Err(error) = remote.call_by_name(&call.name, &call.arguments).await {
-                        tracing::warn!("remote function '{}' failed: {error:#}", call.name);
-                    }
-                });
-                Ok(())
-            },
-        )
+        .generate_state(&dialog_state(context).await)
+        .unwrap_or_else(|error| {
+            tracing::error!("failed to render the state prompt: {error:#}");
+            String::new()
+        });
+    let outputs = match agent
+        .run_turn(AgentTurn { external_event: false, text }, state_prompt, remote_executor(context))
         .await
-        .context("agent turn failed")?;
+    {
+        Ok(outputs) => outputs,
+        Err(error) => {
+            tracing::error!("agent turn failed: {error:#}");
+            vec![AgentOutput {
+                directives: Vec::new(),
+                finished: true,
+                should_listen: false,
+                text: ERROR_RESPONSE_TEXT.to_string(),
+            }]
+        }
+    };
 
-    // 3. answer: AliceResponse + streamed TTS audio per output
+    // 3. answer: AliceResponse with station directives + streamed TTS audio per output
+    let mut should_listen = false;
     for output in outputs {
-        let directives: Vec<TDirective> = output
+        let mut station_directives: Vec<TDirective> = output
             .directives
             .iter()
-            .map(|directive| TDirective {
-                name: directive.name.clone(),
-                r#type: "client_action".to_string(),
-                ..Default::default()
-            })
+            .filter_map(directives::to_station_directive)
             .collect();
-
-        send_server_message(
-            sender,
-            TServerMessage {
-                message: Some(t_server_message::Message::Event(t_server_message::TEvent {
-                    header: Some(TEventHeader {
-                        message_id: Uuid::new_v4().to_string(),
-                        ref_message_id: reference_message_id.to_string(),
-                        ..Default::default()
-                    }),
-                    event: Some(t_server_message::t_event::Event::AliceResponse(
-                        TAliceResponseProto {
-                            header: Some(ResponseHeader {
-                                dialog_id: Some(session.dialog_id.clone()),
-                                request_id: Some(session.request_id.clone()),
-                                response_id: Some(Uuid::new_v4().to_string()),
-                                sequence_number: Some(session.sequence_number),
-                                ..Default::default()
-                            }),
-                            voice_response: Some(TVoiceResponse {
-                                has_voice_response: !output.text.is_empty(),
-                                should_listen: output.should_listen,
-                                output_speech: (!output.text.is_empty()).then_some(TOutputSpeech {
-                                    text: Some(output.text.clone()),
-                                }),
-                                ..Default::default()
-                            }),
-                            response: Some(ResponseBody {
-                                directives,
-                                is_streaming: false,
-                                ..Default::default()
-                            }),
-                            ..Default::default()
-                        },
-                    )),
-                })),
-                ..Default::default()
-            },
-        )
-        .await?;
-
+        if !output.text.is_empty() {
+            station_directives.push(directives::tts_play_placeholder());
+        }
+        send_alice_response(sender, &target, &output.text, output.should_listen, station_directives).await?;
         speak_text(sender, context, &output.text, reference_message_id, output_stream_id).await;
+        should_listen = output.should_listen;
     }
 
-    Ok(())
+    Ok(should_listen)
+}
+
+async fn send_alice_response(
+    sender: &mut futures_util::stream::SplitSink<WebSocket, WsMessage>,
+    target: &ResponseTarget<'_>,
+    text: &str,
+    should_listen: bool,
+    directives: Vec<TDirective>,
+) -> Result<()> {
+    send_server_message(
+        sender,
+        TServerMessage {
+            message: Some(t_server_message::Message::Event(t_server_message::TEvent {
+                header: Some(TEventHeader {
+                    message_id: Uuid::new_v4().to_string(),
+                    ref_message_id: target.reference_message_id.to_string(),
+                    ..Default::default()
+                }),
+                event: Some(t_server_message::t_event::Event::AliceResponse(TAliceResponseProto {
+                    header: Some(ResponseHeader {
+                        dialog_id: Some(target.dialog_id.to_string()),
+                        request_id: Some(target.request_id.to_string()),
+                        response_id: Some(Uuid::new_v4().to_string()),
+                        sequence_number: Some(target.sequence_number),
+                        ..Default::default()
+                    }),
+                    voice_response: Some(TVoiceResponse {
+                        has_voice_response: !text.is_empty(),
+                        should_listen,
+                        output_speech: (!text.is_empty()).then(|| TOutputSpeech { text: Some(text.to_string()) }),
+                    }),
+                    response: Some(ResponseBody {
+                        directives,
+                        is_streaming: false,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })),
+            })),
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 /// Synthesizes `text` and streams the audio to the station as one
-/// LazyTtsStreaming OGG/Opus stream
+/// LazyTtsStreaming OGG/Opus stream; empty text is not spoken at all
 async fn speak_text(
     sender: &mut futures_util::stream::SplitSink<WebSocket, WsMessage>,
     context: &Arc<UniproxyContext>,
@@ -339,6 +418,9 @@ async fn speak_text(
     reference_message_id: &str,
     output_stream_id: &mut i64,
 ) {
+    if text.is_empty() {
+        return;
+    }
     if let Err(error) = speak_text_inner(sender, context, text, reference_message_id, output_stream_id).await {
         tracing::error!("TTS streaming failed: {error:#}");
     }
@@ -351,6 +433,19 @@ async fn speak_text_inner(
     reference_message_id: &str,
     output_stream_id: &mut i64,
 ) -> Result<()> {
+    // request synthesis first: if it fails, no stream gets announced to the station
+    let pcm = context
+        .openrouter
+        .speech_stream(
+            &context.config.tts_model,
+            &context.config.tts_voice,
+            &context.config.tts_instructions,
+            context.config.tts_speed,
+            text,
+        )
+        .await
+        .context("speech synthesis request failed")?;
+
     *output_stream_id += 1;
     let stream_id = *output_stream_id;
     send_server_message(
@@ -374,43 +469,40 @@ async fn speak_text_inner(
     )
     .await?;
 
-    let pcm = context
-        .openrouter
-        .speech_stream(
-            &context.config.tts_model,
-            &context.config.tts_voice,
-            &context.config.tts_instructions,
-            1.0,
-            text,
-        )
-        .await
-        .context("speech synthesis request failed")?;
-    let ogg_stream = audio::pcm_stream_to_ogg(pcm, context.config.tts_pcm_sample_rate);
-    tokio::pin!(ogg_stream);
-    while let Some(chunk) = ogg_stream.next().await {
-        let chunk = chunk.context("tts transcode failed")?;
-        let mut audio_frame = Vec::with_capacity(4 + chunk.len());
-        audio_frame.extend_from_slice(&(stream_id as u32).to_be_bytes());
-        audio_frame.extend_from_slice(&chunk);
-        sender.send(WsMessage::Binary(audio_frame.into())).await?;
+    // once announced, the stream is always closed, even if synthesis breaks off midway
+    let streamed = async {
+        let ogg_stream = audio::pcm_stream_to_ogg(pcm, context.config.tts_pcm_sample_rate);
+        tokio::pin!(ogg_stream);
+        while let Some(chunk) = ogg_stream.next().await {
+            let chunk = chunk.context("tts transcode failed")?;
+            let mut audio_frame = Vec::with_capacity(4 + chunk.len());
+            audio_frame.extend_from_slice(&(stream_id as u32).to_be_bytes());
+            audio_frame.extend_from_slice(&chunk);
+            sender.send(WsMessage::Binary(audio_frame.into())).await?;
+        }
+        Ok::<(), anyhow::Error>(())
     }
+    .await;
 
-    send_server_message(
+    let closed = send_server_message(
         sender,
         TServerMessage {
             message: Some(t_server_message::Message::StreamControl(
                 crate::proto::n_alice::n_alice_api::TStreamControl {
                     stream_id,
                     message_id: Uuid::new_v4().to_string(),
-                    ..Default::default()
+                    action: Some(t_stream_control::Action::Close(t_stream_control::TActionClose {
+                        reason: EReason::Ok as i32,
+                    })),
                 },
             )),
             ..Default::default()
         },
     )
-    .await?;
+    .await;
 
-    Ok(())
+    streamed?;
+    closed
 }
 
 /// The per-turn state shown to the LLM: system facts plus remote state servers

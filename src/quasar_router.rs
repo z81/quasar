@@ -27,6 +27,7 @@ struct DeviceParameters {
     device_id: Option<String>,
     platform: Option<String>,
     version: Option<String>,
+    firmware_version: Option<String>,
 }
 
 pub fn router() -> Router<crate::AppState> {
@@ -51,8 +52,15 @@ pub fn router() -> Router<crate::AppState> {
         .fallback(not_found_500)
 }
 
-async fn register(Query(_parameters): Query<DeviceParameters>) -> Json<Value> {
-    Json(json!({ "hasCriticalUpdate": false, "status": "ok" }))
+async fn register(
+    State(state): State<crate::AppState>,
+    Query(parameters): Query<DeviceParameters>,
+) -> Json<Value> {
+    let has_critical_update = state.quasar.updates.has_critical_update(
+        parameters.platform.as_deref().unwrap_or_default(),
+        parameters.firmware_version.as_deref().unwrap_or_default(),
+    );
+    Json(json!({ "hasCriticalUpdate": has_critical_update, "status": "ok" }))
 }
 
 async fn check_updates(
@@ -73,7 +81,9 @@ async fn update_device_state(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     let platform = parameters.platform.unwrap_or_default();
-    let _ = state.quasar.storage.register(&device_id, &platform).await;
+    if let Err(error) = state.quasar.storage.register(&device_id, &platform).await {
+        tracing::error!("failed to register station {device_id}: {error:#}");
+    }
     let network_info: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     state.quasar.storage.update_network_info(&device_id, network_info).await;
     Json(json!({ "status": "ok" })).into_response()
@@ -87,7 +97,9 @@ async fn glagol_token(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     let platform = parameters.platform.unwrap_or_default();
-    let _ = state.quasar.storage.register(&device_id, &platform).await;
+    if let Err(error) = state.quasar.storage.register(&device_id, &platform).await {
+        tracing::error!("failed to register station {device_id}: {error:#}");
+    }
 
     #[derive(serde::Serialize)]
     struct GlagolClaims {
@@ -174,7 +186,23 @@ struct OAuthForm {
     access_token: Option<String>,
 }
 
-async fn oauth_token(Json(form): Json<OAuthForm>) -> impl IntoResponse {
+/// The station posts application/x-www-form-urlencoded (TS accepts it and JSON)
+async fn oauth_token(headers: axum::http::HeaderMap, body: axum::body::Bytes) -> impl IntoResponse {
+    let is_json = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|content_type| content_type.contains("json"));
+    let form: OAuthForm = match if is_json {
+        serde_json::from_slice(&body).map_err(|error| error.to_string())
+    } else {
+        serde_urlencoded::from_bytes(&body).map_err(|error| error.to_string())
+    } {
+        Ok(form) => form,
+        Err(error) => {
+            tracing::warn!("invalid oauth token request: {error}");
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+    };
     match form.grant_type.as_deref() {
         Some("authorization_code") => {
             let mut hasher = Sha256::new();

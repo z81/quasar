@@ -20,18 +20,19 @@ use uuid::Uuid;
 
 use super::metadata::{self, BiometrySlot, InputMetadata};
 use super::outbox::{Outbox, ResponseTarget};
-use super::{UniproxyContext, report, speech};
+use super::speech::{self, SpeechEnd};
+use super::{UniproxyContext, report};
 use crate::agent::protocol::FunctionCall;
 use crate::agent::{Agent, AgentOutput, AgentTurn, ERROR_RESPONSE_TEXT, FunctionExecutor, OutputText};
 use crate::audio;
 use crate::directives::{self, WrappedDirective};
-use crate::gigastt::Recognition;
+use crate::gigastt::{Endpoint, Recognition, Transcript};
 use crate::prompt::system_state;
 use crate::proto::n_alice::n_alice_api::TDirective;
 use crate::remote::RemoteServers;
 
-/// How long the end of speech waits for gigastt's final transcript before
-/// OpenRouter transcribes the buffered audio instead
+/// How long the end of the utterance waits for gigastt's final transcript
+/// before OpenRouter transcribes the buffered audio instead
 const FINAL_TRANSCRIPT_WAIT: Duration = Duration::from_secs(3);
 
 /// How long a request waits for an answer part before the station is asked
@@ -180,8 +181,11 @@ pub struct Utterance {
     pub biometry: BiometrySlot,
     /// gigastt's recognition of it, if that is the provider
     pub recognition: Option<Recognition>,
-    /// when the station closed the stream: the end of speech
+    /// the end of the utterance: gigastt's end of utterance or the station's Close
     pub ended_at: Instant,
+    /// gigastt's end of utterance that ended it; its text already went to
+    /// the station in the AsrResult
+    pub endpoint: Option<Endpoint>,
 }
 
 /// A request of the station and what answering it needs
@@ -194,15 +198,23 @@ pub struct Request {
     /// The request's TDeviceState: metadata for remote servers, the player
     /// position a music stop saves
     pub device_state: Option<Vec<u8>>,
+    /// A voice request: when the user stopped speaking, for the latency of
+    /// the answer's first audio
+    pub speech_end: Option<SpeechEnd>,
 }
 
 impl Request {
     /// VoiceInput: transcribe, report the recognition, answer through the agent
-    pub async fn answer_voice(self, agent: Arc<Agent>, utterance: Utterance) {
-        let text = transcribe(&self.context, utterance.recognition, &utterance.ogg, utterance.ended_at).await;
-        if let Err(error) = self.outbox.asr_result(&text, &self.target.reference_message_id) {
-            tracing::warn!("{error:#}");
-            return;
+    pub async fn answer_voice(mut self, agent: Arc<Agent>, utterance: Utterance) {
+        let Utterance { ogg, biometry, recognition, ended_at, endpoint } = utterance;
+        let ended_by_gigastt = endpoint.is_some();
+        let Transcript { text, speech_ended_at } = transcribe(&self.context, recognition, &ogg, ended_at, endpoint).await;
+        // at gigastt's end of utterance the station got its AsrResult already
+        if !ended_by_gigastt {
+            if let Err(error) = self.outbox.asr_result(&text, &self.target.reference_message_id) {
+                tracing::warn!("{error:#}");
+                return;
+            }
         }
         if text.is_empty() {
             // nothing recognized: close the request with an empty answer so the station does not wait for one
@@ -211,7 +223,8 @@ impl Request {
             return;
         }
         // MatchedUser may arrive while the utterance is transcribed, so biometry is read only now (as in TS)
-        let metadata = InputMetadata::new(self.device_state.as_deref(), utterance.biometry.get());
+        let metadata = InputMetadata::new(self.device_state.as_deref(), biometry.get());
+        self.speech_end = Some(SpeechEnd { speech: speech_ended_at, utterance: ended_at });
         self.answer_with_agent(&agent, AgentTurn { external_event: false, text }, &metadata).await;
     }
 
@@ -233,7 +246,7 @@ impl Request {
     /// TextInput with text pushed through the API: spoken as is
     pub async fn answer_tts(self, text: String) {
         match self.outbox.alice_response(&self.target, &text, false, vec![directives::tts_play_placeholder(None)]) {
-            Ok(()) => speech::speak_text(&self.context, &self.outbox, &text, &self.target.reference_message_id).await,
+            Ok(()) => speech::speak_text(&self.context, &self.outbox, &text, &self.target.reference_message_id, None).await,
             Err(error) => tracing::warn!("{error:#}"),
         }
     }
@@ -342,10 +355,10 @@ impl Request {
         let reference_message_id = &self.target.reference_message_id;
         match part.text {
             OutputText::Complete(text) => {
-                speech::speak_text(&self.context, &self.outbox, &text, reference_message_id).await
+                speech::speak_text(&self.context, &self.outbox, &text, reference_message_id, self.speech_end).await
             }
             OutputText::Streaming(chunks) => {
-                speech::speak(&self.context, &self.outbox, chunks, reference_message_id).await
+                speech::speak(&self.context, &self.outbox, chunks, reference_message_id, self.speech_end).await
             }
         }
     }
@@ -365,26 +378,39 @@ impl Request {
 }
 
 /// The text of an utterance: gigastt's streamed recognition if it delivers in
-/// time, otherwise (and with STT_PROVIDER=openrouter) OpenRouter on the
-/// buffered audio
+/// time, otherwise the text of gigastt's end of utterance if there was one,
+/// otherwise (and with STT_PROVIDER=openrouter) OpenRouter on the buffered audio
 async fn transcribe(
     context: &UniproxyContext,
     recognition: Option<Recognition>,
     ogg: &[u8],
     ended_at: Instant,
-) -> String {
-    let (text, provider) = match recognition {
+    endpoint: Option<Endpoint>,
+) -> Transcript {
+    let buffered = |text| Transcript { text, speech_ended_at: None };
+    let (transcript, provider) = match recognition {
         Some(recognition) => match recognition.finish(FINAL_TRANSCRIPT_WAIT.saturating_sub(ended_at.elapsed())).await {
-            Ok(text) => (text, "gigastt"),
-            Err(error) => {
-                tracing::warn!("gigastt failed ({error:#}), transcribing with OpenRouter instead");
-                (transcribe_buffered(context, ogg).await, "OpenRouter (fallback)")
-            }
+            Ok(transcript) => (transcript, "gigastt"),
+            Err(error) => match endpoint {
+                Some(endpoint) => {
+                    tracing::warn!("gigastt failed after its end of utterance ({error:#}), answering the text of that");
+                    let transcript = Transcript { text: endpoint.text, speech_ended_at: endpoint.speech_ended_at };
+                    (transcript, "gigastt (end of utterance)")
+                }
+                None => {
+                    tracing::warn!("gigastt failed ({error:#}), transcribing with OpenRouter instead");
+                    (buffered(transcribe_buffered(context, ogg).await), "OpenRouter (fallback)")
+                }
+            },
         },
-        None => (transcribe_buffered(context, ogg).await, "OpenRouter"),
+        None => (buffered(transcribe_buffered(context, ogg).await), "OpenRouter"),
     };
-    tracing::info!("transcribed by {provider} {} ms after the end of speech: '{text}'", ended_at.elapsed().as_millis());
-    text
+    tracing::info!(
+        "transcribed by {provider} {} ms after the end of the utterance: '{}'",
+        ended_at.elapsed().as_millis(),
+        transcript.text
+    );
+    transcript
 }
 
 /// Transcribes the whole buffered utterance with OpenRouter; failures count as "nothing heard"

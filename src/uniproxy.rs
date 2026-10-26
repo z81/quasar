@@ -3,10 +3,13 @@
 //!
 //! A connection is a receive loop plus a writer task that owns the socket sink
 //! (see `outbox`). The loop only dispatches: requests are answered in spawned
-//! tasks (VoiceInput -> audio -> StreamControl close -> transcription -> agent
-//! -> AliceResponse + streamed TTS), so the station's cancels, pings and new
-//! requests are read while an answer is being prepared. A new VoiceInput or a
-//! CANCEL aborts the dialog turns in flight, as TS interrupts its dialog.
+//! tasks (VoiceInput -> audio -> the end of the utterance -> transcription ->
+//! agent -> AliceResponse + streamed TTS), so the station's cancels, pings and
+//! new requests are read while an answer is being prepared. The utterance ends
+//! with the station's StreamControl Close or, with gigastt and
+//! STT_END_OF_SPEECH=server, as soon as gigastt hears the user stop speaking
+//! (see `handle_endpoint`). A new VoiceInput or a CANCEL aborts the dialog
+//! turns in flight, as TS interrupts its dialog.
 //! Slow or multi-part answers go out through the TS "continue" handshake (see
 //! `dialog`), music through the music manager.
 
@@ -31,7 +34,7 @@ use crate::agent::{Agent, Functions, ResponseCache};
 use crate::config::Config;
 use crate::connections::{ConnectionRegistry, StationCommand};
 use crate::directives::{self, WrappedDirective};
-use crate::gigastt::{Gigastt, Recognition};
+use crate::gigastt::{Endpoint, Gigastt, Recognition};
 use crate::music::MusicManager;
 use crate::openrouter::OpenRouter;
 use crate::prompt::PromptGenerator;
@@ -60,6 +63,9 @@ pub struct UniproxyContext {
 /// spoken request in OGG/Opus; audio beyond it is dropped
 const MAX_UTTERANCE_BYTES: usize = 8 * 1024 * 1024;
 
+/// What the station listens for; its voice stream starts with them
+const WAKE_WORDS: [&str; 2] = ["алиса", "яндекс"];
+
 pub async fn handle_socket(
     socket: WebSocket,
     context: Arc<UniproxyContext>,
@@ -87,6 +93,7 @@ pub async fn handle_socket(
                     break;
                 }
             },
+            endpoint = next_endpoint(&mut connection.voice_input) => connection.handle_endpoint(endpoint),
             Some(finished) = connection.tasks.join_next(), if !connection.tasks.is_empty() => {
                 if let Err(error) = finished {
                     if error.is_panic() {
@@ -106,9 +113,20 @@ pub async fn handle_socket(
     connection.tasks.abort_all();
 }
 
-/// A VoiceInput being recorded: the audio of its stream until StreamControl Close
+/// The next end of utterance gigastt reports for the voice input being recorded
+async fn next_endpoint(voice_input: &mut Option<VoiceInput>) -> Endpoint {
+    if let Some(recognition) = voice_input.as_mut().and_then(|input| input.recognition.as_mut()) {
+        if let Some(endpoint) = recognition.next_endpoint().await {
+            return endpoint;
+        }
+    }
+    std::future::pending().await
+}
+
+/// A VoiceInput being recorded: the audio of its stream until the end of the utterance
 struct VoiceInput {
     stream_id: i64,
+    started_at: Instant,
     target: ResponseTarget,
     agent: Arc<Agent>,
     device_state: Option<Vec<u8>>,
@@ -118,6 +136,16 @@ struct VoiceInput {
     truncated: bool,
     /// gigastt recognizing while the station records
     recognition: Option<Recognition>,
+}
+
+/// The stream of an utterance gigastt ended while the station was recording.
+/// TS forgets such a stream: its later audio is dropped, its Close or CANCEL
+/// changes nothing
+struct EndedStream {
+    stream_id: i64,
+    ended_at: Instant,
+    /// audio that still came after the end
+    late_audio_bytes: usize,
 }
 
 impl VoiceInput {
@@ -151,6 +179,8 @@ struct Connection {
     turns: Vec<AbortHandle>,
     /// The voice stream whose turn is in flight, for a CANCEL after its Close
     answering_stream: Option<(i64, AbortHandle)>,
+    /// The latest stream that ended with gigastt's end of utterance
+    ended_stream: Option<EndedStream>,
     /// To report audio of an unexpected stream once rather than per frame
     unknown_audio_stream: Option<i64>,
 }
@@ -167,6 +197,7 @@ impl Connection {
             tasks: JoinSet::new(),
             turns: Vec::new(),
             answering_stream: None,
+            ended_stream: None,
             unknown_audio_stream: None,
         }
     }
@@ -231,6 +262,7 @@ impl Connection {
         self.biometry = BiometrySlot::default();
         self.voice_input = Some(VoiceInput {
             stream_id,
+            started_at: Instant::now(),
             target: ResponseTarget {
                 dialog_id,
                 request_id: request_header.request_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
@@ -255,9 +287,30 @@ impl Connection {
             return;
         };
         let stream_id = control.stream_id;
+        let cancel = close.reason == EReason::Cancel as i32;
+        let recording = self.voice_input.as_ref().is_some_and(|input| input.stream_id == stream_id);
 
-        if close.reason == EReason::Cancel as i32 {
-            let recording = self.voice_input.as_ref().is_some_and(|input| input.stream_id == stream_id);
+        // after gigastt's end of utterance the stream is over for TS, which
+        // ignores its Close and CANCEL: no second turn, the answer goes on
+        if !recording {
+            if let Some(ended) = self.ended_stream.take_if(|ended| ended.stream_id == stream_id) {
+                let after = ended.ended_at.elapsed().as_millis();
+                if cancel {
+                    tracing::info!(
+                        "voice input stream {stream_id} cancelled by the station {after} ms after its end of utterance: ignored"
+                    );
+                } else {
+                    tracing::info!(
+                        "voice input stream {stream_id} closed by the station {after} ms after its end of utterance \
+                         ({} bytes of audio after it dropped)",
+                        ended.late_audio_bytes
+                    );
+                }
+                return;
+            }
+        }
+
+        if cancel {
             let answering =
                 self.answering_stream.as_ref().is_some_and(|(id, task)| *id == stream_id && !task.is_finished());
             if recording || answering {
@@ -270,17 +323,62 @@ impl Connection {
         }
 
         if let Some(input) = self.voice_input.take_if(|input| input.stream_id == stream_id) {
-            tracing::info!("voice input stream {stream_id} finished: {} bytes", input.ogg.len());
+            tracing::info!(
+                "voice input stream {stream_id} finished by the station after {:.2} s: {} bytes",
+                input.started_at.elapsed().as_secs_f64(),
+                input.ogg.len()
+            );
             let request = self.request(input.target, input.device_state);
             let utterance = Utterance {
                 ogg: input.ogg,
                 biometry: input.biometry,
                 recognition: input.recognition,
                 ended_at: Instant::now(),
+                endpoint: None,
             };
             let task = self.spawn_turn(request.answer_voice(input.agent, utterance));
             self.answering_stream = Some((stream_id, task));
         }
+    }
+
+    /// gigastt heard the user stop speaking. Unless nothing or only the wake
+    /// word was said so far, that ends the utterance, as TS ends it at its
+    /// STT's end of utterance: the station gets the AsrResult with the text at
+    /// once (and stops recording), the turn starts without waiting for its Close
+    fn handle_endpoint(&mut self, endpoint: Endpoint) {
+        let Some(input) = self.voice_input.as_ref() else {
+            return;
+        };
+        let stream_id = input.stream_id;
+        let timing = format!("{}, stream open {:.2} s", endpoint.timing(), input.started_at.elapsed().as_secs_f64());
+        if let Some(reason) = premature(&endpoint) {
+            tracing::info!(
+                "voice input stream {stream_id}: gigastt's end of utterance ({}) not taken, {reason} '{}' ({timing})",
+                endpoint.reason,
+                endpoint.text
+            );
+            return;
+        }
+        let Some(input) = self.voice_input.take() else {
+            return;
+        };
+        tracing::info!(
+            "voice input stream {stream_id}: end of utterance by gigastt ({}, {timing}): '{}'",
+            endpoint.reason,
+            endpoint.text
+        );
+        report(self.outbox.asr_result(&endpoint.text, &input.target.reference_message_id));
+        self.ended_stream = Some(EndedStream { stream_id, ended_at: Instant::now(), late_audio_bytes: 0 });
+        let request = self.request(input.target, input.device_state);
+        let utterance = Utterance {
+            ogg: input.ogg,
+            biometry: input.biometry,
+            recognition: input.recognition,
+            ended_at: Instant::now(),
+            endpoint: Some(endpoint),
+        };
+        // not the answering stream: a later CANCEL of this stream is ignored
+        self.spawn_turn(request.answer_voice(input.agent, utterance));
     }
 
     fn handle_audio(&mut self, frame: &[u8]) {
@@ -290,11 +388,15 @@ impl Connection {
         let stream_id = i64::from(u32::from_be_bytes(*stream_id));
         match self.voice_input.as_mut() {
             Some(input) if input.stream_id == stream_id => input.push_audio(audio),
-            _ if self.unknown_audio_stream != Some(stream_id) => {
-                self.unknown_audio_stream = Some(stream_id);
-                tracing::debug!("dropping audio of stream {stream_id}: no voice input on it");
-            }
-            _ => {}
+            _ => match self.ended_stream.as_mut() {
+                // the station records on until it handles the end of utterance
+                Some(ended) if ended.stream_id == stream_id => ended.late_audio_bytes += audio.len(),
+                _ if self.unknown_audio_stream != Some(stream_id) => {
+                    self.unknown_audio_stream = Some(stream_id);
+                    tracing::debug!("dropping audio of stream {stream_id}: no voice input on it");
+                }
+                _ => {}
+            },
         }
     }
 
@@ -374,6 +476,7 @@ impl Connection {
             device_id: self.device_id.clone(),
             target,
             device_state,
+            speech_end: None,
         }
     }
 
@@ -396,6 +499,23 @@ impl Connection {
             }
         }
         interrupted
+    }
+}
+
+/// Why gigastt's end of utterance is not the end of the request: the user
+/// spoke on after the pause it was found at, has said nothing yet, or only
+/// the wake word (people pause after «Алиса,» before the command)
+fn premature(endpoint: &Endpoint) -> Option<&'static str> {
+    let mut words =
+        endpoint.text.split(|character: char| !character.is_alphanumeric()).filter(|word| !word.is_empty()).peekable();
+    if endpoint.spoken_past() {
+        Some("the speech went on after its pause")
+    } else if words.peek().is_none() {
+        Some("nothing recognized yet")
+    } else if words.all(|word| WAKE_WORDS.contains(&word.to_lowercase().as_str())) {
+        Some("only the wake word")
+    } else {
+        None
     }
 }
 

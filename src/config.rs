@@ -12,6 +12,16 @@ pub enum SttProvider {
     GigaAm,
 }
 
+/// Who decides that the user stopped speaking
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EndOfSpeech {
+    /// gigastt's endpointing ends the utterance (STT_PROVIDER=gigaam); the
+    /// station's own Close stays the backstop
+    Server,
+    /// the station's StreamControl Close (a 5 s timeout on the Station Midi)
+    Station,
+}
+
 #[derive(Clone)]
 pub struct Config {
     pub allow_updates: bool,
@@ -28,6 +38,10 @@ pub struct Config {
     pub stt_provider: SttProvider,
     /// the gigastt server's HTTP address (STT_PROVIDER=gigaam), e.g. http://gigastt:9876
     pub gigastt_url: Option<String>,
+    pub end_of_speech: EndOfSpeech,
+    /// the trailing silence after which gigastt's VAD ends an utterance
+    /// (its per-session min_silence_ms; a gigastt without --vad ignores it)
+    pub gigastt_min_silence_ms: u32,
     pub tts_model: String,
     pub tts_voice: String,
     pub tts_instructions: Option<String>,
@@ -52,8 +66,27 @@ fn opt_var(name: &str) -> Option<String> {
     env::var(name).ok().filter(|value| !value.is_empty())
 }
 
+/// STT_END_OF_SPEECH: `server` by default with gigastt, which alone can tell
+/// the end of speech while the station records
+fn end_of_speech(stt_provider: SttProvider) -> EndOfSpeech {
+    match (opt_var("STT_END_OF_SPEECH").map(|value| value.trim().to_ascii_lowercase()).as_deref(), stt_provider) {
+        (None | Some("server"), SttProvider::GigaAm) => EndOfSpeech::Server,
+        (None | Some("station"), _) => EndOfSpeech::Station,
+        (Some("server"), SttProvider::OpenRouter) => {
+            tracing::warn!("STT_END_OF_SPEECH=server needs STT_PROVIDER=gigaam: the station ends utterances");
+            EndOfSpeech::Station
+        }
+        (Some(other), _) => panic!("STT_END_OF_SPEECH must be server or station, not '{other}'"),
+    }
+}
+
 impl Config {
     pub fn from_env() -> Self {
+        let stt_provider = match var_or("STT_PROVIDER", "openrouter").trim().to_ascii_lowercase().as_str() {
+            "openrouter" => SttProvider::OpenRouter,
+            "gigaam" => SttProvider::GigaAm,
+            other => panic!("STT_PROVIDER must be openrouter or gigaam, not '{other}'"),
+        };
         Self {
             allow_updates: var_or("ALLOW_UPDATES", "false").trim().eq_ignore_ascii_case("true"),
             port: var_or("PORT", "31115").parse().expect("PORT must be a number"),
@@ -75,12 +108,13 @@ impl Config {
                 Ok(value) => Some(value),
                 Err(_) => Some("ru".to_string()),
             },
-            stt_provider: match var_or("STT_PROVIDER", "openrouter").trim().to_ascii_lowercase().as_str() {
-                "openrouter" => SttProvider::OpenRouter,
-                "gigaam" => SttProvider::GigaAm,
-                other => panic!("STT_PROVIDER must be openrouter or gigaam, not '{other}'"),
-            },
+            stt_provider,
             gigastt_url: opt_var("GIGASTT_URL"),
+            end_of_speech: end_of_speech(stt_provider),
+            gigastt_min_silence_ms: match var_or("GIGASTT_MIN_SILENCE_MS", "800").trim().parse() {
+                Ok(0) | Err(_) => panic!("GIGASTT_MIN_SILENCE_MS must be a positive number of milliseconds"),
+                Ok(milliseconds) => milliseconds,
+            },
             tts_model: var_or("OPENROUTER_TTS_MODEL", "google/gemini-3.8-flash-lite-tts"),
             tts_voice: var_or("OPENROUTER_TTS_VOICE", "Kore"),
             tts_instructions: opt_var("OPENROUTER_TTS_INSTRUCTIONS"),

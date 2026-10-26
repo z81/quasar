@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
@@ -30,15 +30,44 @@ const SPEECH_LIFETIME: Duration = Duration::from_secs(120);
 /// The PCM of one chunk as it arrives
 type Pcm = mpsc::UnboundedReceiver<Result<Bytes>>;
 
+/// When the voice request being answered ended: the answer's first audio
+/// frame logs its latency from there
+#[derive(Clone, Copy)]
+pub struct SpeechEnd {
+    /// the end of the last recognized word (gigastt's word times), if known
+    pub speech: Option<Instant>,
+    /// the end of the utterance: gigastt's end of utterance or the station's Close
+    pub utterance: Instant,
+}
+
+impl SpeechEnd {
+    fn log_first_audio(self) {
+        let utterance = self.utterance.elapsed().as_millis();
+        match self.speech {
+            Some(speech) => tracing::info!(
+                "first answer audio sent {} ms after the end of speech ({utterance} ms after the end of the utterance)",
+                speech.elapsed().as_millis()
+            ),
+            None => tracing::info!("first answer audio sent {utterance} ms after the end of the utterance"),
+        }
+    }
+}
+
 /// Speaks a text known whole; empty text is not spoken at all
-pub async fn speak_text(context: &Arc<UniproxyContext>, outbox: &Outbox, text: &str, reference_message_id: &str) {
+pub async fn speak_text(
+    context: &Arc<UniproxyContext>,
+    outbox: &Outbox,
+    text: &str,
+    reference_message_id: &str,
+    speech_end: Option<SpeechEnd>,
+) {
     if text.is_empty() {
         return;
     }
     let (chunks, receiver) = mpsc::unbounded_channel();
     let _ = chunks.send(text.to_string());
     drop(chunks);
-    speak(context, outbox, receiver, reference_message_id).await;
+    speak(context, outbox, receiver, reference_message_id, speech_end).await;
 }
 
 /// Speaks the chunks of a part through one TTS stream, closed once the
@@ -48,8 +77,10 @@ pub async fn speak(
     outbox: &Outbox,
     chunks: mpsc::UnboundedReceiver<String>,
     reference_message_id: &str,
+    speech_end: Option<SpeechEnd>,
 ) {
-    match tokio::time::timeout(SPEECH_LIFETIME, stream_speech(context, outbox, chunks, reference_message_id)).await {
+    let speech = stream_speech(context, outbox, chunks, reference_message_id, speech_end);
+    match tokio::time::timeout(SPEECH_LIFETIME, speech).await {
         Ok(Ok(())) => {}
         Ok(Err(error)) => tracing::error!("TTS streaming failed: {error:#}"),
         Err(_) => tracing::error!("TTS streaming took longer than {SPEECH_LIFETIME:?}"),
@@ -61,6 +92,7 @@ async fn stream_speech(
     outbox: &Outbox,
     mut chunks: mpsc::UnboundedReceiver<String>,
     reference_message_id: &str,
+    mut speech_end: Option<SpeechEnd>,
 ) -> Result<()> {
     // dropping the guard closes the stream, dropping the encoder kills ffmpeg
     let stream = outbox.open_tts_stream(reference_message_id)?;
@@ -73,6 +105,9 @@ async fn stream_speech(
                 return Ok(());
             }
             stream.send_audio(&buffer[..read])?;
+            if let Some(speech_end) = speech_end.take() {
+                speech_end.log_first_audio();
+            }
         }
     };
     tokio::try_join!(feed(context, &mut chunks, input), drain)?;

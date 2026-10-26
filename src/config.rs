@@ -156,10 +156,11 @@ impl Config {
             processor_state_prompt_path: opt_var("PROCESSOR_PROMPT_STATE_TEMPLATE_PATH")
                 .or_else(|| opt_var("PROCESSOR_STATE_TEMPLATE_PATH"))
                 .unwrap_or_else(|| "prompt-state.handlebars".to_string()),
-            processor_cache_size: match var_or("PROCESSOR_CACHE_SIZE", "1000").parse() {
-                Ok(0) | Err(_) => panic!("PROCESSOR_CACHE_SIZE must be a positive number"),
-                Ok(size) => size,
-            },
+            // 0: no response cache at all
+            processor_cache_size: var_or("PROCESSOR_CACHE_SIZE", "1000")
+                .trim()
+                .parse()
+                .unwrap_or_else(|_| panic!("PROCESSOR_CACHE_SIZE must be a number of answers (0 turns the cache off)")),
             music_service_basic_url: opt_var("MUSIC_SERVICE_BASIC_URL"),
         }
     }

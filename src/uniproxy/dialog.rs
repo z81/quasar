@@ -9,7 +9,6 @@
 //! whose text still streams from the LLM goes out with its header; its text
 //! is spoken chunk by chunk as it arrives (see `speech`).
 
-use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -27,9 +26,10 @@ use crate::agent::{Agent, AgentOutput, AgentTurn, ERROR_RESPONSE_TEXT, FunctionE
 use crate::audio;
 use crate::directives::{self, WrappedDirective};
 use crate::gigastt::{Endpoint, Recognition, Transcript};
-use crate::prompt::system_state;
+use crate::prompt::{State, system_state};
 use crate::proto::n_alice::n_alice_api::TDirective;
 use crate::remote::RemoteServers;
+use crate::time_zone::Zone;
 
 /// How long the end of the utterance waits for gigastt's final transcript
 /// before OpenRouter transcribes the buffered audio instead
@@ -66,7 +66,12 @@ impl DialogSlot {
     /// The dialog of a new voice input: the current one if its last answer
     /// asked for more input and the station does not name another dialog,
     /// otherwise a new one (TS interrupts the old dialog)
-    pub fn for_voice_input(&self, context: &UniproxyContext, station_dialog_id: Option<&str>) -> (String, Arc<Agent>) {
+    pub fn for_voice_input(
+        &self,
+        context: &UniproxyContext,
+        station_dialog_id: Option<&str>,
+        zone: &Zone,
+    ) -> (String, Arc<Agent>) {
         let mut slot = self.lock();
         if let Some(dialog) = slot.as_mut() {
             let names_other = station_dialog_id.is_some_and(|id| !id.is_empty() && id != dialog.id);
@@ -75,13 +80,13 @@ impl DialogSlot {
                 return (dialog.id.clone(), dialog.agent.clone());
             }
         }
-        open(&mut slot, context)
+        open(&mut slot, context, zone)
     }
 
     /// The dialog of an external event: like TS, the event joins the current
     /// agent session, under a new dialog id unless the request names the
     /// current one
-    pub fn for_event(&self, context: &UniproxyContext, station_dialog_id: Option<&str>) -> (String, Arc<Agent>) {
+    pub fn for_event(&self, context: &UniproxyContext, station_dialog_id: Option<&str>, zone: &Zone) -> (String, Arc<Agent>) {
         let mut slot = self.lock();
         match slot.as_mut() {
             Some(dialog) => {
@@ -91,7 +96,7 @@ impl DialogSlot {
                 dialog.awaiting_input = false;
                 (dialog.id.clone(), dialog.agent.clone())
             }
-            None => open(&mut slot, context),
+            None => open(&mut slot, context, zone),
         }
     }
 
@@ -142,10 +147,10 @@ impl DialogSlot {
     }
 }
 
-fn open(slot: &mut Option<Dialog>, context: &UniproxyContext) -> (String, Arc<Agent>) {
+fn open(slot: &mut Option<Dialog>, context: &UniproxyContext, zone: &Zone) -> (String, Arc<Agent>) {
     let dialog = Dialog {
         id: Uuid::new_v4().to_string(),
-        agent: Arc::new(new_agent(context)),
+        agent: Arc::new(new_agent(context, zone)),
         awaiting_input: false,
         answers: None,
     };
@@ -155,12 +160,12 @@ fn open(slot: &mut Option<Dialog>, context: &UniproxyContext) -> (String, Arc<Ag
     opened
 }
 
-fn new_agent(context: &UniproxyContext) -> Agent {
+fn new_agent(context: &UniproxyContext, zone: &Zone) -> Agent {
     let system_prompt = context.prompt_generator.generate(&context.functions).unwrap_or_else(|error| {
         tracing::error!("failed to render the system prompt: {error:#}");
         String::new()
     });
-    let state_prompt = context.prompt_generator.generate_state(&system_state()).unwrap_or_else(|error| {
+    let state_prompt = context.prompt_generator.generate_state(&system_state(zone)).unwrap_or_else(|error| {
         tracing::error!("failed to render the state prompt: {error:#}");
         String::new()
     });
@@ -201,6 +206,8 @@ pub struct Request {
     /// A voice request: when the user stopped speaking, for the latency of
     /// the answer's first audio
     pub speech_end: Option<SpeechEnd>,
+    /// The station's time zone, for the time in the LLM's state
+    pub zone: Zone,
 }
 
 impl Request {
@@ -275,7 +282,7 @@ impl Request {
     ) {
         let metadata_json = metadata.to_json();
         let session_id = agent.session_id().to_string();
-        let state = dialog_state(&self.context, &session_id, metadata, &metadata_json).await;
+        let state = dialog_state(&self.context, &session_id, metadata, &metadata_json, &self.zone).await;
         let state_prompt = self.context.prompt_generator.generate_state(&state).unwrap_or_else(|error| {
             tracing::error!("failed to render the state prompt: {error:#}");
             String::new()
@@ -441,13 +448,14 @@ async fn dialog_state(
     session_id: &str,
     metadata: &InputMetadata,
     metadata_json: &Value,
-) -> BTreeMap<String, String> {
-    let mut state = system_state();
+    zone: &Zone,
+) -> State {
+    let mut state = system_state(zone);
     let (age, gender) = metadata.biometry.map_or(("unknown", "unknown"), |biometry| (biometry.age, biometry.gender));
-    state.insert("input_person_age".to_string(), age.to_string());
-    state.insert("input_person_gender".to_string(), gender.to_string());
-    for (key, (_description, value)) in context.remote.state(session_id, metadata_json).await {
-        state.entry(key).or_insert(value);
+    state.insert("input_person_age".to_string(), ("age of person who talked to you".to_string(), age.to_string()));
+    state.insert("input_person_gender".to_string(), ("gender of person who talked to you".to_string(), gender.to_string()));
+    for (key, entry) in context.remote.state(session_id, metadata_json).await {
+        state.entry(key).or_insert(entry);
     }
     state
 }

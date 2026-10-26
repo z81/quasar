@@ -7,6 +7,11 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 
 use crate::agent::{FunctionDefinition, FunctionKind, Functions};
+use crate::time_zone::Zone;
+
+/// The state shown to the LLM: name -> (what it is, its value), shown as
+/// `name (description): value` lines like TS
+pub type State = BTreeMap<String, (String, String)>;
 
 pub struct PromptGenerator {
     prompt_path: String,
@@ -48,12 +53,15 @@ impl PromptGenerator {
         Ok(unescaped_handlebars().render_template(&template, &data)?)
     }
 
-    pub fn generate_state(&self, state: &BTreeMap<String, String>) -> Result<String> {
+    pub fn generate_state(&self, state: &State) -> Result<String> {
         let template = std::fs::read_to_string(&self.state_prompt_path)
             .with_context(|| format!("reading {}", self.state_prompt_path))?;
         let state_text = state
             .iter()
-            .map(|(key, value)| format!("{key}: {value}"))
+            .map(|(key, (description, value))| match description.as_str() {
+                "" => format!("{key}: {value}"),
+                description => format!("{key} ({description}): {value}"),
+            })
             .collect::<Vec<_>>()
             .join("\n");
         let mut data = BTreeMap::new();
@@ -78,18 +86,20 @@ fn unescaped_handlebars() -> handlebars::Handlebars<'static> {
     handlebars
 }
 
-/// The state shown to the LLM every turn (mirrors the system state server)
-pub fn system_state() -> BTreeMap<String, String> {
-    let mut state = BTreeMap::new();
-    state.insert("assistant_name".to_string(), "Алиса".to_string());
-    let now = chrono_like_now();
-    state.insert("date_time".to_string(), now);
+/// The state shown to the LLM every turn (mirrors the TS system state
+/// server); the time is the station's local time in `zone` — the LLM answers
+/// "который час" from it
+pub fn system_state(zone: &Zone) -> State {
+    let mut state = State::new();
+    state.insert("assistant_name".to_string(), ("name of assistant (YOU)".to_string(), "Алиса".to_string()));
+    state.insert(
+        "date_time".to_string(),
+        (
+            "current date and time where the user is, in DD-MM-YYYY HH:MM:SS format, then the weekday, the time zone and its UTC offset".to_string(),
+            zone.now(),
+        ),
+    );
     state
-}
-
-/// Local time (honours TZ, e.g. Europe/Moscow) — the LLM answers "который час" from it
-fn chrono_like_now() -> String {
-    chrono::Local::now().format("%d-%m-%Y %H:%M:%S").to_string()
 }
 
 

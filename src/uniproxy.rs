@@ -38,6 +38,7 @@ use crate::gigastt::{Endpoint, Gigastt, Recognition};
 use crate::music::MusicManager;
 use crate::openrouter::OpenRouter;
 use crate::prompt::PromptGenerator;
+use crate::time_zone::Zone;
 use crate::proto::n_alice::TAliceRequestProto;
 use crate::proto::n_alice::n_alice_api::t_client_message::{self, t_event::Event as ClientEvent};
 use crate::proto::n_alice::n_alice_api::t_stream_control::{self, t_action_close::EReason};
@@ -128,6 +129,8 @@ struct VoiceInput {
     stream_id: i64,
     started_at: Instant,
     target: ResponseTarget,
+    /// the station's time zone when the request came
+    zone: Zone,
     agent: Arc<Agent>,
     device_state: Option<Vec<u8>>,
     biometry: BiometrySlot,
@@ -183,6 +186,8 @@ struct Connection {
     ended_stream: Option<EndedStream>,
     /// To report audio of an unexpected stream once rather than per frame
     unknown_audio_stream: Option<i64>,
+    /// The time zone the station named last (`Application.Timezone`)
+    station_zone: Option<String>,
 }
 
 impl Connection {
@@ -199,6 +204,7 @@ impl Connection {
             answering_stream: None,
             ended_stream: None,
             unknown_audio_stream: None,
+            station_zone: None,
         }
     }
 
@@ -255,7 +261,8 @@ impl Connection {
             tracing::info!("the dialog turn in flight was interrupted by a new voice input");
         }
         let request_header = request.header.take().unwrap_or_default();
-        let (dialog_id, agent) = self.dialog.for_voice_input(&self.context, request_header.dialog_id.as_deref());
+        let zone = self.zone_for(&request);
+        let (dialog_id, agent) = self.dialog.for_voice_input(&self.context, request_header.dialog_id.as_deref(), &zone);
         let stream_id = header.stream_id.unwrap_or(-1);
         tracing::info!("voice input stream {stream_id} started (dialog {dialog_id})");
 
@@ -271,6 +278,7 @@ impl Connection {
                 // not to later events like MatchedUser or LogSpotter
                 reference_message_id: header.message_id,
             },
+            zone,
             agent,
             device_state: metadata::take_device_state(&mut request),
             biometry: self.biometry.clone(),
@@ -328,7 +336,7 @@ impl Connection {
                 input.started_at.elapsed().as_secs_f64(),
                 input.ogg.len()
             );
-            let request = self.request(input.target, input.device_state);
+            let request = self.request(input.target, input.device_state, input.zone);
             let utterance = Utterance {
                 ogg: input.ogg,
                 biometry: input.biometry,
@@ -369,7 +377,7 @@ impl Connection {
         );
         report(self.outbox.asr_result(&endpoint.text, &input.target.reference_message_id));
         self.ended_stream = Some(EndedStream { stream_id, ended_at: Instant::now(), late_audio_bytes: 0 });
-        let request = self.request(input.target, input.device_state);
+        let request = self.request(input.target, input.device_state, input.zone);
         let utterance = Utterance {
             ogg: input.ogg,
             biometry: input.biometry,
@@ -410,6 +418,7 @@ impl Connection {
     fn handle_text_input(&mut self, header: TEventHeader, mut request: TAliceRequestProto) {
         let request_header = request.header.take().unwrap_or_default();
         let station_dialog_id = request_header.dialog_id.as_deref();
+        let zone = self.zone_for(&request);
         let kind = text_input::classify(&request);
         let device_state = metadata::take_device_state(&mut request);
         let target = |dialog_id: String| ResponseTarget {
@@ -422,12 +431,12 @@ impl Connection {
         match kind {
             TextInputKind::ExternalEvent(event) => {
                 tracing::info!("external event: '{event}'");
-                let (dialog_id, agent) = self.dialog.for_event(&self.context, station_dialog_id);
-                let request = self.request(target(dialog_id), device_state);
+                let (dialog_id, agent) = self.dialog.for_event(&self.context, station_dialog_id, &zone);
+                let request = self.request(target(dialog_id), device_state, zone);
                 self.spawn_turn(request.answer_event(agent, event));
             }
             TextInputKind::Tts(text) => {
-                let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), device_state);
+                let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), device_state, zone);
                 self.tasks.spawn(request.answer_tts(text));
             }
             TextInputKind::ContinueStage1 { dialog_id } => {
@@ -439,11 +448,11 @@ impl Connection {
             }
             TextInputKind::ContinueStage2 { dialog_id } => {
                 // the next part of that dialog's answer; a part of an older dialog is never delivered
-                let request = self.request(target(self.dialog.response_dialog_id(dialog_id.as_deref())), device_state);
+                let request = self.request(target(self.dialog.response_dialog_id(dialog_id.as_deref())), device_state, zone);
                 self.spawn_turn(request.answer_continue());
             }
             TextInputKind::Text(text) => {
-                let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), device_state);
+                let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), device_state, zone);
                 match directives::text_command(&text) {
                     Some(command) => {
                         self.tasks.spawn(request.answer_directives(vec![command]));
@@ -456,7 +465,7 @@ impl Connection {
             }
             TextInputKind::Music(action) => {
                 tracing::info!("music request: {action:?}");
-                let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), device_state);
+                let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), device_state, zone);
                 let music = WrappedDirective { station: None, music: Some(action) };
                 self.tasks.spawn(request.answer_directives(vec![music]));
             }
@@ -468,7 +477,7 @@ impl Connection {
         }
     }
 
-    fn request(&self, target: ResponseTarget, device_state: Option<Vec<u8>>) -> Request {
+    fn request(&self, target: ResponseTarget, device_state: Option<Vec<u8>>, zone: Zone) -> Request {
         Request {
             context: self.context.clone(),
             outbox: self.outbox.clone(),
@@ -477,7 +486,21 @@ impl Connection {
             target,
             device_state,
             speech_end: None,
+            zone,
         }
+    }
+
+    /// The time zone a request is answered in: the one it names, else the
+    /// station's last known one (pushes and events may carry none)
+    fn zone_for(&mut self, request: &TAliceRequestProto) -> Zone {
+        let named = request.application.as_ref().and_then(|application| application.timezone.as_deref());
+        if let Some(name) = named.filter(|name| self.station_zone.as_deref() != Some(*name)) {
+            match self.station_zone.replace(name.to_string()) {
+                None => tracing::info!("station time zone: '{name}'"),
+                Some(previous) => tracing::info!("station time zone changed from '{previous}' to '{name}'"),
+            }
+        }
+        Zone::of_station(self.station_zone.as_deref())
     }
 
     fn spawn_turn(&mut self, turn: impl Future<Output = ()> + Send + 'static) -> AbortHandle {
@@ -502,14 +525,16 @@ impl Connection {
     }
 }
 
-/// Why gigastt's end of utterance is not the end of the request: the user
-/// spoke on after the pause it was found at, has said nothing yet, or only
-/// the wake word (people pause after «Алиса,» before the command)
+/// Why gigastt's end of utterance is not the end of the request: it came
+/// too soon after the latest word (the user may have spoken on after the
+/// pause it was found at: gigastt takes it after all if silence follows, see
+/// `gigastt::DeferredEnd`), the user has said nothing yet, or only the wake
+/// word (people pause after «Алиса,» before the command)
 fn premature(endpoint: &Endpoint) -> Option<&'static str> {
     let mut words =
         endpoint.text.split(|character: char| !character.is_alphanumeric()).filter(|word| !word.is_empty()).peekable();
     if endpoint.spoken_past() {
-        Some("the speech went on after its pause")
+        Some("too little silence after its latest word yet")
     } else if words.peek().is_none() {
         Some("nothing recognized yet")
     } else if words.all(|word| WAKE_WORDS.contains(&word.to_lowercase().as_str())) {

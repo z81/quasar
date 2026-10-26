@@ -16,6 +16,7 @@ async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono-tz = "0.10"
 dotenvy = "0.15"
 futures-util = "0.3"
 handlebars = "6"

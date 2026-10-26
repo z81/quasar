@@ -35,6 +35,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::MissedTickBehavior;
 use tokio_tungstenite::tungstenite::{self, Message};
 
 use crate::audio::Transcoder;
@@ -58,6 +59,22 @@ const CLOSE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// The blank run after which gigastt's decoder (no VAD) ends an utterance
 const BLANK_RUN: Duration = Duration::from_millis(600);
+
+/// gigastt 2.18.0 decodes after every 0.8 s of new audio (its
+/// STREAM_DECODE_STRIDE_SAMPLES): words spoken after a decode show up, in a
+/// partial, only with the next one
+const DECODE_STRIDE: Duration = Duration::from_millis(800);
+
+/// The time gigastt may take to decode a stride and report it (~0.2 s
+/// measured on 2.18.0; slower under load)
+const DECODE_REPORT: Duration = Duration::from_millis(500);
+
+/// How often a deferred end of utterance looks at the audio streamed
+const DEFERRED_CHECK: Duration = Duration::from_millis(50);
+
+/// The reason of an end of utterance taken after a blank-run end that came
+/// too soon after the latest word, once enough silence followed it
+pub const DEFERRED_REASON: &str = "blank, then silence";
 
 type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -367,13 +384,37 @@ async fn stream_session(
     };
     let receive = async {
         let mut finals = Finals::default();
-        while let Some(message) = stream.next().await {
+        let mut deferred: Option<DeferredEnd> = None;
+        let mut check = tokio::time::interval(DEFERRED_CHECK);
+        check.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let reporting = || endpoints.filter(|_| !stopped.load(Ordering::Relaxed));
+        loop {
+            let message = tokio::select! {
+                message = stream.next() => message,
+                _ = check.tick(), if deferred.is_some() => {
+                    let clock = *clock.lock().unwrap_or_else(PoisonError::into_inner);
+                    if deferred.as_mut().is_some_and(|end| end.due(&clock)) {
+                        deferred = None;
+                        if let Some(endpoints) = reporting() {
+                            let _ = endpoints.send(finals.endpoint(DEFERRED_REASON, &clock));
+                        }
+                    }
+                    continue;
+                }
+            };
+            let Some(message) = message else {
+                break;
+            };
             let text = match message.context("connection failed")? {
                 Message::Text(text) => text,
                 Message::Close(frame) => bail!("closed early: {frame:?}"),
                 _ => continue,
             };
             let message: Value = serde_json::from_str(text.as_str()).context("invalid message")?;
+            if deferred.as_ref().is_some_and(|end| end.called_off_by(&message)) {
+                tracing::info!("gigastt: the speech went on after the pause ({}): no end of utterance there", message["text"]);
+                deferred = None;
+            }
             match message["type"].as_str() {
                 Some("partial") => tracing::debug!("gigastt partial: {}", message["text"]),
                 Some("final") => {
@@ -383,8 +424,11 @@ async fn stream_session(
                         Some("stop") => return Ok(finals.transcript()),
                         // an automatic end of utterance, while the audio still flows
                         reason => {
-                            if let Some(endpoints) = endpoints.filter(|_| !stopped.load(Ordering::Relaxed)) {
-                                let _ = endpoints.send(finals.endpoint(reason.unwrap_or("unnamed"), &clock));
+                            let endpoint = finals.endpoint(reason.unwrap_or("unnamed"), &clock);
+                            // too soon after the latest word: the real end may still come
+                            deferred = DeferredEnd::after(&endpoint).or(deferred);
+                            if let Some(endpoints) = reporting() {
+                                let _ = endpoints.send(endpoint);
                             }
                         }
                     }
@@ -402,6 +446,49 @@ async fn stream_session(
     };
     let ((), transcript) = tokio::try_join!(send, receive)?;
     Ok(transcript)
+}
+
+/// An end of utterance gigastt found too soon after the latest word
+/// (`Endpoint::spoken_past`): without a VAD it may come from an earlier
+/// pause while the user still speaks, but for the same reason gigastt finds
+/// no further end once the user is done. So it is taken after all once the
+/// latest word is followed by a blank run of silence and gigastt, decoding a
+/// stride later, has reported no newer words in it; newer words call it off
+struct DeferredEnd {
+    /// the end of the latest word, in the stream
+    speech_end: Duration,
+    /// the audio after which gigastt has had to decode that silence
+    due_audio: Duration,
+    /// once the audio is streamed: when gigastt's report of it is in
+    due_at: Option<Instant>,
+}
+
+impl DeferredEnd {
+    fn after(endpoint: &Endpoint) -> Option<Self> {
+        let (_, speech_end) = endpoint.speech.filter(|_| endpoint.spoken_past())?;
+        let due_audio = (speech_end + BLANK_RUN).max(endpoint.audio + DECODE_STRIDE);
+        Some(Self { speech_end, due_audio, due_at: None })
+    }
+
+    fn due(&mut self, clock: &PcmClock) -> bool {
+        if clock.audio() < self.due_audio {
+            return false;
+        }
+        Instant::now() >= *self.due_at.get_or_insert_with(|| Instant::now() + DECODE_REPORT)
+    }
+
+    /// A partial or final with words after the latest one: the user spoke on
+    fn called_off_by(&self, message: &Value) -> bool {
+        if !matches!(message["type"].as_str(), Some("partial" | "final")) {
+            return false;
+        }
+        match message["words"].as_array().filter(|words| !words.is_empty()) {
+            Some(words) => words.iter().any(|word| {
+                word["end"].as_f64().is_some_and(|end| end > self.speech_end.as_secs_f64() + 0.01)
+            }),
+            None => message["text"].as_str().is_some_and(|text| text.chars().any(char::is_alphanumeric)),
+        }
+    }
 }
 
 /// How much PCM went to gigastt, and when its latest frame did

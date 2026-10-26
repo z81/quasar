@@ -18,6 +18,7 @@ mod remote;
 mod station_config;
 mod stations;
 mod storage;
+mod time_zone;
 mod uniproxy;
 mod updates;
 

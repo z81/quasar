@@ -44,13 +44,21 @@ pub struct FunctionDefinition {
 
 pub type Functions = Arc<std::collections::HashMap<String, FunctionDefinition>>;
 
-/// Answers to first requests of a dialog, shared by all dialogs (as in TS)
-pub type ResponseCache = Arc<Mutex<LruCache<String, String>>>;
+/// Answers to first requests of a dialog, shared by all dialogs (as in TS);
+/// None: PROCESSOR_CACHE_SIZE=0, nothing is looked up or stored
+pub type ResponseCache = Option<Arc<Mutex<LruCache<String, String>>>>;
 
 pub fn new_response_cache(size: usize) -> ResponseCache {
-    Arc::new(Mutex::new(LruCache::new(
-        std::num::NonZeroUsize::new(size).expect("cache size must be positive"),
-    )))
+    match std::num::NonZeroUsize::new(size) {
+        Some(size) => {
+            tracing::info!("response cache: the answers to up to {size} first requests (PROCESSOR_CACHE_SIZE)");
+            Some(Arc::new(Mutex::new(LruCache::new(size))))
+        }
+        None => {
+            tracing::info!("response cache off (PROCESSOR_CACHE_SIZE=0): every request goes to the LLM");
+            None
+        }
+    }
 }
 
 /// One spoken answer part with the directives collected along the way
@@ -168,10 +176,9 @@ impl Agent {
         };
 
         // only the first request of a dialog is context-free enough to reuse
-        let cached = if first_request {
-            self.cache.lock().await.get(&text).cloned()
-        } else {
-            None
+        let cached = match &self.cache {
+            Some(cache) if first_request => cache.lock().await.get(&text).cloned(),
+            _ => None,
         };
 
         for iteration in 0..MAX_AGENT_ITERATIONS {
@@ -380,8 +387,10 @@ impl Agent {
         fresh: bool,
     ) {
         let mut state = self.state.lock().await;
-        if !structured.require_more_input && structured.can_cache && state.first_request && finished && fresh {
-            self.cache.lock().await.put(request.to_string(), response.clone());
+        if let Some(cache) = &self.cache {
+            if !structured.require_more_input && structured.can_cache && state.first_request && finished && fresh {
+                cache.lock().await.put(request.to_string(), response.clone());
+            }
         }
         state.messages.push(ChatMessage::assistant(response));
         state.first_request = false;

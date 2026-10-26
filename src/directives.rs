@@ -1,5 +1,6 @@
 //! Translates the LLM's station functions into real station directives,
-//! mirroring routers/alice/base-provider.ts of the TypeScript version.
+//! mirroring routers/alice/base-provider.ts of the TypeScript version, plus
+//! the server_action semantic frames of routers/alice/{directives,typed-payloads}.ts.
 
 use serde_json::{Value, json};
 
@@ -65,6 +66,75 @@ pub fn tts_play_placeholder() -> TDirective {
     TDirective {
         analytics_type: "tts_play_placeholder".to_string(),
         ..client_action("tts_play_placeholder", json!({ "channel": "Dialog" }), true)
+    }
+}
+
+/// What a plain `text_input` command from the station maps to (TS `textToDirectiveMap`)
+pub enum TextCommand {
+    Directive(Box<TDirective>),
+    /// "продолжи" resumes music through the music manager, which is not ported
+    NeedsMusic,
+    Unknown,
+}
+
+pub fn text_command(text: &str) -> TextCommand {
+    let function = match text.trim().to_lowercase().as_str() {
+        "громче" => "smart_speaker_set_sound_volume_louder",
+        "тише" => "smart_speaker_set_sound_volume_quieter",
+        // TS also saves the playback position for its music manager here
+        "пауза" | "стоп" => "smart_speaker_player_pause",
+        "продолжи" => return TextCommand::NeedsMusic,
+        _ => return TextCommand::Unknown,
+    };
+    let call = DirectiveResult { name: function.to_string(), arguments: None };
+    to_station_directive(&call).map_or(TextCommand::Unknown, |directive| TextCommand::Directive(Box::new(directive)))
+}
+
+/// A server_action the station sends back as a TextInput with the same
+/// payload: the way to make the station start a request (TS `mmSemanticFrame`)
+pub fn mm_semantic_frame(payload: &Value) -> TDirective {
+    TDirective {
+        name: "@@mm_semantic_frame".to_string(),
+        r#type: "server_action".to_string(),
+        payload_type: Some(PayloadType::Payload(to_struct(payload))),
+        ..Default::default()
+    }
+}
+
+/// An event for the dialog agent (TS `externalEventSemanticFrame`)
+pub fn external_event_frame(event: &str) -> Value {
+    json!({ "typed_semantic_frame": { "external_event_semantic_frame": { "event": event } } })
+}
+
+/// Text to speak as is (TS `ttsSemanticFrame`)
+pub fn tts_frame(text: &str) -> Value {
+    json!({ "typed_semantic_frame": { "tts_semantic_frame": { "text": text } } })
+}
+
+/// The second step of the TS "continue the session" handshake
+pub fn continue_session_stage2_frame(dialog_id: Option<&str>) -> Value {
+    json!({ "typed_semantic_frame": { "continue_session_stage2_semantic_frame": { "dialog_id": dialog_id } } })
+}
+
+/// A protobuf Struct (TextInput payloads) as JSON (TS `decodeProtobufStruct`)
+pub fn struct_to_json(value: &pb::Struct) -> Value {
+    Value::Object(
+        value
+            .fields
+            .iter()
+            .map(|entry| (entry.key.clone(), entry.value.as_ref().map_or(Value::Null, from_value)))
+            .collect(),
+    )
+}
+
+fn from_value(value: &pb::Value) -> Value {
+    match &value.kind {
+        None | Some(Kind::NullValue(_)) => Value::Null,
+        Some(Kind::NumberValue(number)) => serde_json::Number::from_f64(*number).map_or(Value::Null, Value::Number),
+        Some(Kind::StringValue(text)) => Value::String(text.clone()),
+        Some(Kind::BoolValue(flag)) => Value::Bool(*flag),
+        Some(Kind::StructValue(inner)) => struct_to_json(inner),
+        Some(Kind::ListValue(list)) => Value::Array(list.values.iter().map(from_value).collect()),
     }
 }
 

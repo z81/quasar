@@ -44,8 +44,15 @@ impl RemoteServers {
         }
     }
 
-    /// Calls the server that owns the given function name
-    pub async fn call_by_name(&self, name: &str, arguments: &Option<Value>) -> anyhow::Result<()> {
+    /// Calls the server that owns the given function name; `session_id` and
+    /// `metadata` (device state, speaker biometry) describe the dialog, as in TS
+    pub async fn call_by_name(
+        &self,
+        name: &str,
+        arguments: &Option<Value>,
+        session_id: &str,
+        metadata: &Value,
+    ) -> anyhow::Result<()> {
         let owner = self
             .owners
             .read()
@@ -53,8 +60,9 @@ impl RemoteServers {
             .get(name)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no remote server owns function '{name}'"))?;
-        let arguments = arguments.clone().unwrap_or(Value::Null);
-        self.call_function(&owner, "uniproxy", name, &arguments).await
+        // like TS: a call without arguments sends an empty object, not null
+        let arguments = arguments.clone().filter(|arguments| !arguments.is_null()).unwrap_or_else(|| json!({}));
+        self.call_function(&owner, session_id, metadata, name, &arguments).await
     }
 
     /// Fetches all function catalogs concurrently, skipping failed servers
@@ -95,11 +103,18 @@ impl RemoteServers {
     }
 
     /// Calls a remote function (fire-and-forget in the protocol)
-    pub async fn call_function(&self, url: &str, session_id: &str, name: &str, arguments: &Value) -> anyhow::Result<()> {
+    pub async fn call_function(
+        &self,
+        url: &str,
+        session_id: &str,
+        metadata: &Value,
+        name: &str,
+        arguments: &Value,
+    ) -> anyhow::Result<()> {
         let response = self
             .client
             .patch(url)
-            .json(&json!({ "arguments": arguments, "name": name, "sessionId": session_id }))
+            .json(&json!({ "arguments": arguments, "metadata": metadata, "name": name, "sessionId": session_id }))
             .send()
             .await?;
         if !response.status().is_success() {
@@ -108,24 +123,30 @@ impl RemoteServers {
         Ok(())
     }
 
-    /// Collects state entries from all state servers
-    pub async fn state(&self, session_id: &str) -> HashMap<String, (String, String)> {
-        let mut state = HashMap::new();
-        for url in &self.state_urls {
+    /// Collects the per-turn state entries of all state servers (queried
+    /// concurrently; on duplicate keys the first server wins, as in TS)
+    pub async fn state(&self, session_id: &str, metadata: &Value) -> HashMap<String, (String, String)> {
+        let body = &json!({ "metadata": metadata, "sessionId": session_id });
+        let fetches = self.state_urls.iter().map(|url| async move {
             let fetch = async {
-                let response = self
-                    .client
-                    .post(url)
-                    .json(&json!({ "sessionId": session_id }))
-                    .send()
-                    .await?;
+                let response = self.client.post(url).json(body).send().await?;
                 let entries = response.json::<HashMap<String, StateEntry>>().await?;
                 Ok::<_, anyhow::Error>(entries)
             };
-            match fetch.await {
+            (url, fetch.await)
+        });
+
+        let mut state = HashMap::new();
+        for (url, result) in futures_util::future::join_all(fetches).await {
+            match result {
                 Ok(entries) => {
                     for (key, entry) in entries {
-                        state.insert(key, (entry.description, entry.value.to_string()));
+                        let value = match entry.value {
+                            // the protocol's values are strings; keep them unquoted
+                            Value::String(value) => value,
+                            value => value.to_string(),
+                        };
+                        state.entry(key).or_insert((entry.description, value));
                     }
                 }
                 Err(error) => tracing::warn!("state server {url} failed: {error}"),

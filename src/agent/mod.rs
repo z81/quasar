@@ -61,6 +61,11 @@ pub struct Agent {
     functions: Functions,
     cache: ResponseCache,
     state: Arc<Mutex<AgentState>>,
+    /// held for a whole turn: turns of one dialog run one after another, like
+    /// the turn queue of the TS session
+    turn: Mutex<()>,
+    /// identifies the dialog to remote function and state servers (TS: a UUID per session)
+    session_id: String,
 }
 
 struct AgentState {
@@ -89,7 +94,19 @@ impl Agent {
             ],
             first_request: true,
         }));
-        Self { openrouter, model, functions, cache, state }
+        Self {
+            openrouter,
+            model,
+            functions,
+            cache,
+            state,
+            turn: Mutex::new(()),
+            session_id: uuid::Uuid::new_v4().to_string(),
+        }
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session_id
     }
 
     /// Runs one dialog turn, streaming answer chunks: one per agent iteration
@@ -99,6 +116,7 @@ impl Agent {
         state_prompt: String,
         function_executor: impl Fn(FunctionCall) -> Result<()> + Send + Sync + 'static,
     ) -> Result<Vec<AgentOutput>> {
+        let _turn = self.turn.lock().await;
         let text = turn.text.trim().to_string();
 
         let first_request = {
@@ -142,10 +160,9 @@ impl Agent {
                                 tracing::warn!("LLM tried to schedule function with response: '{}'", call.name);
                                 continue;
                             }
+                            let result = Self::call_remote(call, &function_executor);
                             if *has_response {
-                                responses.push((call.name.clone(), self.call_remote(call, &function_executor).await));
-                            } else {
-                                self.call_remote(call, &function_executor).await;
+                                responses.push((call.name.clone(), result));
                             }
                         }
                     },
@@ -196,15 +213,9 @@ impl Agent {
         Ok(outputs)
     }
 
-    async fn call_remote(
-        &self,
-        call: &FunctionCall,
-        executor: &impl Fn(FunctionCall) -> Result<()>,
-    ) -> String {
-        if let Some(schedule_ms) = call.schedule_ms.filter(|milliseconds| *milliseconds > 0) {
-            tracing::info!("calling {} after {schedule_ms}ms", call.name);
-            tokio::time::sleep(Duration::from_millis(schedule_ms)).await;
-        }
+    /// The executor runs the call in the background, honouring `schedule_ms`
+    /// itself: a delayed call must not hold up the answer
+    fn call_remote(call: &FunctionCall, executor: &impl Fn(FunctionCall) -> Result<()>) -> String {
         match executor(call.clone()) {
             Ok(()) => "done".to_string(),
             Err(error) => format!("Error: {error}"),

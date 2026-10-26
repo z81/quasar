@@ -1,33 +1,42 @@
 //! uni.ws: the station's WebSocket dialog channel. Binary frames are either
 //! `AAPI` + protobuf TClientMessage or a 4-byte big-endian stream id + audio.
-//! The voice pipeline: VoiceInput event -> audio chunks -> StreamControl
-//! close -> OpenRouter transcription -> agent -> AliceResponse + streamed TTS.
+//!
+//! A connection is a receive loop plus a writer task that owns the socket sink
+//! (see `outbox`). The loop only dispatches: requests are answered in spawned
+//! tasks (VoiceInput -> audio -> StreamControl close -> transcription -> agent
+//! -> AliceResponse + streamed TTS), so the station's cancels, pings and new
+//! requests are read while an answer is being prepared. A new VoiceInput or a
+//! CANCEL aborts the dialog turns in flight, as TS interrupts its dialog.
 
+mod dialog;
+mod metadata;
+mod outbox;
+mod text_input;
+
+use std::future::Future;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use axum::extract::ws::{Message as WsMessage, WebSocket};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use prost::Message as _;
+use tokio::sync::mpsc;
+use tokio::task::{AbortHandle, JoinSet};
 use uuid::Uuid;
 
-use crate::agent::{Agent, AgentOutput, AgentTurn, Functions, ResponseCache};
-use crate::audio;
+use crate::agent::{Agent, Functions, ResponseCache};
 use crate::config::Config;
-use crate::directives;
+use crate::connections::{ConnectionRegistry, StationCommand};
+use crate::directives::{self, TextCommand};
 use crate::openrouter::OpenRouter;
-use crate::proto::n_alice::n_alice_api::t_client_message;
-use crate::proto::n_alice::n_alice_api::t_server_message;
+use crate::prompt::PromptGenerator;
+use crate::proto::n_alice::TAliceRequestProto;
+use crate::proto::n_alice::n_alice_api::t_client_message::{self, t_event::Event as ClientEvent};
 use crate::proto::n_alice::n_alice_api::t_stream_control::{self, t_action_close::EReason};
-use crate::proto::n_alice::n_alice_api::t_alice_response_proto::t_voice_response::TOutputSpeech;
-use crate::proto::n_alice::n_alice_api::t_alice_response_proto::{
-    THeader as ResponseHeader, TResponse as ResponseBody, TVoiceResponse,
-};
-use crate::proto::n_alice::n_alice_api::{
-    TAsrRecognition, TAsrResult, TAliceResponseProto, TClientMessage, TDirective, TEventHeader,
-    TServerMessage, TTtsSpeak,
-};
-use crate::prompt::{system_state, PromptGenerator};
+use crate::proto::n_alice::n_alice_api::{TClientMessage, TEventHeader, TStreamControl};
+use dialog::{DialogSlot, Turn, Utterance};
+use metadata::BiometrySlot;
+use outbox::{Outbox, ResponseTarget};
+use text_input::TextInputKind;
 
 pub struct UniproxyContext {
     pub config: Config,
@@ -38,526 +47,329 @@ pub struct UniproxyContext {
     pub cache: ResponseCache,
 }
 
-/// Spoken when the LLM or transcription fails, instead of leaving the station silent (as in TS)
-const ERROR_RESPONSE_TEXT: &str = "Извините, что-то пошло не так. Попробуйте спросить ещё раз.";
-
-/// What an AliceResponse answers to
-struct ResponseTarget<'a> {
-    dialog_id: &'a str,
-    request_id: &'a str,
-    sequence_number: u32,
-    reference_message_id: &'a str,
-}
-
-struct VoiceInputSession {
-    audio_chunks: Vec<Vec<u8>>,
-    dialog_id: String,
-    request_id: String,
-    sequence_number: u32,
-    stream_id: i64,
-}
+/// Guards memory against a voice stream that never ends: far more than any
+/// spoken request in OGG/Opus; audio beyond it is dropped
+const MAX_UTTERANCE_BYTES: usize = 8 * 1024 * 1024;
 
 pub async fn handle_socket(
     socket: WebSocket,
     context: Arc<UniproxyContext>,
     device_id: String,
-    registry: crate::connections::ConnectionRegistry,
+    registry: ConnectionRegistry,
 ) {
-    let (mut sender, mut receiver) = socket.split();
-    let mut voice_input: Option<VoiceInputSession> = None;
-    let mut reference_message_id = String::new();
-    let mut output_stream_id: i64 = 1024;
-    let mut agent: Option<Arc<Agent>> = None;
-    let (command_sender, mut command_receiver) =
-        tokio::sync::mpsc::unbounded_channel::<crate::connections::StationCommand>();
+    let (sink, mut receiver) = socket.split();
+    let (outbox, mut writer) = outbox::spawn_writer(sink);
+    let (command_sender, mut commands) = mpsc::unbounded_channel::<StationCommand>();
     let connection_id = registry.register(&device_id, command_sender);
+    let mut connection = Connection::new(context, outbox);
 
     loop {
-        let payload = tokio::select! {
-            command = command_receiver.recv() => {
-                match command {
-                    Some(crate::connections::StationCommand::Speak { text }) => {
-                        speak_text(&mut sender, &context, &text, &reference_message_id,
-                            &mut output_stream_id).await;
-                        continue;
+        tokio::select! {
+            command = commands.recv() => match command {
+                Some(command) => connection.handle_command(command),
+                None => break,
+            },
+            message = receiver.next() => match message {
+                Some(Ok(WsMessage::Binary(payload))) => connection.handle_frame(&payload),
+                Some(Ok(WsMessage::Close(_))) | None => break,
+                Some(Ok(_)) => {}
+                Some(Err(error)) => {
+                    tracing::warn!("uni.ws receive error: {error}");
+                    break;
+                }
+            },
+            Some(finished) = connection.tasks.join_next(), if !connection.tasks.is_empty() => {
+                if let Err(error) = finished {
+                    if error.is_panic() {
+                        tracing::error!("uni.ws task panicked: {error}");
                     }
-                    Some(crate::connections::StationCommand::Event { text }) => {
-                        let session_agent = ensure_agent(&context, &mut agent);
-                        if let Err(error) = process_event(&mut sender, &context, &session_agent, &text,
-                            &reference_message_id, &mut output_stream_id).await {
-                            tracing::error!("push event failed: {error:#}");
-                        }
-                        continue;
-                    }
-                    Some(crate::connections::StationCommand::Directives { directives }) => {
-                        tracing::warn!("pushing {} directive(s) is not implemented yet", directives.len());
-                        continue;
-                    }
-                    None => break,
                 }
             }
-            message = receiver.next() => {
-                let message = match message {
-                    Some(Ok(message)) => message,
-                    Some(Err(error)) => {
-                        tracing::warn!("uni.ws receive error: {error}");
-                        break;
-                    }
-                    None => break,
-                };
-                match message {
-                    WsMessage::Binary(payload) => payload,
-                    WsMessage::Close(_) => break,
-                    _ => continue,
-                }
-            }
-        };
-
-        if payload.starts_with(b"AAPI") {
-            let client_message = match TClientMessage::decode(&payload[4..]) {
-                Ok(client_message) => client_message,
-                Err(error) => {
-                    tracing::warn!("failed to decode TClientMessage: {error}");
-                    continue;
-                }
-            };
-            match client_message.message {
-                Some(t_client_message::Message::Event(event)) => {
-                    if let Some(header) = &event.header {
-                        reference_message_id = header.message_id.clone();
-                    }
-                    match event.event {
-                        Some(t_client_message::t_event::Event::VoiceInput(request)) => {
-                            let request_header =
-                                request.header.unwrap_or_default();
-                            let stream_id = event
-                                .header
-                                .as_ref()
-                                .and_then(|header| header.stream_id)
-                                .unwrap_or(-1);
-                            tracing::info!("voice input stream {stream_id} started");
-                            voice_input = Some(VoiceInputSession {
-                                audio_chunks: Vec::new(),
-                                dialog_id: request_header
-                                    .dialog_id
-                                    .unwrap_or_else(|| Uuid::new_v4().to_string()),
-                                request_id: request_header
-                                    .request_id
-                                    .unwrap_or_else(|| Uuid::new_v4().to_string()),
-                                sequence_number: request_header.sequence_number.unwrap_or(0),
-                                stream_id,
-                            });
-                        }
-                        _ => {
-                            // other client events (LogSpotter, TextInput, ...) arrive
-                            // only once the HTTP-side emulation is ported
-                            tracing::debug!("ignoring client event");
-                        }
-                    }
-                }
-                Some(t_client_message::Message::StreamControl(stream_control)) => {
-                    let is_voice_stream = voice_input
-                        .as_ref()
-                        .map(|session| session.stream_id == stream_control.stream_id)
-                        .unwrap_or(false);
-                    // only Close ends the voice input (other actions like SpotterEnd do
-                    // not); its reason OK is 0, so presence matters, not the value
-                    let close_reason = match stream_control.action {
-                        Some(t_stream_control::Action::Close(close)) => Some(close.reason),
-                        _ => None,
-                    };
-                    match close_reason {
-                        Some(reason) if is_voice_stream && reason == EReason::Cancel as i32 => {
-                            tracing::info!("voice input stream {} cancelled by the station", stream_control.stream_id);
-                            voice_input = None;
-                            agent = None;
-                        }
-                        Some(_) if is_voice_stream => {
-                            let session = voice_input.take().expect("checked above");
-                            let current_agent = ensure_agent(&context, &mut agent);
-
-                            let dialog_continues = finish_voice_input(
-                                &context, &mut sender, &session, &reference_message_id,
-                                &mut output_stream_id, &current_agent,
-                            )
-                            .await
-                            .unwrap_or_else(|error| {
-                                tracing::error!("voice input processing failed: {error:#}");
-                                false
-                            });
-                            // a finished dialog starts the next one with a fresh history
-                            if !dialog_continues {
-                                agent = None;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                None => {}
-            }
-            continue;
-        }
-
-        // audio frame: 4-byte big-endian stream id + OGG/Opus bytes
-        if payload.len() < 4 {
-            continue;
-        }
-        let stream_id = i64::from(u32::from_be_bytes(
-            payload[0..4].try_into().expect("four bytes"),
-        ));
-        if let Some(session) = voice_input.as_mut() {
-            if session.stream_id == stream_id {
-                session.audio_chunks.push(payload[4..].to_vec());
+            _ = &mut writer => {
+                tracing::warn!("uni.ws writer stopped, closing the connection");
+                break;
             }
         }
     }
 
     registry.unregister(&device_id, connection_id);
+    // like TS handleClose: whatever the dialog was doing stops with the socket
+    connection.tasks.abort_all();
 }
 
-/// Creates the dialog agent on first use; it is dropped when a dialog ends
-fn ensure_agent(context: &Arc<UniproxyContext>, agent: &mut Option<Arc<Agent>>) -> Arc<Agent> {
-    agent.get_or_insert_with(|| {
-        let system_prompt = context.prompt_generator.generate(&context.functions).unwrap_or_else(|error| {
-            tracing::error!("failed to render the system prompt: {error:#}");
-            String::new()
-        });
-        let state_prompt = context.prompt_generator.generate_state(&system_state()).unwrap_or_else(|error| {
-            tracing::error!("failed to render the state prompt: {error:#}");
-            String::new()
-        });
-        Arc::new(Agent::new(
-            context.openrouter.clone(),
-            context.config.processor_model.clone(),
-            context.functions.clone(),
-            system_prompt,
-            state_prompt,
-            context.cache.clone(),
-        ))
-    })
-        .clone()
+/// A VoiceInput being recorded: the audio of its stream until StreamControl Close
+struct VoiceInput {
+    stream_id: i64,
+    target: ResponseTarget,
+    agent: Arc<Agent>,
+    device_state: Option<Vec<u8>>,
+    biometry: BiometrySlot,
+    ogg: Vec<u8>,
+    truncated: bool,
 }
 
-/// Runs remote functions in the background; station directives come back in the outputs
-fn remote_executor(context: &Arc<UniproxyContext>) -> impl Fn(crate::agent::protocol::FunctionCall) -> Result<()> + Send + Sync + 'static {
-    let remote = context.remote.clone();
-    move |call| {
-        let remote = remote.clone();
-        tokio::spawn(async move {
-            if let Err(error) = remote.call_by_name(&call.name, &call.arguments).await {
-                tracing::warn!("remote function '{}' failed: {error:#}", call.name);
+impl VoiceInput {
+    fn push_audio(&mut self, audio: &[u8]) {
+        if self.ogg.len() + audio.len() > MAX_UTTERANCE_BYTES {
+            if !self.truncated {
+                tracing::warn!("voice input stream {} is too long, dropping the rest", self.stream_id);
+                self.truncated = true;
             }
-        });
-        Ok(())
+            return;
+        }
+        self.ogg.extend_from_slice(audio);
     }
 }
 
-/// Runs a pushed external event through the agent and speaks the answer
-async fn process_event(
-    sender: &mut futures_util::stream::SplitSink<WebSocket, WsMessage>,
-    context: &Arc<UniproxyContext>,
-    agent: &Arc<Agent>,
-    text: &str,
-    reference_message_id: &str,
-    output_stream_id: &mut i64,
-) -> Result<()> {
-    // remote functions run as for voice; station directives of pushed events
-    // still need the push/semantic-frame path, which is not ported yet
-    let outputs = agent
-        .run_turn(
-            AgentTurn { external_event: true, text: text.to_string() },
-            context.prompt_generator.generate_state(&dialog_state(context).await)?,
-            remote_executor(context),
-        )
-        .await
-        .context("agent turn failed")?;
-    for output in outputs {
-        if !output.text.is_empty() {
-            speak_text(sender, context, &output.text, reference_message_id, output_stream_id).await;
+struct Connection {
+    context: Arc<UniproxyContext>,
+    outbox: Outbox,
+    dialog: DialogSlot,
+    voice_input: Option<VoiceInput>,
+    /// Biometry of the latest voice input; MatchedUser may come after its Close
+    biometry: BiometrySlot,
+    /// Every task of the connection, aborted when it closes
+    tasks: JoinSet<()>,
+    /// Dialog turns in flight: a new VoiceInput or a CANCEL aborts them
+    turns: Vec<AbortHandle>,
+    /// The voice stream whose turn is in flight, for a CANCEL after its Close
+    answering_stream: Option<(i64, AbortHandle)>,
+    /// To report audio of an unexpected stream once rather than per frame
+    unknown_audio_stream: Option<i64>,
+}
+
+impl Connection {
+    fn new(context: Arc<UniproxyContext>, outbox: Outbox) -> Self {
+        Self {
+            context,
+            outbox,
+            dialog: DialogSlot::default(),
+            voice_input: None,
+            biometry: BiometrySlot::default(),
+            tasks: JoinSet::new(),
+            turns: Vec::new(),
+            answering_stream: None,
+            unknown_audio_stream: None,
         }
     }
-    Ok(())
-}
 
-#[allow(clippy::too_many_arguments)]
-async fn finish_voice_input(
-    context: &Arc<UniproxyContext>,
-    sender: &mut futures_util::stream::SplitSink<WebSocket, WsMessage>,
-    session: &VoiceInputSession,
-    reference_message_id: &str,
-    output_stream_id: &mut i64,
-    agent: &Arc<Agent>,
-) -> Result<bool> {
-    let target = ResponseTarget {
-        dialog_id: &session.dialog_id,
-        request_id: &session.request_id,
-        sequence_number: session.sequence_number,
-        reference_message_id,
-    };
-
-    // 1. transcribe the whole utterance; failures count as "nothing heard"
-    let ogg: Vec<u8> = session.audio_chunks.iter().flatten().copied().collect();
-    let mut text = String::new();
-    if !ogg.is_empty() {
-        match audio::ogg_to_wav(&ogg).await {
-            Ok(wav) => {
-                text = context
-                    .openrouter
-                    .transcribe(&context.config.stt_model, context.config.stt_language.as_deref(), &wav)
-                    .await
-                    .unwrap_or_else(|error| {
-                        tracing::warn!("transcription failed: {error:#}");
-                        String::new()
-                    });
+    /// Management API commands: everything reaches the station as a Push
+    fn handle_command(&mut self, command: StationCommand) {
+        let pushed = match command {
+            // TS pushEvent: the station sends the frame back as a TextInput, answered by the agent
+            StationCommand::Event { text } if !text.trim().is_empty() => {
+                vec![directives::mm_semantic_frame(&directives::external_event_frame(&text))]
             }
-            Err(error) => tracing::warn!("transcoding the utterance failed: {error:#}"),
+            // TS pushTts: the station sends the frame back as a TextInput, answered with the text spoken
+            StationCommand::Speak { text } if !text.trim().is_empty() => {
+                vec![directives::mm_semantic_frame(&directives::tts_frame(&text))]
+            }
+            StationCommand::Event { .. } | StationCommand::Speak { .. } => {
+                tracing::warn!("not pushing an empty text to the station");
+                return;
+            }
+            StationCommand::Directives { directives } => directives,
+        };
+        report(self.outbox.push(pushed));
+    }
+
+    fn handle_frame(&mut self, frame: &[u8]) {
+        let Some(message) = frame.strip_prefix(b"AAPI") else {
+            self.handle_audio(frame);
+            return;
+        };
+        match TClientMessage::decode(message) {
+            Ok(message) => self.handle_client_message(message),
+            Err(error) => tracing::warn!("failed to decode TClientMessage: {error}"),
         }
     }
-    tracing::info!("transcribed: '{text}'");
 
-    send_asr_result(sender, &text, reference_message_id).await?;
-
-    // nothing recognized: close the request with an empty answer so the station does not wait for one
-    if text.is_empty() {
-        send_alice_response(sender, &target, "", false, Vec::new()).await?;
-        return Ok(false);
+    fn handle_client_message(&mut self, message: TClientMessage) {
+        match message.message {
+            Some(t_client_message::Message::Event(event)) => {
+                let header = event.header.unwrap_or_default();
+                match event.event {
+                    Some(ClientEvent::VoiceInput(request)) => self.handle_voice_input(header, request),
+                    Some(ClientEvent::TextInput(request)) => self.handle_text_input(header, request),
+                    Some(ClientEvent::LogSpotter(_)) => report(self.outbox.log_ack(&header.message_id)),
+                    Some(ClientEvent::MatchedUser(request)) => self.handle_matched_user(&request),
+                    _ => tracing::debug!("ignoring client event"),
+                }
+            }
+            Some(t_client_message::Message::StreamControl(control)) => self.handle_stream_control(control),
+            None => {}
+        }
     }
 
-    // 2. run the agent; on failure apologize instead of going silent
-    let state_prompt = context
-        .prompt_generator
-        .generate_state(&dialog_state(context).await)
-        .unwrap_or_else(|error| {
-            tracing::error!("failed to render the state prompt: {error:#}");
-            String::new()
+    fn handle_voice_input(&mut self, header: TEventHeader, mut request: TAliceRequestProto) {
+        if self.interrupt_turns() {
+            tracing::info!("the dialog turn in flight was interrupted by a new voice input");
+        }
+        let request_header = request.header.take().unwrap_or_default();
+        let (dialog_id, agent) = self.dialog.for_voice_input(&self.context, request_header.dialog_id.as_deref());
+        let stream_id = header.stream_id.unwrap_or(-1);
+        tracing::info!("voice input stream {stream_id} started (dialog {dialog_id})");
+
+        self.biometry = BiometrySlot::default();
+        self.voice_input = Some(VoiceInput {
+            stream_id,
+            target: ResponseTarget {
+                dialog_id,
+                request_id: request_header.request_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+                sequence_number: request_header.sequence_number.unwrap_or(0),
+                // AsrResult, AliceResponse and TTS refer to the VoiceInput event,
+                // not to later events like MatchedUser or LogSpotter
+                reference_message_id: header.message_id,
+            },
+            agent,
+            device_state: metadata::take_device_state(&mut request),
+            biometry: self.biometry.clone(),
+            ogg: Vec::new(),
+            truncated: false,
         });
-    let outputs = match agent
-        .run_turn(AgentTurn { external_event: false, text }, state_prompt, remote_executor(context))
-        .await
-    {
-        Ok(outputs) => outputs,
-        Err(error) => {
-            tracing::error!("agent turn failed: {error:#}");
-            vec![AgentOutput {
-                directives: Vec::new(),
-                finished: true,
-                should_listen: false,
-                text: ERROR_RESPONSE_TEXT.to_string(),
-            }]
+    }
+
+    fn handle_stream_control(&mut self, control: TStreamControl) {
+        // only Close ends a voice input (other actions like SpotterEnd do not);
+        // its reason OK is 0, so presence matters, not the value
+        let Some(t_stream_control::Action::Close(close)) = control.action else {
+            return;
+        };
+        let stream_id = control.stream_id;
+
+        if close.reason == EReason::Cancel as i32 {
+            let recording = self.voice_input.as_ref().is_some_and(|input| input.stream_id == stream_id);
+            let answering =
+                self.answering_stream.as_ref().is_some_and(|(id, task)| *id == stream_id && !task.is_finished());
+            if recording || answering {
+                tracing::info!("voice input stream {stream_id} cancelled by the station");
+                self.voice_input = None;
+                self.interrupt_turns();
+                self.dialog.close();
+            }
+            return;
         }
-    };
 
-    // 3. answer: AliceResponse with station directives + streamed TTS audio per output
-    let mut should_listen = false;
-    for output in outputs {
-        let mut station_directives: Vec<TDirective> = output
-            .directives
-            .iter()
-            .filter_map(directives::to_station_directive)
-            .collect();
-        if !output.text.is_empty() {
-            station_directives.push(directives::tts_play_placeholder());
+        if let Some(input) = self.voice_input.take_if(|input| input.stream_id == stream_id) {
+            tracing::info!("voice input stream {stream_id} finished: {} bytes", input.ogg.len());
+            let turn = self.turn(input.agent, input.target);
+            let utterance = Utterance { ogg: input.ogg, device_state: input.device_state, biometry: input.biometry };
+            let task = self.spawn_turn(turn.answer_voice(utterance));
+            self.answering_stream = Some((stream_id, task));
         }
-        send_alice_response(sender, &target, &output.text, output.should_listen, station_directives).await?;
-        speak_text(sender, context, &output.text, reference_message_id, output_stream_id).await;
-        should_listen = output.should_listen;
     }
 
-    Ok(should_listen)
-}
-
-async fn send_alice_response(
-    sender: &mut futures_util::stream::SplitSink<WebSocket, WsMessage>,
-    target: &ResponseTarget<'_>,
-    text: &str,
-    should_listen: bool,
-    directives: Vec<TDirective>,
-) -> Result<()> {
-    send_server_message(
-        sender,
-        TServerMessage {
-            message: Some(t_server_message::Message::Event(t_server_message::TEvent {
-                header: Some(TEventHeader {
-                    message_id: Uuid::new_v4().to_string(),
-                    ref_message_id: target.reference_message_id.to_string(),
-                    ..Default::default()
-                }),
-                event: Some(t_server_message::t_event::Event::AliceResponse(TAliceResponseProto {
-                    header: Some(ResponseHeader {
-                        dialog_id: Some(target.dialog_id.to_string()),
-                        request_id: Some(target.request_id.to_string()),
-                        response_id: Some(Uuid::new_v4().to_string()),
-                        sequence_number: Some(target.sequence_number),
-                        ..Default::default()
-                    }),
-                    voice_response: Some(TVoiceResponse {
-                        has_voice_response: !text.is_empty(),
-                        should_listen,
-                        output_speech: (!text.is_empty()).then(|| TOutputSpeech { text: Some(text.to_string()) }),
-                    }),
-                    response: Some(ResponseBody {
-                        directives,
-                        is_streaming: false,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                })),
-            })),
-            ..Default::default()
-        },
-    )
-    .await
-}
-
-/// Synthesizes `text` and streams the audio to the station as one
-/// LazyTtsStreaming OGG/Opus stream; empty text is not spoken at all
-async fn speak_text(
-    sender: &mut futures_util::stream::SplitSink<WebSocket, WsMessage>,
-    context: &Arc<UniproxyContext>,
-    text: &str,
-    reference_message_id: &str,
-    output_stream_id: &mut i64,
-) {
-    if text.is_empty() {
-        return;
-    }
-    if let Err(error) = speak_text_inner(sender, context, text, reference_message_id, output_stream_id).await {
-        tracing::error!("TTS streaming failed: {error:#}");
-    }
-}
-
-async fn speak_text_inner(
-    sender: &mut futures_util::stream::SplitSink<WebSocket, WsMessage>,
-    context: &Arc<UniproxyContext>,
-    text: &str,
-    reference_message_id: &str,
-    output_stream_id: &mut i64,
-) -> Result<()> {
-    // request synthesis first: if it fails, no stream gets announced to the station
-    let pcm = context
-        .openrouter
-        .speech_stream(
-            &context.config.tts_model,
-            &context.config.tts_voice,
-            &context.config.tts_instructions,
-            context.config.tts_speed,
-            text,
-        )
-        .await
-        .context("speech synthesis request failed")?;
-
-    *output_stream_id += 1;
-    let stream_id = *output_stream_id;
-    send_server_message(
-        sender,
-        TServerMessage {
-            message: Some(t_server_message::Message::Event(t_server_message::TEvent {
-                header: Some(TEventHeader {
-                    message_id: Uuid::new_v4().to_string(),
-                    ref_message_id: reference_message_id.to_string(),
-                    stream_id: Some(stream_id),
-                    ..Default::default()
-                }),
-                event: Some(t_server_message::t_event::Event::TtsSpeak(TTtsSpeak {
-                    format: "audio/opus".to_string(),
-                    lazy_tts_streaming: true,
-                    ..Default::default()
-                })),
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
-
-    // once announced, the stream is always closed, even if synthesis breaks off midway
-    let streamed = async {
-        let ogg_stream = audio::pcm_stream_to_ogg(pcm, context.config.tts_pcm_sample_rate);
-        tokio::pin!(ogg_stream);
-        while let Some(chunk) = ogg_stream.next().await {
-            let chunk = chunk.context("tts transcode failed")?;
-            let mut audio_frame = Vec::with_capacity(4 + chunk.len());
-            audio_frame.extend_from_slice(&(stream_id as u32).to_be_bytes());
-            audio_frame.extend_from_slice(&chunk);
-            sender.send(WsMessage::Binary(audio_frame.into())).await?;
+    fn handle_audio(&mut self, frame: &[u8]) {
+        let Some((stream_id, audio)) = frame.split_first_chunk::<4>() else {
+            return;
+        };
+        let stream_id = i64::from(u32::from_be_bytes(*stream_id));
+        match self.voice_input.as_mut() {
+            Some(input) if input.stream_id == stream_id => input.push_audio(audio),
+            _ if self.unknown_audio_stream != Some(stream_id) => {
+                self.unknown_audio_stream = Some(stream_id);
+                tracing::debug!("dropping audio of stream {stream_id}: no voice input on it");
+            }
+            _ => {}
         }
-        Ok::<(), anyhow::Error>(())
     }
-    .await;
 
-    let closed = send_server_message(
-        sender,
-        TServerMessage {
-            message: Some(t_server_message::Message::StreamControl(
-                crate::proto::n_alice::n_alice_api::TStreamControl {
-                    stream_id,
-                    message_id: Uuid::new_v4().to_string(),
-                    action: Some(t_stream_control::Action::Close(t_stream_control::TActionClose {
-                        reason: EReason::Ok as i32,
-                    })),
-                },
-            )),
-            ..Default::default()
-        },
-    )
-    .await;
-
-    streamed?;
-    closed
-}
-
-/// The per-turn state shown to the LLM: system facts plus remote state servers
-async fn dialog_state(context: &Arc<UniproxyContext>) -> std::collections::BTreeMap<String, String> {
-    let mut state = system_state();
-    for (key, (description, value)) in context.remote.state("uniproxy").await {
-        let _ = description;
-        state.insert(key, value);
+    fn handle_matched_user(&self, request: &TAliceRequestProto) {
+        if let Some(biometry) = metadata::biometry(request) {
+            tracing::info!("speaker biometry: age {}, gender {}", biometry.age, biometry.gender);
+            self.biometry.set(biometry);
+        }
     }
-    state
+
+    fn handle_text_input(&mut self, header: TEventHeader, mut request: TAliceRequestProto) {
+        let request_header = request.header.take().unwrap_or_default();
+        let station_dialog_id = request_header.dialog_id.as_deref();
+        let target = |dialog_id: String| ResponseTarget {
+            dialog_id,
+            request_id: request_header.request_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+            sequence_number: request_header.sequence_number.unwrap_or(0),
+            reference_message_id: header.message_id.clone(),
+        };
+
+        match text_input::classify(&request) {
+            TextInputKind::ExternalEvent(event) => {
+                tracing::info!("external event: '{event}'");
+                let (dialog_id, agent) = self.dialog.for_event(&self.context, station_dialog_id);
+                let turn = self.turn(agent, target(dialog_id));
+                self.spawn_turn(turn.answer_event(event, metadata::take_device_state(&mut request)));
+            }
+            TextInputKind::Tts(text) => {
+                let target = target(self.dialog.response_dialog_id(station_dialog_id));
+                self.tasks.spawn(dialog::answer_tts(self.context.clone(), self.outbox.clone(), target, text));
+            }
+            TextInputKind::ContinueStage1 => {
+                // as TS: the answer is a push of step 2 with the dialog id, the request gets no AliceResponse
+                let frame = directives::continue_session_stage2_frame(self.dialog.current_id().as_deref());
+                report(self.outbox.push(vec![directives::mm_semantic_frame(&frame)]));
+            }
+            TextInputKind::ContinueStage2 { dialog_id } => {
+                // answers are never split into parts here (the keep-alive flow is not ported): nothing to continue
+                let target = target(self.dialog.response_dialog_id(dialog_id.as_deref()));
+                report(self.outbox.empty_response(&target));
+            }
+            TextInputKind::Text(text) => {
+                let target = target(self.dialog.response_dialog_id(station_dialog_id));
+                let sent = match directives::text_command(&text) {
+                    TextCommand::Directive(directive) => {
+                        self.outbox.alice_response(&target, "", false, vec![*directive])
+                    }
+                    TextCommand::NeedsMusic => {
+                        tracing::info!("text command '{text}' needs the music subsystem, which is not ported");
+                        self.outbox.empty_response(&target)
+                    }
+                    TextCommand::Unknown => {
+                        tracing::warn!("unknown text command '{text}'");
+                        self.outbox.empty_response(&target)
+                    }
+                };
+                report(sent);
+            }
+            TextInputKind::Music(request) => {
+                tracing::info!("music request ({request}) answered with nothing: the music subsystem is not ported");
+                report(self.outbox.empty_response(&target(self.dialog.response_dialog_id(station_dialog_id))));
+            }
+            TextInputKind::Unknown(description) => {
+                // TS leaves such requests unanswered and the station waits 15 s for a timeout
+                tracing::info!("unhandled TextInput ({description}) answered with nothing");
+                report(self.outbox.empty_response(&target(self.dialog.response_dialog_id(station_dialog_id))));
+            }
+        }
+    }
+
+    fn turn(&self, agent: Arc<Agent>, target: ResponseTarget) -> Turn {
+        Turn { context: self.context.clone(), outbox: self.outbox.clone(), dialog: self.dialog.clone(), agent, target }
+    }
+
+    fn spawn_turn(&mut self, turn: impl Future<Output = ()> + Send + 'static) -> AbortHandle {
+        self.turns.retain(|task| !task.is_finished());
+        let task = self.tasks.spawn(turn);
+        self.turns.push(task.clone());
+        task
+    }
+
+    /// Aborts the dialog turns in flight (TS closes the processor session);
+    /// returns whether one was still running
+    fn interrupt_turns(&mut self) -> bool {
+        self.answering_stream = None;
+        let mut interrupted = false;
+        for task in self.turns.drain(..) {
+            if !task.is_finished() {
+                task.abort();
+                interrupted = true;
+            }
+        }
+        interrupted
+    }
 }
 
-async fn send_asr_result(
-    sender: &mut futures_util::stream::SplitSink<WebSocket, WsMessage>,
-    text: &str,
-    reference_message_id: &str,
-) -> Result<()> {
-    send_server_message(
-        sender,
-        TServerMessage {
-            message: Some(t_server_message::Message::Event(t_server_message::TEvent {
-                header: Some(TEventHeader {
-                    message_id: Uuid::new_v4().to_string(),
-                    ref_message_id: reference_message_id.to_string(),
-                    ..Default::default()
-                }),
-                event: Some(t_server_message::t_event::Event::AsrResult(TAsrResult {
-                    end_of_utt: Some(true),
-                    recognition: if text.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![TAsrRecognition {
-                            normalized: Some(text.to_string()),
-                            confidence: Some(0.999),
-                            parent_model: Some("openrouter-stt".to_string()),
-                            ..Default::default()
-                        }]
-                    },
-                    response_code: Some(0),
-                    messages_count: Some(0),
-                })),
-            })),
-            ..Default::default()
-        },
-    )
-    .await
-}
-
-async fn send_server_message(
-    sender: &mut futures_util::stream::SplitSink<WebSocket, WsMessage>,
-    server_message: TServerMessage,
-) -> Result<()> {
-    let mut frame = Vec::with_capacity(server_message.encoded_len() + 4);
-    frame.extend_from_slice(b"AAPI");
-    server_message.encode(&mut frame)?;
-    sender.send(WsMessage::Binary(frame.into())).await?;
-    Ok(())
+/// Sending fails only when the writer is gone, i.e. the connection is closing
+fn report(sent: anyhow::Result<()>) {
+    if let Err(error) = sent {
+        tracing::warn!("{error:#}");
+    }
 }

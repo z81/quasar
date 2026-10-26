@@ -1,6 +1,6 @@
 //! quasar.yandex.net endpoints: registration, updates, glagol tokens
 //! (HS256 JWT), device list and sync info — plus the neighbouring Yandex
-//! domain stubs the firmware expects to reach.
+//! domains the firmware expects to reach (oauth, passport, stubs).
 
 use std::sync::Arc;
 
@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use crate::stations::StationSummary;
 use crate::storage::Storage;
 
 pub struct QuasarState {
@@ -42,6 +43,8 @@ pub fn router() -> Router<crate::AppState> {
         .route("/quasar.yandex.net/glagol/device_list", get(device_list))
         .route("/quasar.yandex.net/get_sync_info", get(get_sync_info))
         .route("/oauth.yandex.ru/token", post(oauth_token))
+        .route("/mobileproxy.passport.yandex.net/1/token", post(oauth_token))
+        .route("/mobileproxy.passport.yandex.net/1/bundle/account/short_info", get(passport_short_info))
         .route("/rpc.alice.yandex.net/gproxy/push_events_batch", post(empty_protobuf))
         .route("/clck.yandex.net/quasar_metrics/write/batch", post(clck_metrics_batch))
         .route("/clck.yandex.net/quasar/write/json/batch", post(clck_json_batch))
@@ -81,12 +84,20 @@ async fn update_device_state(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     let platform = parameters.platform.unwrap_or_default();
-    if let Err(error) = state.quasar.storage.register(&device_id, &platform).await {
-        tracing::error!("failed to register station {device_id}: {error:#}");
-    }
     let network_info: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    state.quasar.storage.update_network_info(&device_id, network_info).await;
-    Json(json!({ "status": "ok" })).into_response()
+    let storage = &state.quasar.storage;
+    let result = async {
+        storage.register(&device_id, &platform).await?;
+        storage.update_network_info(&device_id, network_info).await
+    }
+    .await;
+    match result {
+        Ok(()) => Json(json!({ "status": "ok" })).into_response(),
+        Err(error) => {
+            tracing::error!("Error on POST /update_device_state for {device_id}: {error:#}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 async fn glagol_token(
@@ -144,9 +155,20 @@ async fn check_token_v2(State(state): State<crate::AppState>, body: String) -> i
 }
 
 async fn device_list(State(state): State<crate::AppState>) -> impl IntoResponse {
-    Json(state.quasar.storage.device_list_json().await).into_response()
+    match state.quasar.storage.list().await {
+        Ok(stations) => Json(json!({
+            "devices": stations.iter().map(StationSummary::to_glagol_device).collect::<Vec<_>>(),
+            "status": "ok",
+        }))
+        .into_response(),
+        Err(error) => {
+            tracing::error!("Error on GET /glagol/device_list: {error:#}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
+/// The station's config; a station seen for the first time is registered
 async fn get_sync_info(
     State(state): State<crate::AppState>,
     Query(parameters): Query<DeviceParameters>,
@@ -154,17 +176,14 @@ async fn get_sync_info(
     let Some(device_id) = parameters.device_id.filter(|id| !id.is_empty()) else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    let Some(mut device) = state.quasar.storage.get(&device_id).await else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    };
-    let Some(object) = device.as_object_mut() else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    };
-    object.insert("status".into(), json!("ok"));
-    object.insert("alice_pro_subscription".into(), json!({ "enabled": false }));
-    object.insert("subscription".into(), json!({ "mode": "transaction" }));
-    object.insert("tags".into(), json!([]));
-    Json(device).into_response()
+    let platform = parameters.platform.unwrap_or_default();
+    match state.quasar.storage.get_or_create(&device_id, &platform).await {
+        Ok(station) => Json(station.to_sync_info()).into_response(),
+        Err(error) => {
+            tracing::error!("Error on GET /get_sync_info for {device_id}: {error:#}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 fn decode_glagol(state: &QuasarState, body: &str) -> bool {
@@ -186,7 +205,8 @@ struct OAuthForm {
     access_token: Option<String>,
 }
 
-/// The station posts application/x-www-form-urlencoded (TS accepts it and JSON)
+/// oauth.yandex.ru/token and mobileproxy.passport.yandex.net/1/token: the
+/// station posts application/x-www-form-urlencoded (TS accepts it and JSON)
 async fn oauth_token(headers: axum::http::HeaderMap, body: axum::body::Bytes) -> impl IntoResponse {
     let is_json = headers
         .get(axum::http::header::CONTENT_TYPE)
@@ -232,6 +252,65 @@ async fn oauth_token(headers: axum::http::HeaderMap, body: axum::body::Bytes) ->
         .into_response(),
         _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+}
+
+/// The account of the station owner (TS mobileproxy.passport.yandex.net)
+async fn passport_short_info() -> Json<Value> {
+    // Math.round(Date.now() / 1000)
+    let issued_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .saturating_add(500)
+        / 1000;
+    Json(json!({
+        "avatar_url": "https://avatars.mds.yandex.net/get-yapic/53031/0s-5/islands-300",
+        "birthday": "1984-01-01",
+        "display_login": "YandexStationOwnerNo146",
+        "display_name": "YandexStationOwnerNo146",
+        "filter_params": { "subtype": ["portal"] },
+        "firstname": "Owner",
+        "gender": "m",
+        "has_cards": true,
+        "has_family": true,
+        "has_password": true,
+        "has_plus": true,
+        "has_telemost": true,
+        "have_webauthn_credential": true,
+        "is_browser_account": true,
+        "is_rfc_2fa_enabled": true,
+        "lastname": "No146",
+        "location_id": 0,
+        "machine_readable_login": "YandexStationOwnerNo146",
+        "master_members": [{
+            "avatar_url": "https://avatars.mds.yandex.net/get-yapic/53031/0s-5/islands-300",
+            "display_login": "YandexStationOwnerNo146",
+            "has_cards": true,
+            "has_family": true,
+            "has_plus": true,
+            "has_telemost": true,
+            "is_browser_account": true,
+            "plus_card": true,
+            "primary_alias_type": 1,
+            "public_name": "Owner No146",
+            "secure_phone_number": "+78005553535",
+            "uid": 10_146_228,
+        }],
+        "master_uid": 1_234_567_228,
+        "native_default_email": "yandexowner@yandex.ru",
+        "normalized_display_login": "YandexStationOwnerNo146",
+        "partitions": ["default"],
+        "plus_card": true,
+        "primary_alias_type": 1,
+        "public_id": "oj4bx3cwbowdyz4eb5lt1v0z7v",
+        "public_name": "Owner No146",
+        "secure_phone_number": "+78005553535",
+        "status": "ok",
+        "uid": 10_146_228,
+        "x_token_client_id": "ef0e663c4b4d38debd41f76ed511e73f",
+        "x_token_issued_at": u64::try_from(issued_at).unwrap_or_default(),
+        "xtoken_has_muid": true,
+    }))
 }
 
 async fn empty_protobuf() -> impl IntoResponse {

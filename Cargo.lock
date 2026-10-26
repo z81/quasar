@@ -29,6 +29,7 @@ dependencies = [
  "lru",
  "prost",
  "prost-build",
+ "prost-reflect",
  "protox",
  "rcgen",
  "reqwest",

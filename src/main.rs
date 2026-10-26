@@ -13,6 +13,7 @@ mod prompt;
 mod proto;
 mod quasar_router;
 mod remote;
+mod station_config;
 mod stations;
 mod storage;
 mod uniproxy;

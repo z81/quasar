@@ -8,6 +8,7 @@ mod audio;
 mod config;
 mod connections;
 mod directives;
+mod music;
 mod openrouter;
 mod prompt;
 mod proto;
@@ -85,9 +86,11 @@ async fn main() -> Result<()> {
         csv_urls("PROCESSOR_STATE_SERVER_URLS"),
     ));
 
+    let music = music::MusicManager::new(config.music_service_basic_url.as_deref());
+
     // function catalog: station directives + remote servers
     let mut functions: HashMap<String, FunctionDefinition> =
-        builtin_directive_functions()
+        builtin_directive_functions(music.is_configured())
             .iter()
             .map(|(name, definition)| (name.clone(), definition.clone()))
             .collect();
@@ -118,6 +121,7 @@ async fn main() -> Result<()> {
         cache: agent::new_response_cache(config.processor_cache_size as usize),
         openrouter,
         remote,
+        music,
         config,
     });
 

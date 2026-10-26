@@ -7,6 +7,8 @@
 //! -> AliceResponse + streamed TTS), so the station's cancels, pings and new
 //! requests are read while an answer is being prepared. A new VoiceInput or a
 //! CANCEL aborts the dialog turns in flight, as TS interrupts its dialog.
+//! Slow or multi-part answers go out through the TS "continue" handshake (see
+//! `dialog`), music through the music manager.
 
 mod dialog;
 mod metadata;
@@ -26,14 +28,15 @@ use uuid::Uuid;
 use crate::agent::{Agent, Functions, ResponseCache};
 use crate::config::Config;
 use crate::connections::{ConnectionRegistry, StationCommand};
-use crate::directives::{self, TextCommand};
+use crate::directives::{self, WrappedDirective};
+use crate::music::MusicManager;
 use crate::openrouter::OpenRouter;
 use crate::prompt::PromptGenerator;
 use crate::proto::n_alice::TAliceRequestProto;
 use crate::proto::n_alice::n_alice_api::t_client_message::{self, t_event::Event as ClientEvent};
 use crate::proto::n_alice::n_alice_api::t_stream_control::{self, t_action_close::EReason};
 use crate::proto::n_alice::n_alice_api::{TClientMessage, TEventHeader, TStreamControl};
-use dialog::{DialogSlot, Turn, Utterance};
+use dialog::{DialogSlot, Request, Utterance};
 use metadata::BiometrySlot;
 use outbox::{Outbox, ResponseTarget};
 use text_input::TextInputKind;
@@ -45,6 +48,7 @@ pub struct UniproxyContext {
     pub functions: Functions,
     pub remote: Arc<crate::remote::RemoteServers>,
     pub cache: ResponseCache,
+    pub music: MusicManager,
 }
 
 /// Guards memory against a voice stream that never ends: far more than any
@@ -61,7 +65,7 @@ pub async fn handle_socket(
     let (outbox, mut writer) = outbox::spawn_writer(sink);
     let (command_sender, mut commands) = mpsc::unbounded_channel::<StationCommand>();
     let connection_id = registry.register(&device_id, command_sender);
-    let mut connection = Connection::new(context, outbox);
+    let mut connection = Connection::new(context, outbox, &device_id);
 
     loop {
         tokio::select! {
@@ -124,6 +128,8 @@ impl VoiceInput {
 struct Connection {
     context: Arc<UniproxyContext>,
     outbox: Outbox,
+    /// The station (x-uprx-device-id): its music queue and saved position
+    device_id: Arc<str>,
     dialog: DialogSlot,
     voice_input: Option<VoiceInput>,
     /// Biometry of the latest voice input; MatchedUser may come after its Close
@@ -139,10 +145,11 @@ struct Connection {
 }
 
 impl Connection {
-    fn new(context: Arc<UniproxyContext>, outbox: Outbox) -> Self {
+    fn new(context: Arc<UniproxyContext>, outbox: Outbox, device_id: &str) -> Self {
         Self {
             context,
             outbox,
+            device_id: device_id.into(),
             dialog: DialogSlot::default(),
             voice_input: None,
             biometry: BiometrySlot::default(),
@@ -252,9 +259,9 @@ impl Connection {
 
         if let Some(input) = self.voice_input.take_if(|input| input.stream_id == stream_id) {
             tracing::info!("voice input stream {stream_id} finished: {} bytes", input.ogg.len());
-            let turn = self.turn(input.agent, input.target);
-            let utterance = Utterance { ogg: input.ogg, device_state: input.device_state, biometry: input.biometry };
-            let task = self.spawn_turn(turn.answer_voice(utterance));
+            let request = self.request(input.target, input.device_state);
+            let utterance = Utterance { ogg: input.ogg, biometry: input.biometry };
+            let task = self.spawn_turn(request.answer_voice(input.agent, utterance));
             self.answering_stream = Some((stream_id, task));
         }
     }
@@ -284,6 +291,8 @@ impl Connection {
     fn handle_text_input(&mut self, header: TEventHeader, mut request: TAliceRequestProto) {
         let request_header = request.header.take().unwrap_or_default();
         let station_dialog_id = request_header.dialog_id.as_deref();
+        let kind = text_input::classify(&request);
+        let device_state = metadata::take_device_state(&mut request);
         let target = |dialog_id: String| ResponseTarget {
             dialog_id,
             request_id: request_header.request_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
@@ -291,47 +300,46 @@ impl Connection {
             reference_message_id: header.message_id.clone(),
         };
 
-        match text_input::classify(&request) {
+        match kind {
             TextInputKind::ExternalEvent(event) => {
                 tracing::info!("external event: '{event}'");
                 let (dialog_id, agent) = self.dialog.for_event(&self.context, station_dialog_id);
-                let turn = self.turn(agent, target(dialog_id));
-                self.spawn_turn(turn.answer_event(event, metadata::take_device_state(&mut request)));
+                let request = self.request(target(dialog_id), device_state);
+                self.spawn_turn(request.answer_event(agent, event));
             }
             TextInputKind::Tts(text) => {
-                let target = target(self.dialog.response_dialog_id(station_dialog_id));
-                self.tasks.spawn(dialog::answer_tts(self.context.clone(), self.outbox.clone(), target, text));
+                let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), device_state);
+                self.tasks.spawn(request.answer_tts(text));
             }
-            TextInputKind::ContinueStage1 => {
-                // as TS: the answer is a push of step 2 with the dialog id, the request gets no AliceResponse
-                let frame = directives::continue_session_stage2_frame(self.dialog.current_id().as_deref());
+            TextInputKind::ContinueStage1 { dialog_id } => {
+                // as TS: the answer is a push of step 2 with the dialog id, the request gets no AliceResponse;
+                // a step 1 of TS (without a dialog id) continues the current dialog
+                let dialog_id = dialog_id.or_else(|| self.dialog.current_id());
+                let frame = directives::continue_session_stage2_frame(dialog_id.as_deref());
                 report(self.outbox.push(vec![directives::mm_semantic_frame(&frame)]));
             }
             TextInputKind::ContinueStage2 { dialog_id } => {
-                // answers are never split into parts here (the keep-alive flow is not ported): nothing to continue
-                let target = target(self.dialog.response_dialog_id(dialog_id.as_deref()));
-                report(self.outbox.empty_response(&target));
+                // the next part of that dialog's answer; a part of an older dialog is never delivered
+                let request = self.request(target(self.dialog.response_dialog_id(dialog_id.as_deref())), device_state);
+                self.spawn_turn(request.answer_continue());
             }
             TextInputKind::Text(text) => {
-                let target = target(self.dialog.response_dialog_id(station_dialog_id));
-                let sent = match directives::text_command(&text) {
-                    TextCommand::Directive(directive) => {
-                        self.outbox.alice_response(&target, "", false, vec![*directive])
+                let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), device_state);
+                match directives::text_command(&text) {
+                    Some(command) => {
+                        self.tasks.spawn(request.answer_directives(vec![command]));
                     }
-                    TextCommand::NeedsMusic => {
-                        tracing::info!("text command '{text}' needs the music subsystem, which is not ported");
-                        self.outbox.empty_response(&target)
-                    }
-                    TextCommand::Unknown => {
+                    None => {
                         tracing::warn!("unknown text command '{text}'");
-                        self.outbox.empty_response(&target)
+                        report(self.outbox.empty_response(&request.target));
                     }
-                };
-                report(sent);
+                }
             }
-            TextInputKind::Music(request) => {
-                tracing::info!("music request ({request}) answered with nothing: the music subsystem is not ported");
-                report(self.outbox.empty_response(&target(self.dialog.response_dialog_id(station_dialog_id))));
+            TextInputKind::Music(action) => {
+                tracing::info!("music request: {action:?}");
+                let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), device_state);
+                let music = WrappedDirective { station: None, music: Some(action) };
+                self.tasks.spawn(request.answer_directives(vec![music]));
             }
             TextInputKind::Unknown(description) => {
                 // TS leaves such requests unanswered and the station waits 15 s for a timeout
@@ -341,8 +349,15 @@ impl Connection {
         }
     }
 
-    fn turn(&self, agent: Arc<Agent>, target: ResponseTarget) -> Turn {
-        Turn { context: self.context.clone(), outbox: self.outbox.clone(), dialog: self.dialog.clone(), agent, target }
+    fn request(&self, target: ResponseTarget, device_state: Option<Vec<u8>>) -> Request {
+        Request {
+            context: self.context.clone(),
+            outbox: self.outbox.clone(),
+            dialog: self.dialog.clone(),
+            device_id: self.device_id.clone(),
+            target,
+            device_state,
+        }
     }
 
     fn spawn_turn(&mut self, turn: impl Future<Output = ()> + Send + 'static) -> AbortHandle {

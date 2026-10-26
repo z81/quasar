@@ -13,6 +13,10 @@ struct RemoteFunctionCatalogEntry {
     #[serde(default)]
     arguments: HashMap<String, Value>,
     description: String,
+    /// Extension of the protocol (TS ignores the key): the LLM gets the
+    /// call's response body and continues the turn with it, as with MCP tools
+    #[serde(default, rename = "hasResponse")]
+    has_response: bool,
 }
 
 pub struct RemoteServers {
@@ -45,14 +49,15 @@ impl RemoteServers {
     }
 
     /// Calls the server that owns the given function name; `session_id` and
-    /// `metadata` (device state, speaker biometry) describe the dialog, as in TS
+    /// `metadata` (device state, speaker biometry) describe the dialog, as in
+    /// TS. Returns the response body (the result of a has-response function)
     pub async fn call_by_name(
         &self,
         name: &str,
         arguments: &Option<Value>,
         session_id: &str,
         metadata: &Value,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<String> {
         let owner = self
             .owners
             .read()
@@ -91,7 +96,7 @@ impl RemoteServers {
                                     "properties": entry.arguments,
                                 })),
                                 description: entry.description,
-                                kind: FunctionKind::Remote { has_response: false },
+                                kind: FunctionKind::Remote { has_response: entry.has_response },
                             },
                         );
                     }
@@ -102,7 +107,7 @@ impl RemoteServers {
         functions
     }
 
-    /// Calls a remote function (fire-and-forget in the protocol)
+    /// Calls a remote function; returns the response body
     pub async fn call_function(
         &self,
         url: &str,
@@ -110,7 +115,7 @@ impl RemoteServers {
         metadata: &Value,
         name: &str,
         arguments: &Value,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<String> {
         let response = self
             .client
             .patch(url)
@@ -120,7 +125,7 @@ impl RemoteServers {
         if !response.status().is_success() {
             anyhow::bail!("function server {url} answered {}", response.status());
         }
-        Ok(())
+        Ok(response.text().await?)
     }
 
     /// Collects the per-turn state entries of all state servers (queried

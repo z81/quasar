@@ -25,6 +25,8 @@ pub struct Config {
     pub processor_prompt_path: String,
     pub processor_state_prompt_path: String,
     pub processor_cache_size: u64,
+    /// the music service of the basic backend (TS BasicMusicBackend); none: no music
+    pub music_service_basic_url: Option<String>,
 }
 
 fn var_or(name: &str, default: &str) -> String {
@@ -73,6 +75,7 @@ impl Config {
                 Ok(0) | Err(_) => panic!("PROCESSOR_CACHE_SIZE must be a positive number"),
                 Ok(size) => size,
             },
+            music_service_basic_url: opt_var("MUSIC_SERVICE_BASIC_URL"),
         }
     }
 }

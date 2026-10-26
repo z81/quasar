@@ -93,8 +93,10 @@ fn chrono_like_now() -> String {
 }
 
 
-/// Station control functions exposed to the LLM as directives
-pub fn builtin_directive_functions() -> Functions {
+/// Station control functions exposed to the LLM as directives; the music
+/// ones only with a music service, so the LLM never claims to play music
+/// that cannot play (TS offers them always)
+pub fn builtin_directive_functions(music: bool) -> Functions {
     let mut functions: std::collections::HashMap<String, FunctionDefinition> = std::collections::HashMap::new();
     let mut add = |name: &str, description: &str, schema: Option<serde_json::Value>| {
         functions.insert(
@@ -106,8 +108,11 @@ pub fn builtin_directive_functions() -> Functions {
             },
         );
     };
-    // music play/next/previous need the music manager, which is not ported yet,
-    // so they are not offered to the LLM (it would claim success while nothing plays)
+    if music {
+        add("smart_speaker_player_play", "Starts music, or continues if was paused", None);
+        add("smart_speaker_player_next_track", "Switch to next track", None);
+        add("smart_speaker_player_previous_track", "Switch to previous track", None);
+    }
     add("smart_speaker_player_pause", "Pause music if it is playing", None);
     add("smart_speaker_player_rewind", "Rewind music if it is playing",
         Some(serde_json::json!({"type":"object","properties":{

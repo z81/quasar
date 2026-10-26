@@ -54,20 +54,27 @@ pub fn parse_llm_response(raw: &str) -> anyhow::Result<StructuredResponse> {
     let raw: RawResponse = serde_json::from_str(strip_code_fence(raw))?;
     Ok(StructuredResponse {
         can_cache: raw.can_cache.unwrap_or(false),
-        function_calls: raw
-            .function_calls
-            .unwrap_or_default()
-            .into_iter()
-            .map(|call| FunctionCall {
-                name: call.name,
-                arguments: call.args,
-                // an empty or unparsable schedule means "now", as in TS
-                schedule_ms: call.schedule.as_deref().map(parse_schedule).filter(|milliseconds| *milliseconds > 0),
-            })
-            .collect(),
+        function_calls: raw.function_calls.unwrap_or_default().into_iter().map(FunctionCall::from).collect(),
         require_more_input: raw.continue_dialog.unwrap_or(false),
         text: raw.text.unwrap_or_default(),
     })
+}
+
+/// The `function_calls` member on its own, while the rest of the answer still streams
+pub fn parse_function_calls(value: &Value) -> anyhow::Result<Vec<FunctionCall>> {
+    let calls: Vec<RawFunctionCall> = serde_json::from_value(value.clone())?;
+    Ok(calls.into_iter().map(FunctionCall::from).collect())
+}
+
+impl From<RawFunctionCall> for FunctionCall {
+    fn from(call: RawFunctionCall) -> Self {
+        Self {
+            name: call.name,
+            arguments: call.args,
+            // an empty or unparsable schedule means "now", as in TS
+            schedule_ms: call.schedule.as_deref().map(parse_schedule).filter(|milliseconds| *milliseconds > 0),
+        }
+    }
 }
 
 /// Some models wrap JSON into markdown fences despite the prompt

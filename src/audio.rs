@@ -5,17 +5,10 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use futures_util::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::{Child, Command};
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::Stream;
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 const FFMPEG_TIMEOUT_MS: u64 = 30_000;
-// generous upper bound for one spoken phrase; guards against a stalled
-// consumer keeping the ffmpeg process alive forever
-const FFMPEG_STREAM_LIFETIME_MS: u64 = 120_000;
 
 fn spawn_ffmpeg(arguments: &[String]) -> Result<Child> {
     Command::new("ffmpeg")
@@ -35,6 +28,10 @@ fn pcm_to_ogg_arguments(sample_rate: u32) -> Vec<String> {
     [
         "-f", "s16le", "-ar", &sample_rate.to_string(), "-ac", "1", "-i", "pipe:0",
         "-c:a", "libopus", "-b:a", "32k", "-application", "voip",
+        // one 20 ms Opus packet per OGG page: by default the muxer holds the
+        // audio pages of a short phrase until its PCM ends, so nothing could
+        // play while it is still being synthesized
+        "-page_duration", "20000",
         "-flush_packets", "1", "-f", "ogg", "pipe:1",
     ]
     .iter()
@@ -122,83 +119,29 @@ let result = tokio::time::timeout(Duration::from_millis(FFMPEG_TIMEOUT_MS), asyn
     Ok(output)
 }
 
-/// Streams signed 16-bit little-endian mono PCM into ffmpeg and yields
-/// OGG/Opus chunks as soon as they are encoded, so playback can start before
-/// synthesis finishes. Dropping the stream kills ffmpeg
-pub fn pcm_stream_to_ogg(
-    pcm: impl Stream<Item = Result<bytes::Bytes>> + Send + Unpin + 'static,
-    sample_rate: u32,
-) -> impl Stream<Item = Result<bytes::Bytes>> + Send + 'static {
-    let (sender, receiver) = mpsc::channel::<Result<bytes::Bytes>>(8);
+/// A PCM -> OGG/Opus encoder driven by its owner: signed 16-bit little-endian
+/// mono PCM goes into `input`, OGG pages come out of `output` as soon as they
+/// are encoded. Dropping the encoder kills ffmpeg
+pub struct OggEncoder {
+    child: Child,
+}
 
-    tokio::spawn(async move {
-        let mut child = match spawn_ffmpeg(&pcm_to_ogg_arguments(sample_rate)) {
-            Ok(child) => child,
-            Err(error) => {
-                let _ = sender.send(Err(error)).await;
-                return;
-            }
-        };
-        let mut stdin = child.stdin.take().expect("stdin piped");
-        let mut stdout = child.stdout.take().expect("stdout piped");
+impl OggEncoder {
+    pub fn spawn(sample_rate: u32) -> Result<(Self, ChildStdin, ChildStdout)> {
+        let mut child = spawn_ffmpeg(&pcm_to_ogg_arguments(sample_rate))?;
+        let input = child.stdin.take().context("ffmpeg stdin")?;
+        let output = child.stdout.take().context("ffmpeg stdout")?;
+        Ok((Self { child }, input, output))
+    }
 
-        let pump = async {
-            tokio::pin!(pcm);
-            while let Some(chunk) = pcm.next().await {
-                stdin.write_all(&chunk?).await?;
-            }
-            drop(stdin);
-            Ok::<(), anyhow::Error>(())
-        };
-        let collect = async {
-            let mut buffer = vec![0; 16_384];
-            loop {
-                let read = stdout.read(&mut buffer).await?;
-                if read == 0 {
-                    break;
-                }
-                let chunk = bytes::Bytes::copy_from_slice(&buffer[..read]);
-                if sender.send(Ok(chunk)).await.is_err() {
-                    // consumer dropped the stream; kill_on_drop cleans ffmpeg up
-                    bail!("transcode stream consumer dropped");
-                }
-            }
-            Ok::<(), anyhow::Error>(())
-        };
-
-        let result = tokio::time::timeout(
-            Duration::from_millis(FFMPEG_STREAM_LIFETIME_MS),
-            async {
-                let (pump_result, collect_result) = tokio::join!(pump, collect);
-                let status = child.wait().await.context("waiting for ffmpeg")?;
-                if !status.success() {
-                    bail!("ffmpeg transcode failed with status {status}");
-                }
-                pump_result?;
-                collect_result?;
-                Ok(())
-            },
-        )
-        .await;
-
-        match result {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                let _ = sender.send(Err(error)).await;
-                let _ = child.kill().await;
-            }
-            Err(_) => {
-                let _ = sender
-                    .send(Err(anyhow::anyhow!(
-                        "ffmpeg transcode timed out after {FFMPEG_STREAM_LIFETIME_MS}ms"
-                    )))
-                    .await;
-                let _ = child.kill().await;
-            }
+    /// Waits for ffmpeg to exit once its input is closed and its output drained
+    pub async fn finish(mut self) -> Result<()> {
+        let status = self.child.wait().await.context("waiting for ffmpeg")?;
+        if !status.success() {
+            bail!("ffmpeg transcode failed with status {status}");
         }
-    });
-
-    ReceiverStream::new(receiver)
+        Ok(())
+    }
 }
 
 #[cfg(test)]

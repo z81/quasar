@@ -13,6 +13,7 @@
 mod dialog;
 mod metadata;
 mod outbox;
+mod speech;
 mod text_input;
 
 use std::future::Future;

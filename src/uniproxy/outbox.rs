@@ -90,6 +90,19 @@ impl Outbox {
         should_listen: bool,
         directives: Vec<TDirective>,
     ) -> Result<()> {
+        self.voice_response(target, text, !text.is_empty(), should_listen, directives)
+    }
+
+    /// An AliceResponse that announces speech: `text` may be empty when the
+    /// words are not known yet (they follow in the TTS stream)
+    pub fn voice_response(
+        &self,
+        target: &ResponseTarget,
+        text: &str,
+        has_voice: bool,
+        should_listen: bool,
+        directives: Vec<TDirective>,
+    ) -> Result<()> {
         self.send_event(
             reply_header(&target.reference_message_id),
             Event::AliceResponse(TAliceResponseProto {
@@ -101,9 +114,9 @@ impl Outbox {
                     ..Default::default()
                 }),
                 voice_response: Some(TVoiceResponse {
-                    has_voice_response: !text.is_empty(),
+                    has_voice_response: has_voice,
                     should_listen,
-                    output_speech: (!text.is_empty()).then(|| TOutputSpeech { text: Some(text.to_string()) }),
+                    output_speech: has_voice.then(|| TOutputSpeech { text: Some(text.to_string()) }),
                 }),
                 response: Some(ResponseBody { directives, is_streaming: false, ..Default::default() }),
                 ..Default::default()

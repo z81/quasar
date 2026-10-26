@@ -5,14 +5,14 @@
 //! station's "continue" requests. A part that is not ready within 5 s is
 //! replaced by a continue stage 1 server_action, so the station never waits
 //! long for a response and comes back for the answer (stage 1 -> push of
-//! stage 2 -> stage 2 request -> the part, or another 5 s wait).
+//! stage 2 -> stage 2 request -> the part, or another 5 s wait). A part
+//! whose text still streams from the LLM goes out with its header; its text
+//! is spoken chunk by chunk as it arrives (see `speech`).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
-use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -20,17 +20,14 @@ use uuid::Uuid;
 
 use super::metadata::{self, BiometrySlot, InputMetadata};
 use super::outbox::{Outbox, ResponseTarget};
-use super::{UniproxyContext, report};
+use super::{UniproxyContext, report, speech};
 use crate::agent::protocol::FunctionCall;
-use crate::agent::{Agent, AgentOutput, AgentTurn, FunctionExecutor};
+use crate::agent::{Agent, AgentOutput, AgentTurn, ERROR_RESPONSE_TEXT, FunctionExecutor, OutputText};
 use crate::audio;
 use crate::directives::{self, WrappedDirective};
 use crate::prompt::system_state;
 use crate::proto::n_alice::n_alice_api::TDirective;
 use crate::remote::RemoteServers;
-
-/// Spoken when the LLM fails, instead of leaving the station silent (as in TS)
-const ERROR_RESPONSE_TEXT: &str = "Извините, что-то пошло не так. Попробуйте спросить ещё раз.";
 
 /// How long a request waits for an answer part before the station is asked
 /// to come back for it (TS MAX_WAIT)
@@ -168,6 +165,7 @@ fn new_agent(context: &UniproxyContext) -> Agent {
         system_prompt,
         state_prompt,
         context.cache.clone(),
+        context.config.tts_streaming,
     )
 }
 
@@ -227,7 +225,7 @@ impl Request {
     /// TextInput with text pushed through the API: spoken as is
     pub async fn answer_tts(self, text: String) {
         match self.outbox.alice_response(&self.target, &text, false, vec![directives::tts_play_placeholder(None)]) {
-            Ok(()) => speak(&self.context, &self.outbox, &text, &self.target.reference_message_id).await,
+            Ok(()) => speech::speak_text(&self.context, &self.outbox, &text, &self.target.reference_message_id).await,
             Err(error) => tracing::warn!("{error:#}"),
         }
     }
@@ -269,7 +267,7 @@ impl Request {
                 directives: Vec::new(),
                 finished: true,
                 should_listen: false,
-                text: ERROR_RESPONSE_TEXT.to_string(),
+                text: OutputText::Complete(ERROR_RESPONSE_TEXT.to_string()),
             });
         }
     }
@@ -298,32 +296,50 @@ impl Request {
     /// spoken (or at once when there is nothing to say); the last part
     /// settles the dialog before it is spoken (as TS closes its session
     /// first), so a voice input barging in continues the dialog only if the
-    /// answer asked for that
+    /// answer asked for that.
+    ///
+    /// A part whose text still streams goes out before its words are known:
+    /// a voice response with an empty OutputSpeech text (the shape TS sends
+    /// for an empty answer), the words follow in its TTS stream and the full
+    /// text in the log; the station plays the stream via the placeholder
     async fn deliver(&self, part: AgentOutput) {
         let wrapped = part.directives.iter().filter_map(directives::to_wrapped_directive).collect();
         let mut station_directives = self.resolve(wrapped).await;
+        let (shown_text, speaks) = match &part.text {
+            OutputText::Complete(text) => (text.as_str(), !text.is_empty()),
+            OutputText::Streaming(_) => ("", true),
+        };
         if part.finished {
-            if !part.text.is_empty() {
+            if speaks {
                 station_directives.push(directives::tts_play_placeholder(None));
             }
         } else {
             let stage1 = directives::continue_session_stage1_frame(&self.target.dialog_id);
-            station_directives.push(if part.text.is_empty() {
-                directives::mm_semantic_frame(&stage1)
-            } else {
+            station_directives.push(if speaks {
                 directives::tts_play_placeholder(Some(&stage1))
+            } else {
+                directives::mm_semantic_frame(&stage1)
             });
         }
 
         let should_listen = part.finished && part.should_listen;
-        if let Err(error) = self.outbox.alice_response(&self.target, &part.text, should_listen, station_directives) {
+        let sent = self.outbox.voice_response(&self.target, shown_text, speaks, should_listen, station_directives);
+        if let Err(error) = sent {
             tracing::warn!("answer not delivered: {error:#}");
             return;
         }
         if part.finished {
             self.dialog.finish_turn(&self.target.dialog_id, part.should_listen);
         }
-        speak(&self.context, &self.outbox, &part.text, &self.target.reference_message_id).await;
+        let reference_message_id = &self.target.reference_message_id;
+        match part.text {
+            OutputText::Complete(text) => {
+                speech::speak_text(&self.context, &self.outbox, &text, reference_message_id).await
+            }
+            OutputText::Streaming(chunks) => {
+                speech::speak(&self.context, &self.outbox, chunks, reference_message_id).await
+            }
+        }
     }
 
     /// Station directives, with the music actions turned into theirs (TS processWrappedDirectives)
@@ -359,41 +375,6 @@ async fn transcribe(context: &UniproxyContext, ogg: &[u8]) -> String {
             String::new()
         }
     }
-}
-
-/// Synthesizes `text` and streams the audio to the station as one
-/// LazyTtsStreaming OGG/Opus stream; empty text is not spoken at all
-async fn speak(context: &UniproxyContext, outbox: &Outbox, text: &str, reference_message_id: &str) {
-    if text.is_empty() {
-        return;
-    }
-    if let Err(error) = speak_inner(context, outbox, text, reference_message_id).await {
-        tracing::error!("TTS streaming failed: {error:#}");
-    }
-}
-
-async fn speak_inner(context: &UniproxyContext, outbox: &Outbox, text: &str, reference_message_id: &str) -> Result<()> {
-    // request synthesis first: if it fails, no stream gets announced to the station
-    let pcm = context
-        .openrouter
-        .speech_stream(
-            &context.config.tts_model,
-            &context.config.tts_voice,
-            &context.config.tts_instructions,
-            context.config.tts_speed,
-            text,
-        )
-        .await
-        .context("speech synthesis request failed")?;
-
-    // once announced, the stream is closed in any case (end, error, aborted turn) by the guard
-    let stream = outbox.open_tts_stream(reference_message_id)?;
-    let ogg_stream = audio::pcm_stream_to_ogg(pcm, context.config.tts_pcm_sample_rate);
-    tokio::pin!(ogg_stream);
-    while let Some(chunk) = ogg_stream.next().await {
-        stream.send_audio(&chunk.context("tts transcode failed")?)?;
-    }
-    Ok(())
 }
 
 /// The per-turn state shown to the LLM: system facts, the speaker, remote state

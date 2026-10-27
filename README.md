@@ -1,45 +1,265 @@
-# alice-server (Rust)
+# alice-server
 
-Rust-переписывание [alice-server](../alice-server) — эмулятора backend-сервера Яндекс.Станции с голосовым ассистентом, у которого все AI-вызовы (STT, TTS, диалоговый «мозг») идут через один токен OpenRouter.
+Свой сервер для Яндекс.Станции (Quasar) с голосовым ассистентом. Он эмулирует облако Яндекса, с которым общается прошивка станции, а ответы пользователю готовит LLM через [OpenRouter](https://openrouter.ai). Речь распознаётся и синтезируется через OpenRouter или локально: GigaAM, Piper, Vosk.
 
-## Статус: фазы 1–3 — портирование завершено
+Сервер объединяет [quasar-server](https://github.com/z81/quasar-server) и логику диалогового процессора [v3rt3p/processor](https://github.com/v3rt3p/processor) и написан на Rust.
 
-**Готово:**
-- protobuf-кодген из оригинальных схем quasar (protox + prost, без системного protoc) — `TClientMessage`/`TServerMessage` и вся ветка NAlice
-- uni.ws на axum: AAPI-фреймы (`AAPI` + protobuf / 4-байтовый stream id + аудио), VoiceInput → сбор аудио → StreamControl close → конвейер ответа
-- OpenRouter-клиент: `/audio/transcriptions` (JSON + base64 WAV), `/audio/speech` (байтовый стрим PCM), `/chat/completions` (SSE-стриминг дельт)
-- ffmpeg: OGG→WAV для STT и потоковый PCM→OGG/Opus для TTS (с таймаутами жизни процесса)
-- агент: JSON-протокол LLM (`function_calls` с `schedule`, `text`, `continue_dialog`, `can_cache`), агентский цикл с возвратом результатов функций, LRU-кэш первого хода, handlebars-промпты (те же файлы, что в TS-версии)
-- ответ станции: AsrResult, AliceResponse, TtsSpeak + потоковое аудио, StreamControl
+## Возможности
 
-**Фаза 2 (готово):** эмуляция доменов — `quasar.yandex.net` (register, check_updates, update_device_state, glagol/token + check_token v1/v2 на HS256-JWT, glagol/device_list, get_sync_info, push_subscribe), `oauth.yandex.ru/token`, `clck.yandex.net`, `rpc.alice.yandex.net` (пустой protobuf), `scbh` (generate_204), заглушки startup/appmetrica; реестр станций in-memory с самоподписанными сертификатами (rcgen). Хранилище PostgreSQL — фаза 3.
+- **Станция работает без облака Яндекса.** Сервер отвечает за `uniproxy.alice.yandex.net` (голосовой канал uni.ws), `quasar.yandex.net` (регистрация, конфиг станции, glagol-токены, обновления), `oauth.yandex.ru`, `mobileproxy.passport.yandex.net`, `rpc.alice.yandex.net`, `clck.yandex.net`, `scbh.yandex.net` и заглушки метрик.
+- **Голосовой диалог.** Речь со станции распознаётся, LLM пишет ответ, и станция начинает говорить, пока модель ещё дописывает текст.
+- **Распознавание речи:**
+  - OpenRouter (Whisper);
+  - GigaAM v3 через [gigastt](https://github.com/ekhodzitsky/gigastt). Он распознаёт речь, пока станция записывает, и сам замечает конец фразы, так что станция перестаёт слушать сразу после паузы, а не через 5 секунд.
+- **Синтез речи:** OpenRouter, [Piper](https://github.com/OHF-Voice/piper1-gpl) или [Vosk TTS](https://github.com/alphacep/vosk-tts). Образы локальных синтезаторов лежат в `docker/`. Если локальный синтезатор не ответил, фразу озвучивает OpenRouter.
+- **Функции:**
+  - управление станцией: громкость, пауза, перемотка, Bluetooth, звуки умного дома;
+  - музыка из внешнего сервиса;
+  - свои HTTP-серверы функций и состояния;
+  - отложенные вызовы («выключи свет через пять минут»);
+  - продолжение диалога без слова «Алиса».
+- **Время по часовому поясу станции.** Станция присылает свою зону с каждым запросом.
+- **API управления с документацией OpenAPI:**
+  - список станций и их конфиги;
+  - события для ассистента;
+  - произнесение фраз;
+  - сырые директивы.
+- **Хранилище станций.** Станции хранятся в PostgreSQL. Если база недоступна, они хранятся в памяти до перезапуска.
 
-**Фаза 3 (готово):** PostgreSQL-хранилище станций (с фолбэком in-memory), management-API на `API_PORT` (`GET /devices`, `POST /devices/{duid}/push` — событие в агента, `POST /devices/{duid}/push-raw` — прямая озвучка; `duid=all` для всех), реестр live uni.ws-соединений, updates-конфиг (`ALLOW_UPDATES` + `updates-config.yml`), remote function/state-серверы (HTTP-протокол processor; `PROCESSOR_FUNCTION_SERVER_URLS` / `PROCESSOR_STATE_SERVER_URLS`), Docker-образ.
+## Требования
 
-**Не портировано (осознанно):** MCP-клиент (rmcp) — добавим при необходимости; точная форма AliceResponse/`get_sync_info` требует сверски на живой станции — на текущий момент проверено на протокольном уровне, не на прошивке.
-
-> До окончания фазы 2 станцию подключать к этой версии нельзя — используйте TS-версию (`../alice-server`).
+- **Станция с root-доступом,** в конфиге которой адреса Яндекса заменены на адрес этого сервера (см. [Подключение станции](#подключение-станции)). Проверено на Яндекс.Станции Миди с прошивкой 0.369.
+- **Токен OpenRouter** ([openrouter.ai/keys](https://openrouter.ai/settings/keys)).
+- **Docker,** где ffmpeg уже есть в образе. Или Rust и ffmpeg, чтобы собрать сервер из исходников.
+- **По желанию:**
+  - PostgreSQL;
+  - gigastt для распознавания;
+  - Piper или Vosk для синтеза.
 
 ## Запуск
 
+В Docker:
+
 ```bash
-cargo build --release
+docker build -t alice-server .
+docker run -d --name alice-server -p 31115:31115 -p 31116:31116 \
+  -e OPENROUTER_API_KEY=sk-or-... -e TZ=Europe/Moscow \
+  alice-server
+```
+
+Из исходников (нужен `ffmpeg` в `PATH`):
+
+```bash
 OPENROUTER_API_KEY=sk-or-... cargo run --release
 ```
 
-Енвы те же, что в TS-версии (`PORT`, `OPENROUTER_*`, `PROCESSOR_*`, см. README TS-версии); конфиг — `.env.local` / `.env`.
+Переменные окружения можно положить в `.env.local` или `.env` в рабочей папке сервера.
 
-## Тесты
+## Подключение станции
+
+Домены Яндекса сервер отдаёт как префиксы пути на порту `PORT` (по умолчанию `31115`). В конфиге станции (`quasar.cfg`) адрес каждого домена заменяется на адрес сервера с именем домена в начале пути, например:
+
+| Было | Стало |
+|---|---|
+| `wss://uniproxy.alice.yandex.net/uni.ws` | `ws://192.168.1.10:31115/uniproxy.alice.yandex.net/uni.ws` |
+| `https://quasar.yandex.net` | `http://192.168.1.10:31115/quasar.yandex.net` |
+
+Станция регистрируется сама при первых запросах к `quasar.yandex.net` и появляется в `GET /devices` API управления.
+
+## Настройка
+
+### Основное
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `OPENROUTER_API_KEY` | — | **Обязательна.** Токен OpenRouter |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | Любой OpenRouter-совместимый API |
+| `OPENROUTER_TIMEOUT_MS` | `10000` | Таймаут запросов к OpenRouter |
+| `PORT` | `31115` | Порт для станции: домены Яндекса и uni.ws |
+| `API_PORT` | `31116` | Порт API управления |
+| `POSTGRES_URL` | `postgres://quasar:quasar@localhost/quasar` | PostgreSQL. Если база недоступна, станции хранятся в памяти |
+| `TZ` | — | Часовой пояс, если станция не прислала свой |
+| `RUST_LOG` | `info` | Подробность логов |
+
+### Диалог
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `OPENROUTER_PROCESSOR_MODEL` | `google/gemini-3.8-flash` | Модель, которая отвечает пользователю |
+| `OPENROUTER_PROCESSOR_REASONING` | — | Глубина рассуждений: `none`, `minimal`, `low`, `medium`, `high`. Пустое значение оставляет настройку модели по умолчанию. Если модель не принимает параметр, сервер перестаёт его отправлять |
+| `PROCESSOR_PROMPT_TEMPLATE_PATH` | `prompt.handlebars` | Шаблон системного промпта |
+| `PROCESSOR_PROMPT_STATE_TEMPLATE_PATH` | `prompt-state.handlebars` | Шаблон сообщения о состоянии |
+| `PROCESSOR_CACHE_SIZE` | `1000` | Сколько ответов помнить в кэше. `0` выключает кэш |
+| `PROCESSOR_FUNCTION_SERVER_URLS` | — | [Серверы функций](#свои-функции-и-состояние) через запятую |
+| `PROCESSOR_STATE_SERVER_URLS` | — | [Серверы состояния](#свои-функции-и-состояние) через запятую |
+| `MUSIC_SERVICE_BASIC_URL` | — | [Музыкальный сервис](#музыка). Без него музыкальных функций нет |
+
+### Распознавание речи
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `STT_PROVIDER` | `openrouter` | `openrouter`: Whisper после конца фразы. `gigaam`: потоково через gigastt |
+| `OPENROUTER_STT_MODEL` | `openai/whisper-large-v3` | Модель распознавания OpenRouter |
+| `OPENROUTER_STT_LANGUAGE` | `ru` | Язык речи. Пустое значение — модель определяет язык сама |
+| `GIGASTT_URL` | — | Адрес gigastt, например `http://gigastt:9876`. Обязателен при `STT_PROVIDER=gigaam` |
+| `STT_END_OF_SPEECH` | `server` с gigastt, иначе `station` | Кто решает, что фраза закончилась: сервер по паузе или станция по своему таймауту |
+| `GIGASTT_MIN_SILENCE_MS` | `800` | Сколько тишины считать концом фразы. Работает, если у gigastt включён VAD |
+
+### Синтез речи
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `TTS_PROVIDER` | `openrouter` | `openrouter`, либо `piper` для локального сервера Piper или Vosk |
+| `OPENROUTER_TTS_MODEL` | `google/gemini-3.8-flash-lite-tts` | Модель синтеза OpenRouter |
+| `OPENROUTER_TTS_VOICE` | `Kore` | Голос. Он должен быть у выбранной модели |
+| `OPENROUTER_TTS_FORMAT` | `pcm` | `pcm` или `mp3`. `mp3` нужен для моделей, которые не отдают PCM |
+| `OPENROUTER_TTS_PCM_SAMPLE_RATE` | `24000` | Частота PCM, которую отдаёт модель |
+| `OPENROUTER_TTS_SPEED` | `1` | Скорость речи |
+| `OPENROUTER_TTS_INSTRUCTIONS` | — | Инструкции для голоса, если модель их понимает |
+| `OPENROUTER_TTS_STREAMING` | `true` | Говорить, пока LLM пишет ответ. `false`: ждать весь текст |
+| `PIPER_URL` | — | Адрес сервера Piper или Vosk, например `http://piper:5000`. Обязателен при `TTS_PROVIDER=piper` |
+| `PIPER_VOICE` | — | Голос Piper. По умолчанию — голос, с которым запущен сервер |
+| `PIPER_SPEAKER`, `PIPER_SPEAKER_ID` | — | Голос многоголосой модели по имени или номеру |
+| `PIPER_LENGTH_SCALE` | из `OPENROUTER_TTS_SPEED` | Темп: меньше 1 — быстрее, больше 1 — медленнее |
+| `PIPER_FALLBACK` | `openrouter` | Кто озвучит фразу, если локальный синтезатор не ответил: `openrouter` или `none` |
+
+### Прочее
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `GLAGOL_JWT_KEY` | новый при каждом запуске | Ключ подписи glagol-токенов. Задайте, чтобы токены переживали перезапуск |
+| `ALLOW_UPDATES` | `false` | Разрешить станции обновлять прошивку |
+| `UPDATES_CONFIG_PATH` | — | Список разрешённых версий прошивки (пример: `updates-config.yml`). Обновления приходят, только если заданы обе переменные |
+
+## Распознавание через GigaAM
+
+[gigastt](https://github.com/ekhodzitsky/gigastt) — сервер распознавания на модели GigaAM v3 от Сбера. Он слушает речь, пока станция записывает, поэтому текст готов почти сразу после конца фразы. С VAD он сам определяет, что пользователь замолчал.
 
 ```bash
-cargo test   # протокол агента, schedule-парсер, ffmpeg OGG→WAV roundtrip
+docker run -d --name gigastt -p 9876:9876 -e GIGASTT_VAD=true \
+  -v gigastt-models:/home/gigastt/.gigastt/models \
+  ghcr.io/ekhodzitsky/gigastt:2.18.0
 ```
 
-## Известные упрощения фазы 1
+В alice-server:
 
-- директивы станции отправляются как `TDirective{name, type: client_action}` без protobuf-`payload` (маппинг аргументов — фаза 2);
-- функции исполняются после завершения стрима LLM, а не в момент стриминга (как в TS);
-- AliceResponse содержит минимальный набор полей — полную форму нужно сверить на живой станции.
+```
+STT_PROVIDER=gigaam
+GIGASTT_URL=http://gigastt:9876
+```
+
+Без `GIGASTT_VAD=true` gigastt тоже замечает конец фразы, но грубее. Если gigastt недоступен или вернул ошибку, фразу распознаёт OpenRouter.
+
+## Локальный синтез речи
+
+Piper и Vosk работают на процессоре и отвечают по одному и тому же HTTP-протоколу (`POST /synthesize` возвращает WAV). Поэтому для обоих в alice-server задаётся одно и то же:
+
+```
+TTS_PROVIDER=piper
+PIPER_URL=http://piper:5000
+```
+
+Оба образа собираются из корня репозитория и при первом запуске скачивают модель в том `/data`.
+
+### Piper
+
+Самый быстрый вариант: фраза синтезируется примерно за 0,1 с.
+
+```bash
+docker build -f docker/piper/Dockerfile -t piper .
+docker run -d --name piper -p 5000:5000 -e PIPER_VOICE=ru_RU-irina-medium -v piper-data:/data piper
+```
+
+Русские голоса:
+- `ru_RU-irina-medium` — женский;
+- `ru_RU-dmitri-medium`, `ru_RU-denis-medium`, `ru_RU-ruslan-medium` — мужские.
+
+Ударения Piper ставит по словарю espeak-ng и иногда ошибается.
+
+### Vosk
+
+Ударения Vosk берёт из большого словаря, и голоса звучат естественнее, чем у Piper. Зато он медленнее: 0,3–0,8 с на фразу в четыре потока на Ryzen 7 7735HS. Занимает около 2,3 ГБ памяти. Модель `vosk-model-tts-ru-0.9-multi` весит около 750 МБ.
+
+```bash
+docker build -f docker/vosk/Dockerfile -t vosk-tts .
+docker run -d --name vosk-tts -p 5000:5000 -e VOSK_SPEAKER=female_2 -v vosk-data:/data vosk-tts
+```
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `VOSK_SPEAKER` | `female_2` | Голос: `female_0`, `female_1`, `female_2`, `male_0`, `male_1` |
+| `VOSK_THREADS` | `4` | Потоки процессора на один синтез. Больше потоков не значит быстрее: на виртуальной машине с 14 ядрами, где работают и другие сервисы, 14 потоков синтезировали вдвое медленнее четырёх |
+| `VOSK_MODEL` | `vosk-model-tts-ru-0.9-multi` | Модель с [сайта Vosk](https://alphacephei.com/vosk/models) |
+
+Голос можно выбрать и со стороны alice-server через `PIPER_SPEAKER=female_1`.
+
+## Функции
+
+LLM отвечает JSON-объектом: вызовы функций, флаг продолжения диалога, разрешение кэшировать ответ и текст. Формат описан в `prompt.handlebars`.
+
+Встроенные функции управляют станцией:
+- пауза и перемотка;
+- громкость от 1 до 10, громче и тише;
+- Bluetooth;
+- звуки включения и выключения умного дома.
+
+Воспроизведение и переключение треков появляются, если задан музыкальный сервис.
+
+Любой вызов можно отложить: модель добавляет к нему `"schedule": "5m"`. Так работает «выключи свет через пять минут» и «включи музыку на полчаса».
+
+### Свои функции и состояние
+
+**Сервер функций** (`PROCESSOR_FUNCTION_SERVER_URLS`) работает так:
+- на `GET` отдаёт каталог функций:
+  ```json
+  { "turn_on_light": { "description": "Включает свет", "arguments": { "room": { "type": "string" } }, "hasResponse": false } }
+  ```
+- вызов приходит как `PATCH` с телом `{"name", "arguments", "metadata", "sessionId"}`;
+- если у функции `"hasResponse": true`, тело ответа передаётся модели, и она отвечает пользователю по нему. Так работают вопросы вроде «какая погода». Такие функции нельзя отложить.
+
+Каталоги читаются при запуске alice-server, поэтому серверы функций должны быть уже доступны.
+
+**Сервер состояния** (`PROCESSOR_STATE_SERVER_URLS`) на `POST {"metadata", "sessionId"}` отдаёт словарь `{"ключ": {"description": "...", "value": "..."}}`. Модель видит его в каждом ходе вместе с датой и временем станции.
+
+### Музыка
+
+`MUSIC_SERVICE_BASIC_URL` — сервис с очередью треков для каждой станции:
+- `GET <url>/queue/<станция>/current` отдаёт текущий трек в виде `{"url": "...", "format": "mp3"}`;
+- `POST <url>/queue/<станция>/forward` и `POST <url>/queue/<станция>/backward` переключают трек.
+
+## Промпты
+
+`prompt.handlebars` — системный промпт: кто такая Алиса, как ей говорить и как вызывать функции. `prompt-state.handlebars` — сообщение с текущим состоянием. Файлы перечитываются при каждом ответе, поэтому правки действуют сразу, без перезапуска. В Docker они лежат в `/app`, а свои версии можно примонтировать поверх.
+
+Чтобы станция начинала говорить до конца ответа LLM, поле `"text"` в ответе модели должно идти последним, как в примерах промпта.
+
+## API управления
+
+Работает на порту `API_PORT` (по умолчанию `31116`). Документация: `/openapi`, схема: `/openapi/json`.
+
+| Запрос | Что делает |
+|---|---|
+| `GET /devices` | Список станций |
+| `PATCH /devices/{duid}` | Меняет имя и конфиг станции (`{"name", "quasarConfig"}`); станция перечитывает конфиг |
+| `POST /devices/{duid}/push` | Событие для ассистента: `{"eventText": "..."}`. Модель сама решает, что сказать или сделать |
+| `POST /devices/{duid}/push-raw` | Произнести текст как есть: `{"eventText": "..."}` |
+| `POST /devices/{duid}/push-directive` | Сырая директива станции (`TDirective`) |
+
+Вместо `{duid}` можно указать `all`, тогда запрос уйдёт всем подключённым станциям:
+
+```bash
+curl -X POST http://localhost:31116/devices/all/push-raw \
+  -H 'content-type: application/json' -d '{"eventText": "Ужин готов!"}'
+```
+
+## Разработка
+
+```bash
+cargo build
+cargo test
+```
+
+Схемы protobuf из `protos/` компилируются при сборке (protox и prost), системный `protoc` не нужен.
 
 ## Лицензия
 

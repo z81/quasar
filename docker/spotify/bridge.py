@@ -411,6 +411,7 @@ class Bridge:
             elif event in ("stopped", "session_disconnected"):
                 self.state = "stopped"
             state = self.state
+            self.lock.notify_all()
         log.info("librespot event %s", event)
         if event == "playing" and not self.listening():
             # the station plays the stream; a push that is still connecting is not repeated
@@ -471,7 +472,10 @@ class Bridge:
     def play(self, query, kind):
         if not query:
             if self.api:
-                self.api.call("resume")
+                self.api.call("take_over")
+                # librespot cannot load some contexts, a Spotify radio among them, and stays paused on their track
+                if not self.wait_playing(5):
+                    self.api.call("resume")
             else:
                 self.station.play()
             return "ok: продолжаю"
@@ -482,6 +486,10 @@ class Bridge:
             return f"error: в Spotify ничего не нашлось по запросу «{query}»"
         self.api.call("play", found["uri"], kind)
         return f"ok: включаю {found['title']}"
+
+    def wait_playing(self, seconds):
+        with self.lock:
+            return self.lock.wait_for(lambda: self.state == "playing", seconds)
 
     def now_playing(self):
         with self.lock:
@@ -578,9 +586,11 @@ class SpotifyApi:
         if action == "play":
             body = {"uris": [uri]} if kind == "track" else {"context_uri": uri}
             self.request("PUT", "/me/player/play", device, body)
-        elif action == "resume":
-            # a transfer: a play command reaches a speaker that is not the active device with nothing to resume
+        elif action == "take_over":
+            # a play command reaches a speaker that is not the active device with nothing to resume
             self.request("PUT", "/me/player", body={"device_ids": [device["device_id"]], "play": True})
+        elif action == "resume":
+            self.request("PUT", "/me/player/play", device)
         elif action == "pause":
             self.request("PUT", "/me/player/pause", device)
         elif action == "next":

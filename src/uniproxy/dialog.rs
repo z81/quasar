@@ -241,6 +241,12 @@ impl Request {
         self.answer_with_agent(&agent, AgentTurn { external_event: true, text: event }, &metadata).await;
     }
 
+    /// TextInput with text pushed through the API as if the user said it
+    pub async fn answer_utterance(self, agent: Arc<Agent>, text: String) {
+        let metadata = InputMetadata::new(self.device_state.as_deref(), None);
+        self.answer_with_agent(&agent, AgentTurn { external_event: false, text }, &metadata).await;
+    }
+
     /// Continue stage 2: the next part of the dialog's answer
     pub async fn answer_continue(self) {
         match self.dialog.answers(&self.target.dialog_id) {

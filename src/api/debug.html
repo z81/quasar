@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Алиса: отладка</title>
+<style>
+  :root { --bg: #ffffff; --fg: #1d1d1f; --muted: #6e6e73; --line: #d2d2d7; --accent: #6b4ce6; --accent-fg: #ffffff; --ok: #1e8e3e; --error: #d93025; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161618; --fg: #f2f2f7; --muted: #a1a1a6; --line: #3a3a3c; --accent: #8e75ff; --accent-fg: #ffffff; --ok: #5bd17f; --error: #ff6b5e; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, -apple-system, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  label { display: block; color: var(--muted); font-size: 14px; margin: 12px 0 4px; }
+  select, input { width: 100%; padding: 10px 12px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  button { padding: 10px 16px; font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .hint { color: var(--muted); font-size: 14px; margin-top: 8px; }
+  ol { list-style: none; padding: 0; margin: 24px 0 0; }
+  li { border-top: 1px solid var(--line); padding: 8px 0; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .ok { color: var(--ok); }
+  .error { color: var(--error); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Алиса: отладка</h1>
+  <label for="station">Станция</label>
+  <select id="station"></select>
+  <label for="text">Текст</label>
+  <input id="text" autocomplete="off" placeholder="например: какая сейчас погода">
+  <div class="buttons">
+    <button class="primary" data-path="push-text" data-mode="как голос">Сказать Алисе</button>
+    <button data-path="push-raw" data-mode="произнести">Произнести</button>
+    <button data-path="push" data-mode="событие">Событие</button>
+  </div>
+  <p class="hint">«Сказать Алисе» — как будто это распознанная речь: Алиса ответит голосом и выполнит команды. Enter — то же самое. «Произнести» — станция скажет текст как есть. «Событие» — текст уйдёт ассистенту как внешнее событие.</p>
+  <ol id="log"></ol>
+</main>
+<script>
+const station = document.getElementById('station');
+const input = document.getElementById('text');
+const log = document.getElementById('log');
+const buttons = [...document.querySelectorAll('button[data-path]')];
+
+async function loadStations() {
+  try {
+    const devices = await (await fetch('devices')).json();
+    station.innerHTML = '';
+    for (const device of devices) station.add(new Option(`${device.name || device.duid} (${device.duid})`, device.duid));
+    station.add(new Option('Все станции', 'all'));
+  } catch (error) {
+    station.add(new Option('all', 'all'));
+    addEntry('загрузка станций', '', `ошибка: ${error}`, false);
+  }
+}
+
+function addEntry(mode, text, result, ok) {
+  const item = document.createElement('li');
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = `${new Date().toLocaleTimeString()} · ${mode} · `;
+  const status = document.createElement('span');
+  status.className = ok ? 'ok' : 'error';
+  status.textContent = result;
+  meta.append(status);
+  const body = document.createElement('div');
+  body.textContent = text;
+  item.append(meta, body);
+  log.prepend(item);
+}
+
+async function send(button) {
+  const text = input.value.trim();
+  if (!text) return input.focus();
+  buttons.forEach(each => each.disabled = true);
+  try {
+    const response = await fetch(`devices/${encodeURIComponent(station.value)}/${button.dataset.path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ eventText: text })
+    });
+    addEntry(button.dataset.mode, text, response.ok ? 'отправлено' : `ошибка ${response.status}: ${await response.text()}`, response.ok);
+    if (response.ok) input.value = '';
+  } catch (error) {
+    addEntry(button.dataset.mode, text, `ошибка: ${error}`, false);
+  } finally {
+    buttons.forEach(each => each.disabled = false);
+    input.focus();
+  }
+}
+
+buttons.forEach(button => button.addEventListener('click', () => send(button)));
+input.addEventListener('keydown', event => { if (event.key === 'Enter') send(buttons[0]); });
+loadStations();
+input.focus();
+</script>
+</body>
+</html>

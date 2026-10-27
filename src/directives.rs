@@ -165,6 +165,11 @@ pub fn external_event_frame(event: &str) -> Value {
     json!({ "typed_semantic_frame": { "external_event_semantic_frame": { "event": event } } })
 }
 
+/// Text the agent answers as if the user said it (no TS counterpart)
+pub fn utterance_frame(text: &str) -> Value {
+    json!({ "typed_semantic_frame": { "user_utterance_semantic_frame": { "text": text } } })
+}
+
 /// Text to speak as is (TS `ttsSemanticFrame`)
 pub fn tts_frame(text: &str) -> Value {
     json!({ "typed_semantic_frame": { "tts_semantic_frame": { "text": text } } })

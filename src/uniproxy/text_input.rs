@@ -17,6 +17,9 @@ pub enum TextInputKind {
     ExternalEvent(String),
     /// Text pushed through the API: spoken as is
     Tts(String),
+    /// Text pushed through the API as if the user said it: answered by the
+    /// dialog agent like a voice input
+    Utterance(String),
     /// Step 1 of the TS keep-alive handshake: answered with a push of step 2
     ContinueStage1 {
         dialog_id: Option<String>,
@@ -63,6 +66,8 @@ fn classify_payload(payload: &Value) -> TextInputKind {
         TextInputKind::ExternalEvent(event)
     } else if let Some(text) = text("/typed_semantic_frame/tts_semantic_frame/text") {
         TextInputKind::Tts(text)
+    } else if let Some(text) = text("/typed_semantic_frame/user_utterance_semantic_frame/text") {
+        TextInputKind::Utterance(text)
     } else if frame("continue_session_stage1_semantic_frame") {
         TextInputKind::ContinueStage1 {
             dialog_id: text("/typed_semantic_frame/continue_session_stage1_semantic_frame/dialog_id"),

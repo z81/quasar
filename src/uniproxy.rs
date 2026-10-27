@@ -221,7 +221,11 @@ impl Connection {
             StationCommand::Speak { text } if !text.trim().is_empty() => {
                 vec![directives::mm_semantic_frame(&directives::tts_frame(&text))]
             }
-            StationCommand::Event { .. } | StationCommand::Speak { .. } => {
+            // the station sends the frame back as a TextInput, answered like a recognized utterance
+            StationCommand::Utterance { text } if !text.trim().is_empty() => {
+                vec![directives::mm_semantic_frame(&directives::utterance_frame(&text))]
+            }
+            StationCommand::Event { .. } | StationCommand::Speak { .. } | StationCommand::Utterance { .. } => {
                 tracing::warn!("not pushing an empty text to the station");
                 return;
             }
@@ -436,6 +440,12 @@ impl Connection {
                 let (dialog_id, agent) = self.dialog.for_event(&self.context, station_dialog_id, &zone);
                 let request = self.request(target(dialog_id), device_state, zone);
                 self.spawn_turn(request.answer_event(agent, event));
+            }
+            TextInputKind::Utterance(text) => {
+                tracing::info!("typed utterance: '{text}'");
+                let (dialog_id, agent) = self.dialog.for_voice_input(&self.context, station_dialog_id, &zone);
+                let request = self.request(target(dialog_id), device_state, zone);
+                self.spawn_turn(request.answer_utterance(agent, text));
             }
             TextInputKind::Tts(text) => {
                 let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), device_state, zone);

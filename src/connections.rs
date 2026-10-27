@@ -14,6 +14,9 @@ pub enum StationCommand {
     Event { text: String },
     /// Text is spoken directly, bypassing the agent
     Speak { text: String },
+    /// Text answered as if the user said it: the agent's answer is spoken and
+    /// its functions run, as for a recognized utterance
+    Utterance { text: String },
     /// Directives delivered to the station in a Push event (TS sendPush),
     /// e.g. push_update_config after a config change or an API push-directive
     Directives { directives: Vec<crate::proto::n_alice::n_alice_api::TDirective> },

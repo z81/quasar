@@ -101,6 +101,15 @@ fn build() -> Value {
                     empty.clone(),
                 ),
             },
+            "/devices/{duid}/push-text": {
+                "post": operation(
+                    "Push text answered as if the user said it",
+                    "postDevicesByDuidPush-text",
+                    Some(DUID_OR_ALL),
+                    Some(request_body(event_text_schema("Text answered as if the user said it"), None)),
+                    empty.clone(),
+                ),
+            },
             "/devices/{duid}/push-directive": {
                 "post": operation(
                     "Push directive to the device",

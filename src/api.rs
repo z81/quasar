@@ -11,7 +11,7 @@ use std::sync::Arc;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde_json::{Value, json};
@@ -32,7 +32,9 @@ pub fn router(state: Arc<ApiState>) -> Router {
         .route("/devices/{duid}", patch(update_device))
         .route("/devices/{duid}/push", post(push_event))
         .route("/devices/{duid}/push-raw", post(push_raw))
+        .route("/devices/{duid}/push-text", post(push_text))
         .route("/devices/{duid}/push-directive", post(push_directive))
+        .route("/debug", get(|| async { Html(include_str!("api/debug.html")) }))
         .route("/openapi", get(openapi::page))
         .route("/openapi/json", get(openapi::document))
         .fallback(|| async { (StatusCode::NOT_FOUND, "NOT_FOUND") })
@@ -134,6 +136,22 @@ async fn push_raw(
     };
     let delivered = state.registry.send(&duid, StationCommand::Speak { text });
     tracing::info!("pushed a raw event to {delivered} connection(s) of {duid}");
+    Json(json!({})).into_response()
+}
+
+/// The text is answered as if the user said it: spoken answer, functions run; `duid` may be `all`
+async fn push_text(
+    State(state): State<Arc<ApiState>>,
+    Path(duid): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let text = match event_text(&headers, &body, "Text answered as if the user said it") {
+        Ok(text) => text,
+        Err(rejection) => return rejection.into_response(),
+    };
+    let delivered = state.registry.send(&duid, StationCommand::Utterance { text });
+    tracing::info!("pushed a typed utterance to {delivered} connection(s) of {duid}");
     Json(json!({})).into_response()
 }
 

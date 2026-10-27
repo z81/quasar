@@ -579,7 +579,8 @@ class SpotifyApi:
             body = {"uris": [uri]} if kind == "track" else {"context_uri": uri}
             self.request("PUT", "/me/player/play", device, body)
         elif action == "resume":
-            self.request("PUT", "/me/player/play", device)
+            # a transfer: a play command reaches a speaker that is not the active device with nothing to resume
+            self.request("PUT", "/me/player", body={"device_ids": [device["device_id"]], "play": True})
         elif action == "pause":
             self.request("PUT", "/me/player/pause", device)
         elif action == "next":

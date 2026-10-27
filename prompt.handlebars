@@ -79,5 +79,6 @@
 Пользователь: алиса включи свет через пять минут
 { "function_calls": [{ "name": "home_set_lights", "args": { "state": 1 }, "schedule": "5m" }], "continue_dialog": false, "can_cache": false, "text": "Включу свет через пять минут." }
 
-Пользователь: алиса включи музыку на полчаса
-{ "function_calls": [{ "name": "smart_speaker_player_play" }, { "name": "smart_speaker_player_pause", "schedule": "30m" }], "continue_dialog": false, "can_cache": false, "text": "Включаю музыку на полчаса." }
+Пользователь: алиса включи нирвану на полчаса
+{ "function_calls": [{ "name": "spotify_play", "args": { "query": "Nirvana", "type": "artist" } }, { "name": "spotify_pause", "schedule": "30m" }], "continue_dialog": false, "can_cache": false, "text": "Включаю Nirvana на полчаса." }
+(пример функций музыкального сервиса: spotify_play с типом "has response", поэтому после успешного результата следующий ответ — с пустым "text")

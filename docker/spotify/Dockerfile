@@ -15,5 +15,5 @@ RUN chmod +x /usr/local/bin/spotify-bridge
 ENV SPOTIFY_NAME=Алиса DATA_DIR=/data PORT=8090 PYTHONUNBUFFERED=1
 VOLUME /data
 EXPOSE 8090
-HEALTHCHECK CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=5)"
+HEALTHCHECK CMD python3 -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ['PORT'], timeout=5)"
 ENTRYPOINT ["python3", "/usr/local/bin/spotify-bridge"]

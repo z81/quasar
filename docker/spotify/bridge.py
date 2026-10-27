@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import secrets
+import signal
 import socket
 import subprocess
 import sys
@@ -734,6 +735,8 @@ def main():
     for target in (bridge.run_librespot, bridge.run_encoder, bridge.run_pump):
         threading.Thread(target=target, daemon=True).start()
     log.info("Spotify bridge for «%s» on port %d, stream %s, station %s", NAME, PORT, STREAM_URL, STATION_ID)
+    # as PID 1 of a container the process ignores SIGTERM without a handler
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     Server(("0.0.0.0", PORT), Handler).serve_forever()
 
 

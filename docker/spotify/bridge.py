@@ -93,7 +93,7 @@ log = logging.getLogger("spotify-bridge")
 
 
 def http_json(method, url, body=None, headers=None, form=None, proxy=None, timeout=10):
-    """A JSON request; None for an empty answer, HTTPError raised for 4xx and 5xx"""
+    """A JSON request; None for an answer that is empty or not JSON, HTTPError raised for 4xx and 5xx"""
     data, all_headers = None, dict(headers or {})
     if form is not None:
         data = urllib.parse.urlencode(form).encode()
@@ -105,7 +105,11 @@ def http_json(method, url, body=None, headers=None, form=None, proxy=None, timeo
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy} if proxy else {}))
     with opener.open(request, timeout=timeout) as response:
         text = response.read().decode()
-    return json.loads(text) if text.strip() else None
+    try:
+        return json.loads(text)
+    except ValueError:
+        # Spotify's player commands answer 200 with a body that is not JSON, not the documented 204
+        return None
 
 
 def struct(value):

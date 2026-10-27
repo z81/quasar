@@ -2,8 +2,6 @@
 
 Свой сервер для Яндекс.Станции (Quasar) с голосовым ассистентом. Он эмулирует облако Яндекса, с которым общается прошивка станции, а ответы пользователю готовит LLM через [OpenRouter](https://openrouter.ai). Речь распознаётся и синтезируется через OpenRouter или локально: GigaAM, Piper, Vosk.
 
-Сервер объединяет [quasar-server](https://github.com/z81/quasar-server) и логику диалогового процессора [v3rt3p/processor](https://github.com/v3rt3p/processor) и написан на Rust.
-
 ## Возможности
 
 - **Станция работает без облака Яндекса.** Сервер отвечает за `uniproxy.alice.yandex.net` (голосовой канал uni.ws), `quasar.yandex.net` (регистрация, конфиг станции, glagol-токены, обновления), `oauth.yandex.ru`, `mobileproxy.passport.yandex.net`, `rpc.alice.yandex.net`, `clck.yandex.net`, `scbh.yandex.net` и заглушки метрик.

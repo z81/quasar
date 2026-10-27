@@ -103,10 +103,9 @@ pub fn system_state(zone: &Zone) -> State {
 }
 
 
-/// Station control functions exposed to the LLM as directives; the music
-/// ones only with a music service, so the LLM never claims to play music
-/// that cannot play (TS offers them always)
-pub fn builtin_directive_functions(music: bool) -> Functions {
+/// Station control functions exposed to the LLM as directives; music comes
+/// from a music service's own functions (docker/spotify)
+pub fn builtin_directive_functions() -> Functions {
     let mut functions: std::collections::HashMap<String, FunctionDefinition> = std::collections::HashMap::new();
     let mut add = |name: &str, description: &str, schema: Option<serde_json::Value>| {
         functions.insert(
@@ -118,17 +117,7 @@ pub fn builtin_directive_functions(music: bool) -> Functions {
             },
         );
     };
-    if music {
-        add("smart_speaker_player_play", "Starts music, or continues if was paused", None);
-        add("smart_speaker_player_next_track", "Switch to next track", None);
-        add("smart_speaker_player_previous_track", "Switch to previous track", None);
-    }
-    add("smart_speaker_player_pause", "Pause music if it is playing", None);
-    add("smart_speaker_player_rewind", "Rewind music if it is playing",
-        Some(serde_json::json!({"type":"object","properties":{
-            "amountMs":{"type":"integer","exclusiveMinimum":0,"description":"Amount to rewind in ms (always positive)"},
-            "direction":{"type":"string","enum":["Forward","Backward"]}},
-            "required":["amountMs","direction"]})));
+    add("smart_speaker_player_pause", "Pause whatever the smart speaker plays", None);
     add("smart_speaker_bluetooth", "Enable or disable Bluetooth on the smart speaker",
         Some(serde_json::json!({"type":"object","properties":{"enable":{"type":"boolean"}},"required":["enable"]})));
     add("smart_speaker_set_sound_volume", "Set volume on the smart speaker",

@@ -10,7 +10,6 @@ use prost_reflect::{DescriptorPool, DynamicMessage, Kind, MapKey, Value as Refle
 use serde_json::{Map, Value, json};
 
 use crate::proto::n_alice::TAliceRequestProto;
-use crate::proto::n_alice::n_alice_api::TDeviceState;
 use crate::proto::n_alice::t_alice_request_proto::t_request::DeviceStateType;
 
 const DEVICE_STATE_MESSAGE: &str = "NAlice.NAliceApi.TDeviceState";
@@ -70,17 +69,6 @@ pub fn take_device_state(request: &mut TAliceRequestProto) -> Option<Vec<u8>> {
     match request.request.as_mut()?.device_state_type.take()? {
         DeviceStateType::DeviceStateRaw(raw) => Some(raw),
         DeviceStateType::DeviceState(state) => Some(state.encode_to_vec()),
-    }
-}
-
-/// The station player's position (TS `deviceState.AudioPlayer.OffsetMs`), saved when music stops
-pub fn audio_offset_ms(device_state: &[u8]) -> Option<i64> {
-    match TDeviceState::decode(device_state) {
-        Ok(state) => state.audio_player.and_then(|player| player.offset_ms).map(i64::from),
-        Err(error) => {
-            tracing::warn!("undecodable device state: {error}");
-            None
-        }
     }
 }
 

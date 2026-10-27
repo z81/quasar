@@ -1,12 +1,11 @@
 //! What a TextInput asks for (TS handleTextInputEvent): mostly server_action
-//! payloads the server pushed before (external events, TTS, the continue
-//! handshake) or the station's own music callbacks, plus plain text commands.
+//! payloads the server pushed before (external events, TTS, typed requests,
+//! the continue handshake) or the station's play buttons, plus plain text commands.
 
 use prost::Message as _;
 use serde_json::Value;
 
 use crate::directives::struct_to_json;
-use crate::music::MusicAction;
 use crate::proto::n_alice::n_alice_api::TSemanticFrameRequestData;
 use crate::proto::n_alice::n_alice_api::t_typed_semantic_frame::Type as TypedFrame;
 use crate::proto::n_alice::t_event::PayloadType;
@@ -28,8 +27,6 @@ pub enum TextInputKind {
     ContinueStage2 {
         dialog_id: Option<String>,
     },
-    /// Play buttons and the player's callbacks
-    Music(MusicAction),
     /// A text command (TS `textToDirectiveMap`)
     Text(String),
     Unknown(String),
@@ -61,7 +58,7 @@ fn classify_payload(payload: &Value) -> TextInputKind {
     };
 
     if frame("music_play_semantic_frame") {
-        TextInputKind::Music(MusicAction::Play)
+        play_button()
     } else if let Some(event) = text("/typed_semantic_frame/external_event_semantic_frame/event") {
         TextInputKind::ExternalEvent(event)
     } else if let Some(text) = text("/typed_semantic_frame/tts_semantic_frame/text") {
@@ -77,16 +74,14 @@ fn classify_payload(payload: &Value) -> TextInputKind {
             dialog_id: text("/typed_semantic_frame/continue_session_stage2_semantic_frame/dialog_id"),
         }
     } else {
-        match payload.pointer("/music/type").and_then(Value::as_str) {
-            // the stack directive sent along with every audio_play
-            Some("fetchNextTrack") => TextInputKind::Music(MusicAction::RecoverNextTrack),
-            // the on_started callback of a recovered track
-            Some("recoverCommit") => {
-                TextInputKind::Music(MusicAction::RecoverCommit(text("/music/recoverCommitToken").unwrap_or_default()))
-            }
-            _ => TextInputKind::Unknown(format!("server_action {payload}")),
-        }
+        TextInputKind::Unknown(format!("server_action {payload}"))
     }
+}
+
+/// The station's play and continue buttons: a request to the assistant, which
+/// resumes the music if a music service gave it the functions for that
+fn play_button() -> TextInputKind {
+    TextInputKind::Utterance("продолжи музыку".to_string())
 }
 
 /// `@@mm_semantic_frame` with a serialized TSemanticFrameRequestData: the
@@ -94,9 +89,7 @@ fn classify_payload(payload: &Value) -> TextInputKind {
 fn classify_semantic_frame(raw: &[u8]) -> TextInputKind {
     match TSemanticFrameRequestData::decode(raw) {
         Ok(request) => match request.typed_semantic_frame.and_then(|frame| frame.r#type) {
-            Some(TypedFrame::MusicPlaySemanticFrame(_) | TypedFrame::PlayerContinueSemanticFrame(_)) => {
-                TextInputKind::Music(MusicAction::Play)
-            }
+            Some(TypedFrame::MusicPlaySemanticFrame(_) | TypedFrame::PlayerContinueSemanticFrame(_)) => play_button(),
             other => TextInputKind::Unknown(format!("semantic frame {other:?}")),
         },
         Err(error) => TextInputKind::Unknown(format!("undecodable semantic frame: {error}")),

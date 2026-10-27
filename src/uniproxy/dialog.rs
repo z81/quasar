@@ -17,14 +17,14 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use super::metadata::{self, BiometrySlot, InputMetadata};
+use super::metadata::{BiometrySlot, InputMetadata};
 use super::outbox::{Outbox, ResponseTarget};
 use super::speech::{self, SpeechEnd};
 use super::{UniproxyContext, report};
 use crate::agent::protocol::FunctionCall;
 use crate::agent::{Agent, AgentOutput, AgentTurn, ERROR_RESPONSE_TEXT, FunctionExecutor, OutputText};
 use crate::audio;
-use crate::directives::{self, WrappedDirective};
+use crate::directives;
 use crate::gigastt::{Endpoint, Recognition, Transcript};
 use crate::prompt::{State, system_state};
 use crate::proto::n_alice::n_alice_api::TDirective;
@@ -198,10 +198,8 @@ pub struct Request {
     pub context: Arc<UniproxyContext>,
     pub outbox: Outbox,
     pub dialog: DialogSlot,
-    pub device_id: Arc<str>,
     pub target: ResponseTarget,
-    /// The request's TDeviceState: metadata for remote servers, the player
-    /// position a music stop saves
+    /// The request's TDeviceState: metadata for remote servers
     pub device_state: Option<Vec<u8>>,
     /// A voice request: when the user stopped speaking, for the latency of
     /// the answer's first audio
@@ -264,9 +262,8 @@ impl Request {
         }
     }
 
-    /// Text commands and music requests: directives without speech
-    pub async fn answer_directives(self, wrapped: Vec<WrappedDirective>) {
-        let directives = self.resolve(wrapped).await;
+    /// Text commands: directives without speech
+    pub async fn answer_directives(self, directives: Vec<TDirective>) {
         report(self.outbox.alice_response(&self.target, "", false, directives));
     }
 
@@ -337,8 +334,7 @@ impl Request {
     /// for an empty answer), the words follow in its TTS stream and the full
     /// text in the log; the station plays the stream via the placeholder
     async fn deliver(&self, part: AgentOutput) {
-        let wrapped = part.directives.iter().filter_map(directives::to_wrapped_directive).collect();
-        let mut station_directives = self.resolve(wrapped).await;
+        let mut station_directives: Vec<TDirective> = part.directives.iter().filter_map(directives::to_directive).collect();
         let (shown_text, speaks) = match &part.text {
             OutputText::Complete(text) => (text.as_str(), !text.is_empty()),
             OutputText::Streaming(_) => ("", true),
@@ -374,19 +370,6 @@ impl Request {
                 speech::speak(&self.context, &self.outbox, chunks, reference_message_id, self.speech_end).await
             }
         }
-    }
-
-    /// Station directives, with the music actions turned into theirs (TS processWrappedDirectives)
-    async fn resolve(&self, wrapped: Vec<WrappedDirective>) -> Vec<TDirective> {
-        let offset_ms = self.device_state.as_deref().and_then(metadata::audio_offset_ms);
-        let mut station_directives = Vec::new();
-        for directive in wrapped {
-            station_directives.extend(directive.station);
-            if let Some(action) = directive.music {
-                station_directives.extend(self.context.music.directives(&self.device_id, &action, offset_ms).await);
-            }
-        }
-        station_directives
     }
 }
 

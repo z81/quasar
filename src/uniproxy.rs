@@ -11,7 +11,7 @@
 //! (see `handle_endpoint`). A new VoiceInput or a CANCEL aborts the dialog
 //! turns in flight, as TS interrupts its dialog.
 //! Slow or multi-part answers go out through the TS "continue" handshake (see
-//! `dialog`), music through the music manager.
+//! `dialog`).
 
 mod dialog;
 mod metadata;
@@ -33,9 +33,8 @@ use uuid::Uuid;
 use crate::agent::{Agent, Functions, ResponseCache};
 use crate::config::Config;
 use crate::connections::{ConnectionRegistry, StationCommand};
-use crate::directives::{self, WrappedDirective};
+use crate::directives;
 use crate::gigastt::{Endpoint, Gigastt, Recognition};
-use crate::music::MusicManager;
 use crate::openrouter::OpenRouter;
 use crate::prompt::PromptGenerator;
 use crate::time_zone::Zone;
@@ -55,7 +54,6 @@ pub struct UniproxyContext {
     pub functions: Functions,
     pub remote: Arc<crate::remote::RemoteServers>,
     pub cache: ResponseCache,
-    pub music: MusicManager,
     /// streaming recognition (STT_PROVIDER=gigaam); None: OpenRouter after the end of speech
     pub gigastt: Option<Gigastt>,
     /// speech synthesis by Piper (TTS_PROVIDER=piper); None: OpenRouter
@@ -79,7 +77,7 @@ pub async fn handle_socket(
     let (outbox, mut writer) = outbox::spawn_writer(sink);
     let (command_sender, mut commands) = mpsc::unbounded_channel::<StationCommand>();
     let connection_id = registry.register(&device_id, command_sender);
-    let mut connection = Connection::new(context, outbox, &device_id);
+    let mut connection = Connection::new(context, outbox);
 
     loop {
         tokio::select! {
@@ -172,8 +170,6 @@ impl VoiceInput {
 struct Connection {
     context: Arc<UniproxyContext>,
     outbox: Outbox,
-    /// The station (x-uprx-device-id): its music queue and saved position
-    device_id: Arc<str>,
     dialog: DialogSlot,
     voice_input: Option<VoiceInput>,
     /// Biometry of the latest voice input; MatchedUser may come after its Close
@@ -193,11 +189,10 @@ struct Connection {
 }
 
 impl Connection {
-    fn new(context: Arc<UniproxyContext>, outbox: Outbox, device_id: &str) -> Self {
+    fn new(context: Arc<UniproxyContext>, outbox: Outbox) -> Self {
         Self {
             context,
             outbox,
-            device_id: device_id.into(),
             dialog: DialogSlot::default(),
             voice_input: None,
             biometry: BiometrySlot::default(),
@@ -475,12 +470,6 @@ impl Connection {
                     }
                 }
             }
-            TextInputKind::Music(action) => {
-                tracing::info!("music request: {action:?}");
-                let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), device_state, zone);
-                let music = WrappedDirective { station: None, music: Some(action) };
-                self.tasks.spawn(request.answer_directives(vec![music]));
-            }
             TextInputKind::Unknown(description) => {
                 // TS leaves such requests unanswered and the station waits 15 s for a timeout
                 tracing::info!("unhandled TextInput ({description}) answered with nothing");
@@ -494,7 +483,6 @@ impl Connection {
             context: self.context.clone(),
             outbox: self.outbox.clone(),
             dialog: self.dialog.clone(),
-            device_id: self.device_id.clone(),
             target,
             device_state,
             speech_end: None,

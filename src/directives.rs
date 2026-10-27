@@ -3,58 +3,20 @@
 //! the server_action semantic frames of routers/alice/{directives,typed-payloads}.ts.
 
 use serde_json::{Value, json};
-use uuid::Uuid;
 
 use crate::agent::protocol::DirectiveResult;
-use crate::music::{MusicAction, MusicTrack};
 use crate::proto::google::protobuf::{self as pb, r#struct::FieldsEntry, value::Kind};
 use crate::proto::n_alice::n_alice_api::TDirective;
 use crate::proto::n_alice::n_alice_api::t_directive::{PayloadType, TOnFinishEvent, t_on_finish_event};
 
-/// A station directive and/or a music action, which the music manager turns
-/// into directives (TS WrappedDirective: quasarDirective + internalDirective)
-pub struct WrappedDirective {
-    pub station: Option<TDirective>,
-    pub music: Option<MusicAction>,
-}
-
-impl WrappedDirective {
-    fn station(directive: TDirective) -> Self {
-        Self { station: Some(directive), music: None }
-    }
-
-    fn music(action: MusicAction) -> Self {
-        Self { station: None, music: Some(action) }
-    }
-}
-
 /// What one LLM function call does on the station, or None when the call
 /// is unknown or its arguments do not match (logged)
-pub fn to_wrapped_directive(call: &DirectiveResult) -> Option<WrappedDirective> {
+pub fn to_directive(call: &DirectiveResult) -> Option<TDirective> {
     let arguments = call.arguments.clone().unwrap_or(Value::Null);
     let directive = match call.name.as_str() {
-        "smart_speaker_player_play" => return Some(WrappedDirective::music(MusicAction::Play)),
-        "smart_speaker_player_next_track" => return Some(WrappedDirective::music(MusicAction::NextTrack)),
-        "smart_speaker_player_previous_track" => return Some(WrappedDirective::music(MusicAction::PreviousTrack)),
-        // TS playerStopDirective: stop the player and remember where it was
-        "smart_speaker_player_pause" => {
-            return Some(WrappedDirective {
-                station: Some(client_action("clear_queue", json!({}), true)),
-                music: Some(MusicAction::Stop),
-            });
-        }
-        "smart_speaker_player_rewind" => {
-            let amount_ms = arguments["amountMs"].as_u64().filter(|amount| *amount > 0);
-            let direction = arguments["direction"].as_str().filter(|direction| matches!(*direction, "Forward" | "Backward"));
-            match (amount_ms, direction) {
-                (Some(amount_ms), Some(direction)) => client_action(
-                    "audio_player_rewind",
-                    json!({ "amount_ms": amount_ms, "type": direction }),
-                    true,
-                ),
-                _ => return invalid(call),
-            }
-        }
+        // pauses whatever the station's player plays, an endless stream too,
+        // which TS's clear_queue does not stop
+        "smart_speaker_player_pause" => client_action("player_pause", json!({}), true),
         "smart_speaker_bluetooth" => match arguments["enable"].as_bool() {
             Some(true) => client_action("start_bluetooth", json!({}), false),
             Some(false) => client_action("stop_bluetooth", json!({}), false),
@@ -86,19 +48,18 @@ pub fn to_wrapped_directive(call: &DirectiveResult) -> Option<WrappedDirective> 
             return None;
         }
     };
-    Some(WrappedDirective::station(directive))
+    Some(directive)
 }
 
 /// A plain `text_input` command of the station (TS `textToDirectiveMap`)
-pub fn text_command(text: &str) -> Option<WrappedDirective> {
+pub fn text_command(text: &str) -> Option<TDirective> {
     let function = match text.trim().to_lowercase().as_str() {
         "громче" => "smart_speaker_set_sound_volume_louder",
         "тише" => "smart_speaker_set_sound_volume_quieter",
         "пауза" | "стоп" => "smart_speaker_player_pause",
-        "продолжи" => "smart_speaker_player_play",
         _ => return None,
     };
-    to_wrapped_directive(&DirectiveResult { name: function.to_string(), arguments: None })
+    to_directive(&DirectiveResult { name: function.to_string(), arguments: None })
 }
 
 /// Tells the station to play the TTS stream of this response in the dialog
@@ -111,41 +72,6 @@ pub fn tts_play_placeholder(on_finish: Option<&Value>) -> TDirective {
             event: Some(t_on_finish_event::Event::TypedCallbackRequest(to_struct(payload))),
         }),
         ..client_action("tts_play_placeholder", json!({ "channel": "Dialog" }), true)
-    }
-}
-
-/// Plays a track (TS audioPlayDirective); with a token the station reports
-/// the start back, which commits the recovered track
-pub fn audio_play(track: &MusicTrack, offset_ms: Option<i64>, recover_commit_token: Option<&str>) -> TDirective {
-    let mut stream = json!({
-        "format": track.format,
-        "id": Uuid::new_v4().to_string(),
-        "type": "Track",
-        "url": track.url,
-    });
-    if let Some(offset_ms) = offset_ms.filter(|offset_ms| *offset_ms != 0) {
-        stream["offset_ms"] = json!(offset_ms);
-    }
-    let callbacks = match recover_commit_token {
-        Some(token) => json!({
-            "on_started": { "payload": { "music": { "recoverCommitToken": token, "type": "recoverCommit" } } },
-        }),
-        None => json!({}),
-    };
-    client_action(
-        "audio_play",
-        json!({ "background_mode": "Ducking", "callbacks": callbacks, "screen_type": "Music", "stream": stream }),
-        false,
-    )
-}
-
-/// Makes the station ask for the next track when this one ends (TS stackRecoverNextTrackDirective)
-pub fn stack_recover_next_track() -> TDirective {
-    TDirective {
-        name: "@@mm_stack_engine_get_next".to_string(),
-        r#type: "server_action".to_string(),
-        payload_type: Some(PayloadType::Payload(to_struct(&json!({ "music": { "type": "fetchNextTrack" } })))),
-        ..Default::default()
     }
 }
 
@@ -220,7 +146,7 @@ fn client_action(name: &str, payload: Value, is_led_silent: bool) -> TDirective 
     }
 }
 
-fn invalid(call: &DirectiveResult) -> Option<WrappedDirective> {
+fn invalid(call: &DirectiveResult) -> Option<TDirective> {
     tracing::warn!("invalid arguments for '{}': {:?}", call.name, call.arguments);
     None
 }

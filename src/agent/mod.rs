@@ -27,6 +27,9 @@ const ITERATION_TIMEOUT: Duration = Duration::from_secs(30);
 /// Spoken when the LLM fails, instead of leaving the station silent (as in TS)
 pub const ERROR_RESPONSE_TEXT: &str = "Извините, что-то пошло не так. Попробуйте спросить ещё раз.";
 
+/// What a model that answers nothing at all after function results means
+const EMPTY_ANSWER: &str = r#"{ "function_calls": [], "continue_dialog": false, "can_cache": false, "text": "" }"#;
+
 /// A function the LLM can call: either a station directive (pass-through) or
 /// a remote callable
 #[derive(Clone)]
@@ -192,6 +195,8 @@ impl Agent {
                 None => self.receive(&mut answer, executor, outputs).await,
             };
             let response = match received {
+                // the prompt asks for an empty "text" after a has-response result; some models leave out the JSON too
+                Ok(response) if iteration > 0 && response.trim().is_empty() => EMPTY_ANSWER.to_string(),
                 Ok(response) => response,
                 Err(error) => return failed_after_header(answer.part, error),
             };

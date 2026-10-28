@@ -29,10 +29,11 @@
 - **Станция с root-доступом,** в конфиге которой адреса Яндекса заменены на адрес этого сервера (см. [Подключение станции](#подключение-станции)). Проверено на Яндекс.Станции Миди с прошивкой 0.369.
 - **Токен OpenRouter** ([openrouter.ai/keys](https://openrouter.ai/settings/keys)).
 - **Docker,** где ffmpeg уже есть в образе. Или Rust и ffmpeg, чтобы собрать сервер из исходников.
-- **По желанию:**
+- **По желанию** ([как запустить](docker/README.md)):
   - PostgreSQL;
   - gigastt для распознавания;
-  - Piper или Vosk для синтеза.
+  - Piper или Vosk для синтеза;
+  - сервис Spotify и аккаунт Spotify Premium.
 
 ## Запуск
 
@@ -52,6 +53,8 @@ OPENROUTER_API_KEY=sk-or-... cargo run --release
 ```
 
 Переменные окружения можно положить в `.env.local` или `.env` в рабочей папке сервера.
+
+PostgreSQL, gigastt, Piper, Vosk и Spotify работают в отдельных контейнерах. Как запустить их и связать с alice-server, в том числе всё сразу через Docker Compose, описано в [docker/README.md](docker/README.md).
 
 ## Подключение станции
 
@@ -132,20 +135,14 @@ OPENROUTER_API_KEY=sk-or-... cargo run --release
 
 [gigastt](https://github.com/ekhodzitsky/gigastt) — сервер распознавания на модели GigaAM v3 от Сбера. Он слушает речь, пока станция записывает, поэтому текст готов почти сразу после конца фразы. С VAD он сам определяет, что пользователь замолчал.
 
-```bash
-docker run -d --name gigastt -p 9876:9876 -e GIGASTT_VAD=true \
-  -v gigastt-models:/home/gigastt/.gigastt/models \
-  ghcr.io/ekhodzitsky/gigastt:2.18.0
-```
-
-В alice-server:
+Как его запустить, описано в [docker/README.md](docker/README.md#gigastt). В alice-server:
 
 ```
 STT_PROVIDER=gigaam
 GIGASTT_URL=http://gigastt:9876
 ```
 
-Без `GIGASTT_VAD=true` gigastt тоже замечает конец фразы, но грубее. Если gigastt недоступен или вернул ошибку, фразу распознаёт OpenRouter.
+Если контейнеру gigastt не задать `GIGASTT_VAD=true`, он тоже замечает конец фразы, но грубее. Если gigastt недоступен или вернул ошибку, фразу распознаёт OpenRouter.
 
 ## Локальный синтез речи
 
@@ -156,39 +153,10 @@ TTS_PROVIDER=piper
 PIPER_URL=http://piper:5000
 ```
 
-Оба образа собираются из корня репозитория и при первом запуске скачивают модель в том `/data`.
+- **Piper** — самый быстрый: фраза синтезируется примерно за 0,1 с. Ударения он ставит по словарю espeak-ng и иногда ошибается.
+- **Vosk** берёт ударения из большого словаря, и голоса звучат естественнее. Зато он медленнее, 0,3–0,8 с на фразу, и занимает около 2,3 ГБ памяти.
 
-### Piper
-
-Самый быстрый вариант: фраза синтезируется примерно за 0,1 с.
-
-```bash
-docker build -f docker/piper/Dockerfile -t piper .
-docker run -d --name piper -p 5000:5000 -e PIPER_VOICE=ru_RU-irina-medium -v piper-data:/data piper
-```
-
-Русские голоса:
-- `ru_RU-irina-medium` — женский;
-- `ru_RU-dmitri-medium`, `ru_RU-denis-medium`, `ru_RU-ruslan-medium` — мужские.
-
-Ударения Piper ставит по словарю espeak-ng и иногда ошибается.
-
-### Vosk
-
-Ударения Vosk берёт из большого словаря, и голоса звучат естественнее, чем у Piper. Зато он медленнее: 0,3–0,8 с на фразу в четыре потока на Ryzen 7 7735HS. Занимает около 2,3 ГБ памяти. Модель `vosk-model-tts-ru-0.9-multi` весит около 750 МБ.
-
-```bash
-docker build -f docker/vosk/Dockerfile -t vosk-tts .
-docker run -d --name vosk-tts -p 5000:5000 -e VOSK_SPEAKER=female_2 -v vosk-data:/data vosk-tts
-```
-
-| Переменная | По умолчанию | Описание |
-|---|---|---|
-| `VOSK_SPEAKER` | `female_2` | Голос: `female_0`, `female_1`, `female_2`, `male_0`, `male_1` |
-| `VOSK_THREADS` | `4` | Потоки процессора на один синтез. Больше потоков не значит быстрее: на виртуальной машине с 14 ядрами, где работают и другие сервисы, 14 потоков синтезировали вдвое медленнее четырёх |
-| `VOSK_MODEL` | `vosk-model-tts-ru-0.9-multi` | Модель с [сайта Vosk](https://alphacephei.com/vosk/models) |
-
-Голос можно выбрать и со стороны alice-server через `PIPER_SPEAKER=female_1`.
+Как их запустить и выбрать голос, описано в [docker/README.md](docker/README.md#piper).
 
 ## Функции
 
@@ -223,39 +191,9 @@ LLM отвечает JSON-объектом: вызовы функций, фла�
 
 Сервис `docker/spotify` делает станцию колонкой Spotify Connect. Внутри работает [librespot](https://github.com/librespot-org/librespot), и в приложении Spotify появляется устройство «Алиса». Когда на нём включают музыку, сервис кодирует звук в MP3 и через API управления alice-server отправляет станции `audio_play` со ссылкой на поток. Станция играет его своим плеером и сама приглушает музыку, когда говорит Алиса. Пауза или выбор другого устройства в приложении ставит станцию на паузу. Нужен Spotify Premium.
 
-```bash
-docker build -f docker/spotify/Dockerfile -t spotify-bridge .
-docker run -d --name spotify -p 8090:8090 -v spotify-data:/data \
-  -e STREAM_URL=http://192.168.1.10:8090/stream.mp3 \
-  -e ALICE_API_URL=http://alice-server:31116 \
-  spotify-bridge
-```
+Запуск, вход в Spotify и настройки сервиса описаны в [docker/README.md](docker/README.md#spotify).
 
-Сборка librespot занимает несколько минут. Порт 8090 должен быть доступен станции: она забирает поток сама.
-
-**Вход в Spotify** нужен один раз:
-1. Откройте `http://<сервер>:8090/` и перейдите по ссылке входа.
-2. Войдите в Spotify. Браузер перейдёт на адрес `http://127.0.0.1/login?code=…` и покажет ошибку, так и должно быть.
-3. Скопируйте этот адрес и вставьте его на странице сервиса.
-
-Вход сохраняется в томе `/data`.
-
-| Переменная | По умолчанию | Описание |
-|---|---|---|
-| `STREAM_URL` | — | **Обязательна.** Адрес `/stream.mp3` этого сервиса, по которому до него дотянется станция |
-| `ALICE_API_URL` | — | API управления alice-server, например `http://alice-server:31116` |
-| `STATION_ID` | `all` | Станция, которой отдаются команды (`duid` из `GET /devices`) |
-| `SPOTIFY_NAME` | `Алиса` | Имя колонки в Spotify |
-| `SPOTIFY_PROXY` | — | HTTP-прокси для librespot и Web API, если Spotify недоступен напрямую |
-| `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` | — | Приложение с developer.spotify.com для голосового управления |
-| `SPOTIFY_REDIRECT_URI` | `http://127.0.0.1:8888/callback` | Redirect URI этого приложения |
-| `MP3_BITRATE` | `256k` | Битрейт потока |
-
-**Голосовое управление:**
-1. Создайте приложение на [developer.spotify.com](https://developer.spotify.com/dashboard) с Redirect URI `http://127.0.0.1:8888/callback`.
-2. Задайте `SPOTIFY_CLIENT_ID` и `SPOTIFY_CLIENT_SECRET`.
-3. Подключите управление на странице сервиса тем же способом, что и вход.
-4. Добавьте сервис в alice-server и перезапустите его: каталог функций читается при запуске.
+**Голосовое управление.** alice-server получает функции Spotify от сервиса только при запуске. Добавьте сервис в настройки alice-server и перезапустите его:
 
 ```
 PROCESSOR_FUNCTION_SERVER_URLS=http://spotify:8090/functions
@@ -268,7 +206,7 @@ PROCESSOR_STATE_SERVER_URLS=http://spotify:8090/state
 - следующий и предыдущий трек;
 - «что играет».
 
-Без приложения работают только пауза, продолжение и «что играет».
+Поиск и переключение треков работают, только если сервису задано [приложение с developer.spotify.com](docker/README.md#голосовое-управление). Без него остаются пауза, продолжение и «что играет».
 
 **Пауза кнопкой станции.** Станция ещё около 15 секунд дочитывает поток, поэтому Spotify встаёт на паузу с задержкой. Кнопка воспроизведения на станции просит ассистента продолжить музыку.
 

@@ -31,8 +31,8 @@ impl PromptGenerator {
         for (name, definition) in functions.iter() {
             let kind = match definition.kind {
                 FunctionKind::Directive => "station directive",
-                FunctionKind::Remote { has_response: true } => "has response",
-                FunctionKind::Remote { has_response: false } => "no response",
+                FunctionKind::Remote { has_response: true, .. } => "has response",
+                FunctionKind::Remote { has_response: false, .. } => "no response",
             };
             let schema = definition
                 .arguments_json_schema

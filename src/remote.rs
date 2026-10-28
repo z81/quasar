@@ -17,6 +17,11 @@ struct RemoteFunctionCatalogEntry {
     /// call's response body and continues the turn with it, as with MCP tools
     #[serde(default, rename = "hasResponse")]
     has_response: bool,
+    /// Extension of the protocol too: a station directive function (like
+    /// smart_speaker_player_pause) the answer carries whenever the function
+    /// is called right away, so the station acts with the answer itself
+    #[serde(default)]
+    directive: Option<String>,
 }
 
 pub struct RemoteServers {
@@ -96,7 +101,10 @@ impl RemoteServers {
                                     "properties": entry.arguments,
                                 })),
                                 description: entry.description,
-                                kind: FunctionKind::Remote { has_response: entry.has_response },
+                                kind: FunctionKind::Remote {
+                                    has_response: entry.has_response,
+                                    directive: entry.directive,
+                                },
                             },
                         );
                     }

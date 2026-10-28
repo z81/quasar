@@ -19,25 +19,8 @@ function server protocol of alice-server at /functions, the playback state at
 librespot runs this file as its --onevent program too: with PLAYER_EVENT in
 the environment it only hands the event over to the running bridge.
 """
-import base64
-import collections
-import html
-import http.server
-import json
-import logging
 import os
-import secrets
-import signal
-import socket
-import subprocess
 import sys
-import threading
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
-import uuid
-from pathlib import Path
 
 PORT = int(os.environ.get("PORT") or 8090)
 # what librespot reports through --onevent
@@ -45,12 +28,18 @@ EVENT_FIELDS = ("PLAYER_EVENT", "TRACK_ID", "URI", "NAME", "ARTISTS", "ALBUM", "
 
 
 def hand_over_event():
-    """The --onevent mode: the event goes to the bridge, whatever happens to it"""
-    fields = {name: os.environ[name] for name in EVENT_FIELDS if name in os.environ}
-    request = urllib.request.Request(f"http://127.0.0.1:{PORT}/event", data=json.dumps(fields).encode(),
-                                     headers={"Content-Type": "application/json"}, method="POST")
+    """The --onevent mode: the event goes to the bridge, whatever happens to
+    it. librespot waits for the program on every event, so it imports next to
+    nothing (urllib alone doubles its time) and waits for the bridge's answer,
+    which keeps the events in order"""
+    import json
+    import socket
+    body = json.dumps({name: os.environ[name] for name in EVENT_FIELDS if name in os.environ}).encode()
     try:
-        urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=5).read()
+        with socket.create_connection(("127.0.0.1", PORT), timeout=5) as connection:
+            connection.sendall(b"POST /event HTTP/1.0\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s"
+                               % (len(body), body))
+            connection.recv(1024)
     except OSError:
         pass
 
@@ -58,6 +47,25 @@ def hand_over_event():
 if __name__ == "__main__" and "PLAYER_EVENT" in os.environ:
     hand_over_event()
     sys.exit(0)
+
+# the bridge itself: the --onevent mode above does without all this
+import base64
+import collections
+import html
+import http.server
+import json
+import logging
+import secrets
+import signal
+import socket
+import subprocess
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from pathlib import Path
 
 
 def env(name, default=None):
@@ -174,6 +182,11 @@ class Bridge:
         self.station = Station()
         self.listener = None
         self.state = "stopped"
+        # librespot's state events so far, to wait for the next one
+        self.state_changes = 0
+        # the last track played to its end / the stream jumped since (a skip, a seek)
+        self.played_out = False
+        self.jumped = False
         self.track = None
         self.last_play_push = None
         self.librespot_status = "starting"
@@ -296,10 +309,13 @@ class Bridge:
             os.mkfifo(FIFO)
         while True:
             with open(FIFO, "rb", buffering=0) as pipe:
-                started, sent = time.monotonic(), 0
+                started, sent, listener = time.monotonic(), 0, None
                 while True:
-                    waited = self.wait_for_listener()
+                    current, waited = self.wait_for_listener()
                     started += waited
+                    if current is not listener:
+                        # a new connection gets its lead again, so that the station starts at once
+                        started, sent, listener = time.monotonic(), 0, current
                     data = pipe.read(CHUNK)
                     if not data:
                         break
@@ -311,12 +327,13 @@ class Bridge:
                     sent += len(data)
 
     def wait_for_listener(self):
-        """Seconds spent waiting for a station that reads the stream"""
+        """The station that reads the stream, and the seconds spent waiting for it"""
         started = time.monotonic()
         with self.lock:
             while not (self.listener and not self.listener.closed and not self.listener.stalled):
                 self.lock.wait(1)
-        return time.monotonic() - started
+            listener = self.listener
+        return listener, time.monotonic() - started
 
     def encode(self, data):
         with self.lock:
@@ -416,10 +433,24 @@ class Bridge:
                 self.state = "paused"
             elif event in ("stopped", "session_disconnected"):
                 self.state = "stopped"
+            elif event == "end_of_track":
+                self.played_out = True
+            elif event == "loading":
+                # a track that does not follow the end of the last one: a skip, another context
+                self.jumped |= not self.played_out
+                self.played_out = False
+            elif event == "seeked":
+                self.jumped = True
+            if event in ("playing", "paused", "stopped", "session_disconnected"):
+                self.state_changes += 1
             state = self.state
+            # what the station has buffered is stale after a jump: a new connection drops it
+            restart = state == "playing" and event in ("playing", "seeked") and self.jumped
+            if restart:
+                self.jumped = False
             self.lock.notify_all()
         log.info("librespot event %s", event)
-        if event == "playing" and not (self.station.playing and self.listening()):
+        if state == "playing" and event in ("playing", "seeked") and (restart or not (self.station.playing and self.listening())):
             # the station plays the stream; a push that is still connecting is not repeated
             with self.lock:
                 recent = (self.last_play_push is not None and time.monotonic() - self.last_play_push < 5
@@ -444,8 +475,9 @@ class Bridge:
                 },
                 "hasResponse": True,
             },
+            # the station pauses with the answer itself, not only by a push in the middle of the dialog
             "spotify_pause": {"description": "Pause the Spotify music on this speaker; use it rather than smart_speaker_player_pause "
-                                             "while Spotify plays", "arguments": {}},
+                                             "while Spotify plays", "arguments": {}, "directive": "smart_speaker_player_pause"},
             "spotify_now_playing": {"description": "What plays in Spotify on this speaker now (has response)", "arguments": {}, "hasResponse": True},
         }
         if self.api:
@@ -477,13 +509,19 @@ class Bridge:
 
     def play(self, query, kind):
         if not query:
-            if self.api:
-                self.api.call("take_over")
-                # librespot cannot load some contexts, a Spotify radio among them, and stays paused on their track
-                if not self.wait_playing(5):
-                    self.api.call("resume")
-            else:
+            if not self.api:
                 self.station.play()
+                return "ok: продолжаю"
+            with self.lock:
+                changes, playing = self.state_changes, self.state == "playing"
+            if playing:
+                if not (self.station.playing and self.listening()):
+                    self.station.play()
+                return "ok: уже играет"
+            self.api.call("take_over")
+            # librespot comes out of a transfer paused, play: true notwithstanding
+            if self.wait_state_change(changes, 5) != "playing":
+                self.api.call("resume")
             return "ok: продолжаю"
         if not self.api:
             return "error: голосовой поиск в Spotify не подключён (нужны SPOTIFY_CLIENT_ID и SPOTIFY_CLIENT_SECRET)"
@@ -493,9 +531,11 @@ class Bridge:
         self.api.call("play", found["uri"], kind)
         return f"ok: включаю {found['title']}"
 
-    def wait_playing(self, seconds):
+    def wait_state_change(self, changes, seconds):
+        """librespot's state after its next change past `changes`, or as it is after `seconds`"""
         with self.lock:
-            return self.lock.wait_for(lambda: self.state == "playing", seconds)
+            self.lock.wait_for(lambda: self.state_changes > changes, seconds)
+            return self.state
 
     def now_playing(self):
         with self.lock:

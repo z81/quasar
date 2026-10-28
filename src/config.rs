@@ -76,8 +76,9 @@ pub struct Config {
     /// the gigastt server's HTTP address (STT_PROVIDER=gigaam), e.g. http://gigastt:9876
     pub gigastt_url: Option<String>,
     pub end_of_speech: EndOfSpeech,
-    /// the trailing silence after which gigastt's VAD ends an utterance
-    /// (its per-session min_silence_ms; a gigastt without --vad ignores it)
+    /// the trailing silence after which an utterance ends: gigastt's VAD's
+    /// per-session min_silence_ms; without --vad the silence after the latest
+    /// word waited for once gigastt's decoder ends it (no less than its 0.6 s)
     pub gigastt_min_silence_ms: u32,
     pub tts_model: String,
     pub tts_voice: String,

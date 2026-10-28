@@ -88,8 +88,17 @@ pub struct Gigastt {
 /// gigastt's automatic endpointing (STT_END_OF_SPEECH=server)
 #[derive(Clone, Copy)]
 struct Endpointing {
-    /// the trailing silence that ends an utterance, for the server's VAD
+    /// the trailing silence that ends an utterance: the server's VAD's, and
+    /// without a VAD the one waited for after its blank-run end
     min_silence_ms: u32,
+}
+
+impl Endpointing {
+    /// The silence after the latest word that ends an utterance without a
+    /// VAD: no less than the blank run gigastt itself ends it at
+    fn end_silence(&self) -> Duration {
+        BLANK_RUN.max(Duration::from_millis(self.min_silence_ms.into()))
+    }
 }
 
 impl Gigastt {
@@ -104,8 +113,9 @@ impl Gigastt {
         let gigastt = Self::new(base_url, endpointing).unwrap_or_else(|error| panic!("{error:#}"));
         match endpointing {
             Some(Endpointing { min_silence_ms }) => tracing::info!(
-                "speech recognition: gigastt at {} (OpenRouter as fallback); gigastt ends utterances: \
-                 {min_silence_ms} ms of silence if it runs with --vad, a ~0.6 s blank run of its decoder otherwise",
+                "speech recognition: gigastt at {} (OpenRouter as fallback); an utterance ends after {min_silence_ms} ms \
+                 of silence: gigastt's VAD with --vad, otherwise its decoder's blank run (no less than ~0.6 s) \
+                 and the rest of that silence",
                 gigastt.ws_url
             ),
             None => tracing::info!(
@@ -173,16 +183,19 @@ pub struct Endpoint {
     pub speech: Option<(Duration, Duration)>,
     /// when the latest word ended
     pub speech_ended_at: Option<Instant>,
+    /// the silence after the latest word that ends an utterance without a VAD
+    pub end_silence: Duration,
 }
 
 impl Endpoint {
-    /// Whether the user spoke on after the pause this end was found at.
-    /// Without a VAD, gigastt 2.18.0 ends an utterance once a decoded window
-    /// holds a 0.6 s blank run anywhere after a word, so a pause the user has
-    /// already spoken past ends it too (with the words said since); a true
-    /// end has at least that much silence after the latest word
+    /// Whether the user may still speak on after the pause this end was found
+    /// at. Without a VAD, gigastt 2.18.0 ends an utterance once a decoded
+    /// window holds a 0.6 s blank run anywhere after a word, so a pause the
+    /// user has already spoken past ends it too (with the words said since);
+    /// a true end has `end_silence` (GIGASTT_MIN_SILENCE_MS, no less than that
+    /// blank run) after the latest word
     pub fn spoken_past(&self) -> bool {
-        self.reason == "blank" && self.speech.is_some_and(|(_, end)| self.audio.saturating_sub(end) < BLANK_RUN)
+        self.reason == "blank" && self.speech.is_some_and(|(_, end)| self.audio.saturating_sub(end) < self.end_silence)
     }
 
     /// The audio and the speech in it, for the logs
@@ -284,7 +297,8 @@ impl Gigastt {
         };
         let transcribe = async {
             let socket = socket.insert(self.connect().await?);
-            stream_session(socket, &mut pcm_output, endpoints.as_ref()).await
+            let end_silence = self.endpointing.map_or(BLANK_RUN, |endpointing| endpointing.end_silence());
+            stream_session(socket, &mut pcm_output, endpoints.as_ref(), end_silence).await
         };
         let ((), transcript) = tokio::try_join!(feed, transcribe)?;
         Ok(transcript)
@@ -359,11 +373,13 @@ async fn next_message(socket: &mut Socket) -> Result<Option<Value>> {
 
 /// Streams the decoder's PCM until it ends, then `stop`; meanwhile collects
 /// the finals up to the one answering `stop` and reports the automatic ends
-/// of utterance before it
+/// of utterance before it; `end_silence` is the silence after the latest
+/// word that ends an utterance (see `Endpoint::spoken_past`)
 async fn stream_session(
     socket: &mut Socket,
     pcm: &mut ChildStdout,
     endpoints: Option<&mpsc::UnboundedSender<Endpoint>>,
+    end_silence: Duration,
 ) -> Result<Transcript> {
     let (mut sink, mut stream) = socket.split();
     let stopped = AtomicBool::new(false);
@@ -383,7 +399,7 @@ async fn stream_session(
         Ok(())
     };
     let receive = async {
-        let mut finals = Finals::default();
+        let mut finals = Finals { end_silence, ..Finals::default() };
         let mut deferred: Option<DeferredEnd> = None;
         let mut check = tokio::time::interval(DEFERRED_CHECK);
         check.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -452,8 +468,8 @@ async fn stream_session(
 /// (`Endpoint::spoken_past`): without a VAD it may come from an earlier
 /// pause while the user still speaks, but for the same reason gigastt finds
 /// no further end once the user is done. So it is taken after all once the
-/// latest word is followed by a blank run of silence and gigastt, decoding a
-/// stride later, has reported no newer words in it; newer words call it off
+/// latest word is followed by `end_silence` and gigastt, decoding a stride
+/// later, has reported no newer words in it; newer words call it off
 struct DeferredEnd {
     /// the end of the latest word, in the stream
     speech_end: Duration,
@@ -466,7 +482,7 @@ struct DeferredEnd {
 impl DeferredEnd {
     fn after(endpoint: &Endpoint) -> Option<Self> {
         let (_, speech_end) = endpoint.speech.filter(|_| endpoint.spoken_past())?;
-        let due_audio = (speech_end + BLANK_RUN).max(endpoint.audio + DECODE_STRIDE);
+        let due_audio = (speech_end + endpoint.end_silence).max(endpoint.audio + DECODE_STRIDE);
         Some(Self { speech_end, due_audio, due_at: None })
     }
 
@@ -524,6 +540,8 @@ struct Finals {
     speech_start: Option<Duration>,
     speech_end: Option<Duration>,
     speech_ended_at: Option<Instant>,
+    /// for the ends of utterance (`Endpoint::end_silence`)
+    end_silence: Duration,
 }
 
 impl Finals {
@@ -557,6 +575,7 @@ impl Finals {
             audio: clock.audio(),
             speech: self.speech_start.zip(self.speech_end),
             speech_ended_at: self.speech_ended_at,
+            end_silence: self.end_silence,
         }
     }
 }

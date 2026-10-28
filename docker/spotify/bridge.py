@@ -132,6 +132,10 @@ def struct(value):
 class Station:
     """The station, through the management API of alice-server"""
 
+    def __init__(self):
+        # what the station was told last: a paused station still connects to the stream to fill its buffer
+        self.playing = False
+
     def push(self, name, payload, led_silent):
         if not ALICE_API_URL:
             log.warning("ALICE_API_URL is not set: cannot tell the station to %s", name)
@@ -146,9 +150,11 @@ class Station:
     def play(self):
         url = f"{STREAM_URL}{'&' if '?' in STREAM_URL else '?'}session={uuid.uuid4().hex}"
         stream = {"format": "MP3", "id": str(uuid.uuid4()), "type": "Track", "url": url}
+        self.playing = True
         self.push("audio_play", {"background_mode": "Ducking", "callbacks": {}, "screen_type": "Music", "stream": stream}, False)
 
     def pause(self):
+        self.playing = False
         self.push("player_pause", {}, True)
 
 
@@ -413,7 +419,7 @@ class Bridge:
             state = self.state
             self.lock.notify_all()
         log.info("librespot event %s", event)
-        if event == "playing" and not self.listening():
+        if event == "playing" and not (self.station.playing and self.listening()):
             # the station plays the stream; a push that is still connecting is not repeated
             with self.lock:
                 recent = (self.last_play_push is not None and time.monotonic() - self.last_play_push < 5

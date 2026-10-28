@@ -9,6 +9,7 @@ mod config;
 mod connections;
 mod directives;
 mod gigastt;
+mod mcp;
 mod piper;
 mod openrouter;
 mod prompt;
@@ -89,6 +90,10 @@ async fn main() -> Result<()> {
         csv_urls("PROCESSOR_STATE_SERVER_URLS"),
     ));
 
+    // MCP servers connect in the background: a hanging one must not block startup (as in TS)
+    let mcp = mcp::Mcp::new(&config.mcp_servers, config.mcp_live_context);
+    mcp.start();
+
     // function catalog: station directives + remote servers
     let mut functions: HashMap<String, FunctionDefinition> =
         builtin_directive_functions()
@@ -122,6 +127,7 @@ async fn main() -> Result<()> {
         cache: agent::new_response_cache(config.processor_cache_size as usize),
         openrouter,
         remote,
+        mcp,
         gigastt: gigastt::Gigastt::from_config(&config),
         piper: piper::Piper::from_config(&config),
         config,

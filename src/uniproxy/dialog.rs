@@ -26,6 +26,7 @@ use crate::agent::{Agent, AgentOutput, AgentTurn, ERROR_RESPONSE_TEXT, FunctionE
 use crate::audio;
 use crate::directives;
 use crate::gigastt::{Endpoint, Recognition, Transcript};
+use crate::mcp::{LiveContext, Mcp};
 use crate::prompt::{State, system_state};
 use crate::proto::n_alice::n_alice_api::TDirective;
 use crate::remote::RemoteServers;
@@ -161,7 +162,8 @@ fn open(slot: &mut Option<Dialog>, context: &UniproxyContext, zone: &Zone) -> (S
 }
 
 fn new_agent(context: &UniproxyContext, zone: &Zone) -> Agent {
-    let system_prompt = context.prompt_generator.generate(&context.functions).unwrap_or_else(|error| {
+    let functions = context.functions_now();
+    let system_prompt = context.prompt_generator.generate(&functions).unwrap_or_else(|error| {
         tracing::error!("failed to render the system prompt: {error:#}");
         String::new()
     });
@@ -172,7 +174,7 @@ fn new_agent(context: &UniproxyContext, zone: &Zone) -> Agent {
     Agent::new(
         context.openrouter.clone(),
         context.config.processor_model.clone(),
-        context.functions.clone(),
+        functions,
         system_prompt,
         state_prompt,
         context.cache.clone(),
@@ -206,6 +208,8 @@ pub struct Request {
     pub speech_end: Option<SpeechEnd>,
     /// The station's time zone, for the time in the LLM's state
     pub zone: Zone,
+    /// The MCP servers' live context for the turn's state, already on its way
+    pub live_context: Option<LiveContext>,
 }
 
 impl Request {
@@ -230,19 +234,22 @@ impl Request {
         // MatchedUser may arrive while the utterance is transcribed, so biometry is read only now (as in TS)
         let metadata = InputMetadata::new(self.device_state.as_deref(), biometry.get());
         self.speech_end = Some(SpeechEnd { speech: speech_ended_at, utterance: ended_at });
-        self.answer_with_agent(&agent, AgentTurn { external_event: false, text }, &metadata).await;
+        let live_context = self.live_context.take();
+        self.answer_with_agent(&agent, AgentTurn { external_event: false, text }, &metadata, live_context).await;
     }
 
     /// TextInput with an external event pushed through the API
-    pub async fn answer_event(self, agent: Arc<Agent>, event: String) {
+    pub async fn answer_event(mut self, agent: Arc<Agent>, event: String) {
         let metadata = InputMetadata::new(self.device_state.as_deref(), None);
-        self.answer_with_agent(&agent, AgentTurn { external_event: true, text: event }, &metadata).await;
+        let live_context = self.live_context.take();
+        self.answer_with_agent(&agent, AgentTurn { external_event: true, text: event }, &metadata, live_context).await;
     }
 
     /// TextInput with text pushed through the API as if the user said it
-    pub async fn answer_utterance(self, agent: Arc<Agent>, text: String) {
+    pub async fn answer_utterance(mut self, agent: Arc<Agent>, text: String) {
         let metadata = InputMetadata::new(self.device_state.as_deref(), None);
-        self.answer_with_agent(&agent, AgentTurn { external_event: false, text }, &metadata).await;
+        let live_context = self.live_context.take();
+        self.answer_with_agent(&agent, AgentTurn { external_event: false, text }, &metadata, live_context).await;
     }
 
     /// Continue stage 2: the next part of the dialog's answer
@@ -269,11 +276,17 @@ impl Request {
 
     /// Runs the agent turn while this request waits for its first part; the
     /// later parts wait for continue requests
-    async fn answer_with_agent(&self, agent: &Arc<Agent>, turn: AgentTurn, metadata: &InputMetadata) {
+    async fn answer_with_agent(
+        &self,
+        agent: &Arc<Agent>,
+        turn: AgentTurn,
+        metadata: &InputMetadata,
+        live_context: Option<LiveContext>,
+    ) {
         let (parts, answers) = mpsc::unbounded_channel();
         let answers: Answers = Arc::new(tokio::sync::Mutex::new(answers));
         self.dialog.set_answers(&self.target.dialog_id, answers.clone());
-        tokio::join!(self.run_agent(agent, turn, metadata, parts), self.answer_next(&answers));
+        tokio::join!(self.run_agent(agent, turn, metadata, live_context, parts), self.answer_next(&answers));
     }
 
     async fn run_agent(
@@ -281,16 +294,22 @@ impl Request {
         agent: &Arc<Agent>,
         turn: AgentTurn,
         metadata: &InputMetadata,
+        live_context: Option<LiveContext>,
         parts: mpsc::UnboundedSender<AgentOutput>,
     ) {
         let metadata_json = metadata.to_json();
         let session_id = agent.session_id().to_string();
-        let state = dialog_state(&self.context, &session_id, metadata, &metadata_json, &self.zone).await;
+        let state = dialog_state(&self.context, &session_id, metadata, &metadata_json, &self.zone, live_context).await;
         let state_prompt = self.context.prompt_generator.generate_state(&state).unwrap_or_else(|error| {
             tracing::error!("failed to render the state prompt: {error:#}");
             String::new()
         });
-        let executor = RemoteExecutor { remote: self.context.remote.clone(), session_id, metadata: metadata_json };
+        let executor = RemoteExecutor {
+            remote: self.context.remote.clone(),
+            mcp: self.context.mcp.clone(),
+            session_id,
+            metadata: metadata_json,
+        };
         if let Err(error) = agent.run_turn(turn, state_prompt, &executor, &parts).await {
             tracing::error!("agent turn failed: {error:#}");
             // like TS: an apology instead of silence, as the turn's last part
@@ -430,53 +449,53 @@ async fn transcribe_buffered(context: &UniproxyContext, ogg: &[u8]) -> String {
     }
 }
 
-/// The per-turn state shown to the LLM: system facts, the speaker, remote state
-/// servers (system entries win over remote duplicates, as in TS)
+/// The per-turn state shown to the LLM: system facts, the speaker, the MCP
+/// servers' live context, remote state servers (system entries win over
+/// remote duplicates, as in TS)
 async fn dialog_state(
     context: &UniproxyContext,
     session_id: &str,
     metadata: &InputMetadata,
     metadata_json: &Value,
     zone: &Zone,
+    live_context: Option<LiveContext>,
 ) -> State {
     let mut state = system_state(zone);
     let (age, gender) = metadata.biometry.map_or(("unknown", "unknown"), |biometry| (biometry.age, biometry.gender));
     state.insert("input_person_age".to_string(), ("age of person who talked to you".to_string(), age.to_string()));
     state.insert("input_person_gender".to_string(), ("gender of person who talked to you".to_string(), gender.to_string()));
-    for (key, entry) in context.remote.state(session_id, metadata_json).await {
+    let live_context = async {
+        match live_context {
+            Some(live_context) => live_context.entries().await,
+            None => Vec::new(),
+        }
+    };
+    let (live, remote) = tokio::join!(live_context, context.remote.state(session_id, metadata_json));
+    for (key, entry) in live.into_iter().chain(remote) {
         state.entry(key).or_insert(entry);
     }
     state
 }
 
-/// Calls the remote functions of one turn with its session id and metadata
+/// Calls the functions of one turn: the MCP servers' tools, the remote
+/// function servers' functions with the turn's session id and metadata
 struct RemoteExecutor {
     remote: Arc<RemoteServers>,
+    mcp: Arc<Mcp>,
     session_id: String,
     metadata: Value,
 }
 
-impl FunctionExecutor for RemoteExecutor {
-    /// Detached: neither the answer, nor an interrupted dialog, nor a closed
-    /// connection waits for or cancels a call the LLM decided on; a scheduled
-    /// call ("через час") sleeps in its own task
-    fn spawn(&self, call: FunctionCall) {
-        let (remote, session_id, metadata) = (self.remote.clone(), self.session_id.clone(), self.metadata.clone());
-        tokio::spawn(async move {
-            if let Some(delay_ms) = call.schedule_ms.filter(|milliseconds| *milliseconds > 0) {
-                tracing::info!("calling {} after {delay_ms}ms", call.name);
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-            }
-            if let Err(error) = remote.call_by_name(&call.name, &call.arguments, &session_id, &metadata).await {
-                tracing::warn!("remote function '{}' failed: {error:#}", call.name);
-            }
-        });
-    }
-
-    /// Part of the turn: an interrupted turn cancels it
-    fn call(&self, call: FunctionCall) -> BoxFuture<'static, String> {
-        let (remote, session_id, metadata) = (self.remote.clone(), self.session_id.clone(), self.metadata.clone());
+impl RemoteExecutor {
+    /// The call's result for the LLM; failures as text, never an error
+    fn call_any(&self, call: FunctionCall) -> BoxFuture<'static, String> {
+        let (remote, mcp, session_id, metadata) =
+            (self.remote.clone(), self.mcp.clone(), self.session_id.clone(), self.metadata.clone());
         Box::pin(async move {
+            // a function server's own function wins over an MCP prefix
+            if !remote.owns(&call.name) && mcp.routes(&call.name) {
+                return mcp.call(&call.name, &call.arguments).await;
+            }
             match remote.call_by_name(&call.name, &call.arguments, &session_id, &metadata).await {
                 Ok(result) => result,
                 Err(error) => {
@@ -485,5 +504,28 @@ impl FunctionExecutor for RemoteExecutor {
                 }
             }
         })
+    }
+}
+
+impl FunctionExecutor for RemoteExecutor {
+    /// Detached: neither the answer, nor an interrupted dialog, nor a closed
+    /// connection waits for or cancels a call the LLM decided on; a scheduled
+    /// call ("через час") sleeps in its own task
+    fn spawn(&self, call: FunctionCall) {
+        let delay_ms = call.schedule_ms.filter(|milliseconds| *milliseconds > 0);
+        let name = call.name.clone();
+        let result = self.call_any(call);
+        tokio::spawn(async move {
+            if let Some(delay_ms) = delay_ms {
+                tracing::info!("calling {name} after {delay_ms}ms");
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+            result.await;
+        });
+    }
+
+    /// Part of the turn: an interrupted turn cancels it
+    fn call(&self, call: FunctionCall) -> BoxFuture<'static, String> {
+        self.call_any(call)
     }
 }

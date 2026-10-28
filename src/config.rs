@@ -99,6 +99,53 @@ pub struct Config {
     pub processor_prompt_path: String,
     pub processor_state_prompt_path: String,
     pub processor_cache_size: u64,
+    /// MCP servers whose tools the LLM may call (PROCESSOR_MCP_SERVER_URLS)
+    pub mcp_servers: Vec<McpServerConfig>,
+    /// fetch a `GetLiveContext` tool's result for every turn's state
+    pub mcp_live_context: bool,
+}
+
+/// One MCP server: `<url>#<prefix>` of PROCESSOR_MCP_SERVER_URLS, as in TS, and
+/// its token from PROCESSOR_MCP_SERVER_TOKENS (`<prefix>:<token>`)
+#[derive(Clone)]
+pub struct McpServerConfig {
+    pub url: String,
+    /// its tools become the functions `<prefix>_<tool>`
+    pub prefix: String,
+    /// sent as `Authorization: Bearer`; never logged
+    pub token: Option<String>,
+}
+
+/// PROCESSOR_MCP_SERVER_URLS with the tokens of PROCESSOR_MCP_SERVER_TOKENS;
+/// malformed entries are skipped with a warning that never shows a token
+fn mcp_servers() -> Vec<McpServerConfig> {
+    let mut tokens = std::collections::HashMap::new();
+    for (index, entry) in env::var("PROCESSOR_MCP_SERVER_TOKENS").unwrap_or_default().split(',').enumerate() {
+        match entry.trim().split_once(':') {
+            Some((prefix, token)) if !prefix.trim().is_empty() && !token.trim().is_empty() => {
+                tokens.insert(prefix.trim().to_string(), token.trim().to_string());
+            }
+            _ if entry.trim().is_empty() => {}
+            _ => tracing::warn!("PROCESSOR_MCP_SERVER_TOKENS entry {} is not <prefix>:<token>, ignored", index + 1),
+        }
+    }
+    let mut servers = Vec::new();
+    for entry in env::var("PROCESSOR_MCP_SERVER_URLS").unwrap_or_default().split(',').map(str::trim) {
+        // as TS: <mcp-endpoint-url>#<function-name-prefix>
+        match entry.split_once('#') {
+            Some((url, prefix)) if !url.is_empty() && !prefix.is_empty() => servers.push(McpServerConfig {
+                url: url.to_string(),
+                prefix: prefix.to_string(),
+                token: tokens.remove(prefix),
+            }),
+            _ if entry.is_empty() => {}
+            _ => tracing::warn!("PROCESSOR_MCP_SERVER_URLS entry '{entry}' is not <url>#<prefix>, ignored"),
+        }
+    }
+    for prefix in tokens.keys() {
+        tracing::warn!("PROCESSOR_MCP_SERVER_TOKENS has a token for '{prefix}', which no MCP server uses");
+    }
+    servers
 }
 
 fn var_or(name: &str, default: &str) -> String {
@@ -230,6 +277,8 @@ impl Config {
                 .trim()
                 .parse()
                 .unwrap_or_else(|_| panic!("PROCESSOR_CACHE_SIZE must be a number of answers (0 turns the cache off)")),
+            mcp_servers: mcp_servers(),
+            mcp_live_context: !var_or("PROCESSOR_MCP_LIVE_CONTEXT", "true").trim().eq_ignore_ascii_case("false"),
         }
     }
 }

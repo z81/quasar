@@ -75,6 +75,11 @@ impl RemoteServers {
         self.call_function(&owner, session_id, metadata, name, &arguments).await
     }
 
+    /// Whether a function server offers `name`
+    pub fn owns(&self, name: &str) -> bool {
+        self.owners.read().unwrap_or_else(std::sync::PoisonError::into_inner).contains_key(name)
+    }
+
     /// Fetches all function catalogs concurrently, skipping failed servers
     pub async fn functions(&self) -> HashMap<String, FunctionDefinition> {
         let mut functions = HashMap::new();

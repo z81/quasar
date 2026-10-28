@@ -355,3 +355,6 @@ PROCESSOR_STATE_SERVER_URLS=http://spotify:8090/state
 | Станция не реагирует на Spotify, а в логе Spotify `ALICE_API_URL is not set` | Задайте `ALICE_API_URL` контейнеру Spotify |
 | На странице Spotify «Голосовое управление выключено» | `SPOTIFY_CLIENT_ID` и `SPOTIFY_CLIENT_SECRET` нужны контейнеру Spotify, а не alice-server |
 | В логе alice-server `end of utterance by gigastt (blank, …)` | gigastt работает без VAD: задайте `GIGASTT_VAD=true` контейнеру gigastt |
+| В логе alice-server `MCP server 'ha' (…): unavailable (HTTP 401 Unauthorized …` | Home Assistant не принял токен. Проверьте токен и префикс в `PROCESSOR_MCP_SERVER_TOKENS`: он должен совпадать с префиксом после `#` в `PROCESSOR_MCP_SERVER_URLS` |
+| В логе alice-server `MCP server 'ha' (…): unavailable (HTTP 404 Not Found …` | В Home Assistant нет интеграции «Model Context Protocol Server» |
+| В логе alice-server `MCP server 'ha' (…): unavailable (…error sending request…` | Home Assistant недоступен из контейнера. Укажите его IP вместо `homeassistant.local` |

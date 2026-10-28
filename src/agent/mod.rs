@@ -370,15 +370,14 @@ impl Agent {
                         name: call.name.clone(),
                         arguments: call.arguments.clone(),
                     }),
-                    FunctionKind::Remote { has_response: true, .. } if call.schedule_ms.is_some() => {
-                        tracing::warn!("LLM tried to schedule function with response: '{}'", call.name);
-                    }
                     FunctionKind::Remote { has_response, directive } => {
                         // the station acts with the answer itself, not later than it (a scheduled call has no answer)
                         if let Some(directive) = directive.as_ref().filter(|_| call.schedule_ms.is_none()) {
                             directives.push(DirectiveResult { name: directive.clone(), arguments: None });
                         }
-                        if *has_response {
+                        // a scheduled call runs in the background: by then the turn is over and its result
+                        // has nobody to go to («выключи свет через пять минут» through Home Assistant)
+                        if *has_response && call.schedule_ms.is_none() {
                             results.push((call.name.clone(), executor.call(call.clone())));
                         } else {
                             executor.spawn(call.clone());

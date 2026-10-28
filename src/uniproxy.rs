@@ -35,6 +35,7 @@ use crate::config::Config;
 use crate::connections::{ConnectionRegistry, StationCommand};
 use crate::directives;
 use crate::gigastt::{Endpoint, Gigastt, Recognition};
+use crate::mcp::{LiveContext, Mcp};
 use crate::openrouter::OpenRouter;
 use crate::prompt::PromptGenerator;
 use crate::time_zone::Zone;
@@ -51,13 +52,32 @@ pub struct UniproxyContext {
     pub config: Config,
     pub openrouter: OpenRouter,
     pub prompt_generator: PromptGenerator,
+    /// The station's functions and those of the remote function servers
     pub functions: Functions,
     pub remote: Arc<crate::remote::RemoteServers>,
+    /// MCP servers: their tools as functions, their live context in the state
+    pub mcp: Arc<Mcp>,
     pub cache: ResponseCache,
     /// streaming recognition (STT_PROVIDER=gigaam); None: OpenRouter after the end of speech
     pub gigastt: Option<Gigastt>,
     /// speech synthesis by Piper (TTS_PROVIDER=piper); None: OpenRouter
     pub piper: Option<crate::piper::Piper>,
+}
+
+impl UniproxyContext {
+    /// The functions a new dialog gets: the station's, the function
+    /// servers', and the tools the MCP servers list now
+    pub fn functions_now(&self) -> Functions {
+        let tools = self.mcp.functions();
+        if tools.is_empty() {
+            return self.functions.clone();
+        }
+        let mut functions = (*self.functions).clone();
+        for (name, definition) in tools {
+            functions.entry(name).or_insert(definition);
+        }
+        Arc::new(functions)
+    }
 }
 
 /// Guards memory against a voice stream that never ends: far more than any
@@ -139,6 +159,8 @@ struct VoiceInput {
     truncated: bool,
     /// gigastt recognizing while the station records
     recognition: Option<Recognition>,
+    /// the MCP servers' live context, fetched while the user speaks
+    live_context: Option<LiveContext>,
 }
 
 /// The stream of an utterance gigastt ended while the station was recording.
@@ -286,6 +308,7 @@ impl Connection {
             ogg: Vec::new(),
             truncated: false,
             recognition: self.context.gigastt.as_ref().map(Gigastt::start),
+            live_context: self.context.mcp.live_context(),
         });
     }
 
@@ -337,7 +360,8 @@ impl Connection {
                 input.started_at.elapsed().as_secs_f64(),
                 input.ogg.len()
             );
-            let request = self.request(input.target, input.device_state, input.zone);
+            let mut request = self.request(input.target, input.device_state, input.zone);
+            request.live_context = input.live_context;
             let utterance = Utterance {
                 ogg: input.ogg,
                 biometry: input.biometry,
@@ -378,7 +402,8 @@ impl Connection {
         );
         report(self.outbox.asr_result(&endpoint.text, &input.target.reference_message_id));
         self.ended_stream = Some(EndedStream { stream_id, ended_at: Instant::now(), late_audio_bytes: 0 });
-        let request = self.request(input.target, input.device_state, input.zone);
+        let mut request = self.request(input.target, input.device_state, input.zone);
+        request.live_context = input.live_context;
         let utterance = Utterance {
             ogg: input.ogg,
             biometry: input.biometry,
@@ -433,13 +458,15 @@ impl Connection {
             TextInputKind::ExternalEvent(event) => {
                 tracing::info!("external event: '{event}'");
                 let (dialog_id, agent) = self.dialog.for_event(&self.context, station_dialog_id, &zone);
-                let request = self.request(target(dialog_id), device_state, zone);
+                let mut request = self.request(target(dialog_id), device_state, zone);
+                request.live_context = self.context.mcp.live_context();
                 self.spawn_turn(request.answer_event(agent, event));
             }
             TextInputKind::Utterance(text) => {
                 tracing::info!("typed utterance: '{text}'");
                 let (dialog_id, agent) = self.dialog.for_voice_input(&self.context, station_dialog_id, &zone);
-                let request = self.request(target(dialog_id), device_state, zone);
+                let mut request = self.request(target(dialog_id), device_state, zone);
+                request.live_context = self.context.mcp.live_context();
                 self.spawn_turn(request.answer_utterance(agent, text));
             }
             TextInputKind::Tts(text) => {
@@ -487,6 +514,7 @@ impl Connection {
             device_state,
             speech_end: None,
             zone,
+            live_context: None,
         }
     }
 

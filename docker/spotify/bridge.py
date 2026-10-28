@@ -94,6 +94,9 @@ CHUNK = RATE // 20  # 50 ms
 LEAD = float(env("LEAD_MS", "2000")) / 1000
 # a station that takes no data for this long has paused its player
 STALL = float(env("STALL_MS", "2000")) / 1000
+# with the Web API such a station has Spotify paused, and librespot holds back
+# only after this long: blocked in its write it would not take that pause
+HOLD_AFTER = 5
 SCOPES = "user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -174,6 +177,7 @@ class Listener:
         self.chunks = collections.deque()
         self.closed = False
         self.stalled = False
+        self.stalled_at = None
 
 
 class Bridge:
@@ -330,10 +334,16 @@ class Bridge:
         """The station that reads the stream, and the seconds spent waiting for it"""
         started = time.monotonic()
         with self.lock:
-            while not (self.listener and not self.listener.closed and not self.listener.stalled):
+            while not self.taking(self.listener):
                 self.lock.wait(1)
             listener = self.listener
         return listener, time.monotonic() - started
+
+    def taking(self, listener):
+        """Whether librespot's sound goes on to this listener (under the lock)"""
+        if not listener or listener.closed:
+            return False
+        return not listener.stalled or (self.api is not None and time.monotonic() - listener.stalled_at < HOLD_AFTER)
 
     def encode(self, data):
         with self.lock:
@@ -350,7 +360,8 @@ class Bridge:
     def serve_listener(self, handler):
         """The station's stream: MP3 as it is encoded; a newer connection
         replaces this one. A station that takes no data for STALL seconds has
-        paused: librespot is held back, and with the Web API Spotify pauses"""
+        paused: librespot is held back, with the Web API only after HOLD_AFTER
+        seconds since Spotify pauses then"""
         listener = Listener(handler.client_address[0])
         with self.lock:
             if self.listener:
@@ -397,6 +408,7 @@ class Bridge:
     def station_paused(self, listener):
         with self.lock:
             listener.stalled = True
+            listener.stalled_at = time.monotonic()
             playing = self.state == "playing"
         log.info("the station paused the stream")
         if playing and self.api:

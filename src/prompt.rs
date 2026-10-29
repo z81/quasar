@@ -1,5 +1,6 @@
-//! Handlebars prompt generation, reusing the templates of the TypeScript
-//! version (prompt.handlebars / prompt-state.handlebars).
+//! Prompt generation from the templates prompt.handlebars (`{{functionsText}}`)
+//! and prompt-state.handlebars (`{{stateText}}`): plain placeholder
+//! substitution, the only Handlebars the templates use.
 
 use std::sync::Arc;
 
@@ -48,9 +49,7 @@ impl PromptGenerator {
 
         let template = std::fs::read_to_string(&self.prompt_path)
             .with_context(|| format!("reading {}", self.prompt_path))?;
-        let mut data = BTreeMap::new();
-        data.insert("functionsText".to_string(), functions_text);
-        Ok(unescaped_handlebars().render_template(&template, &data)?)
+        Ok(template.replace("{{functionsText}}", &functions_text))
     }
 
     pub fn generate_state(&self, state: &State) -> Result<String> {
@@ -64,9 +63,7 @@ impl PromptGenerator {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        let mut data = BTreeMap::new();
-        data.insert("stateText".to_string(), state_text);
-        Ok(unescaped_handlebars().render_template(&template, &data)?)
+        Ok(template.replace("{{stateText}}", &state_text))
     }
 
     /// Fails early when a template is missing, like TS does at startup
@@ -76,14 +73,6 @@ impl PromptGenerator {
         }
         Ok(())
     }
-}
-
-/// Prompts are plain text for the LLM, so HTML escaping (the Handlebars
-/// default) would turn JSON schemas into `&quot;` soup; TS uses noEscape too
-fn unescaped_handlebars() -> handlebars::Handlebars<'static> {
-    let mut handlebars = handlebars::Handlebars::new();
-    handlebars.register_escape_fn(handlebars::no_escape);
-    handlebars
 }
 
 /// The state shown to the LLM every turn (mirrors the TS system state
@@ -124,9 +113,5 @@ pub fn builtin_directive_functions() -> Functions {
         Some(serde_json::json!({"type":"object","properties":{"volume":{"type":"integer","minimum":1,"maximum":10}},"required":["volume"]})));
     add("smart_speaker_set_sound_volume_louder", "Atomically make the smart speaker volume louder", None);
     add("smart_speaker_set_sound_volume_quieter", "Atomically make the smart speaker volume quieter", None);
-    add("smart_speaker_play_iot_sound", "Play IoT power on/power off sound on the smart speaker",
-        Some(serde_json::json!({"type":"object","properties":{
-            "isPowerOn":{"type":"boolean","description":"true if \"on\" sound, false if \"off\" sound"}},
-            "required":["isPowerOn"]})));
     Arc::new(functions.into_iter().collect())
 }

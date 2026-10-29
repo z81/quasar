@@ -95,7 +95,14 @@ pub trait FunctionExecutor: Send + Sync {
 
     /// A call whose result goes back to the LLM
     fn call(&self, call: FunctionCall) -> BoxFuture<'static, String>;
+
+    /// A station directive for later ("schedule" in its call): it reaches the
+    /// station after `delay_ms`, not with this answer
+    fn schedule_directive(&self, directive: DirectiveResult, delay_ms: u64);
 }
+
+/// Where the turn's state is in the history: right after the system prompt
+const STATE_MESSAGE: usize = 1;
 
 pub struct Agent {
     openrouter: OpenRouter,
@@ -171,12 +178,15 @@ impl Agent {
 
         let first_request = {
             let mut state = self.state.lock().await;
-            state.messages.push(ChatMessage::system(state_prompt));
-            state.messages.push(if turn.external_event {
-                ChatMessage::system(format!("External event happened: '{text}'"))
+            // each state replaces the one before: the history carries one,
+            // however long the dialog
+            state.messages[STATE_MESSAGE] = ChatMessage::system(state_prompt);
+            // the user's turn even for an event: see the function results below
+            state.messages.push(ChatMessage::user(if turn.external_event {
+                format!("External event happened: '{text}'")
             } else {
-                ChatMessage::user(text.clone())
-            });
+                text.clone()
+            }));
             state.first_request
         };
 
@@ -245,7 +255,11 @@ impl Agent {
                 results.into_iter().map(|(name, result)| async move { format!("{name}: {}", result.await) }),
             )
             .await;
-            self.state.lock().await.messages.push(ChatMessage::system(results.join("\n")));
+            // the user's turn: a model given them as a system message (Gemini through
+            // OpenRouter, which lifts system messages out of the conversation) sees its
+            // own answer last and answers nothing
+            let results = format!("Результаты функций:\n{}", results.join("\n"));
+            self.state.lock().await.messages.push(ChatMessage::user(results));
         }
 
         tracing::warn!("agent reached the iteration limit");
@@ -353,9 +367,9 @@ impl Agent {
         }
     }
 
-    /// Station directives of the calls; remote calls start now: those
-    /// without a result in the background, those with one as futures the
-    /// turn waits for
+    /// Station directives of the calls (a scheduled one is the executor's to
+    /// send later); remote calls start now: those without a result in the
+    /// background, those with one as futures the turn waits for
     fn run_calls(
         &self,
         calls: &[FunctionCall],
@@ -366,10 +380,14 @@ impl Agent {
             match self.functions.get(&call.name) {
                 None => tracing::warn!("LLM tried to call unknown function '{}'", call.name),
                 Some(definition) => match &definition.kind {
-                    FunctionKind::Directive => directives.push(DirectiveResult {
-                        name: call.name.clone(),
-                        arguments: call.arguments.clone(),
-                    }),
+                    FunctionKind::Directive => {
+                        let directive = DirectiveResult { name: call.name.clone(), arguments: call.arguments.clone() };
+                        // «включи блютус на час»: the second call is for an hour later, not for this answer
+                        match call.schedule_ms.filter(|milliseconds| *milliseconds > 0) {
+                            Some(delay_ms) => executor.schedule_directive(directive, delay_ms),
+                            None => directives.push(directive),
+                        }
+                    }
                     FunctionKind::Remote { has_response, directive } => {
                         // the station acts with the answer itself, not later than it (a scheduled call has no answer)
                         if let Some(directive) = directive.as_ref().filter(|_| call.schedule_ms.is_none()) {
@@ -421,6 +439,10 @@ fn failed_after_header(part: Option<StreamingPart>, error: anyhow::Error) -> Res
     tracing::warn!("the LLM answer failed after its part went out: {error:#}");
     if !part.spoke {
         part.send(ERROR_RESPONSE_TEXT.to_string());
+    }
+    // the part announced its calls («Включаю свет»): they run, with nobody waiting for their results
+    for (_, result) in std::mem::take(&mut part.results) {
+        tokio::spawn(result);
     }
     // dropping the part closes its text
     Ok(())

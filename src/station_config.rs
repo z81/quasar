@@ -1,9 +1,8 @@
 //! Per-station quasar ("maind") config: a port of the zod schema in TS
 //! `storage/types.ts` with its deepDefault defaults, the parsing zod does on
 //! every read and on API updates (defaults filled in, unknown keys stripped,
-//! zod-style issues), its JSON Schema for the OpenAPI document, and the
-//! `get_sync_info` / `glagol/device_list` projections of
-//! `routers/quasar.yandex.net.ts`.
+//! zod-style issues), and the `get_sync_info` / `glagol/device_list`
+//! projections of `routers/quasar.yandex.net.ts`.
 
 use std::sync::LazyLock;
 
@@ -59,11 +58,6 @@ pub fn invalid_type_issue(expected: &str, input: Option<&Value>, path: &[Value])
         "path": path,
         "message": format!("Invalid input: expected {expected}, received {received}"),
     })
-}
-
-/// zod `toJSONSchema` of the config schema
-pub fn json_schema() -> Value {
-    QUASAR_CONFIG.json_schema()
 }
 
 /// TS mapStationInfoToGlagolDeviceConfig: the `config` of a glagol/device_list entry
@@ -298,7 +292,6 @@ struct Schema {
     /// have defaults or are optional (TS deepDefault)
     default: Option<Value>,
     optional: bool,
-    description: Option<&'static str>,
 }
 
 enum Parsed {
@@ -311,7 +304,7 @@ enum Parsed {
 
 impl Schema {
     fn new(node: Node) -> Self {
-        Self { node, default: None, optional: false, description: None }
+        Self { node, default: None, optional: false }
     }
 
     fn default(mut self, value: impl Into<Value>) -> Self {
@@ -321,11 +314,6 @@ impl Schema {
 
     fn optional(mut self) -> Self {
         self.optional = true;
-        self
-    }
-
-    fn describe(mut self, description: &'static str) -> Self {
-        self.description = Some(description);
         self
     }
 
@@ -348,46 +336,6 @@ impl Schema {
         }
     }
 
-    fn json_schema(&self) -> Value {
-        let mut schema = match &self.node {
-            Node::Boolean => json!({ "type": "boolean" }),
-            Node::Number => json!({ "type": "number" }),
-            Node::String => json!({ "type": "string" }),
-            Node::Literal(value) => json!({
-                "type": if value.is_boolean() { "boolean" } else { "string" },
-                "const": value,
-            }),
-            Node::Union(options) => json!({
-                "anyOf": options.iter().map(Schema::json_schema).collect::<Vec<_>>(),
-            }),
-            Node::Object(fields) => json!({
-                "type": "object",
-                "properties": fields
-                    .iter()
-                    .map(|(key, field)| ((*key).to_string(), field.json_schema()))
-                    .collect::<Map<_, _>>(),
-                "required": fields
-                    .iter()
-                    .filter(|(_, field)| !field.optional)
-                    .map(|(key, _)| *key)
-                    .collect::<Vec<_>>(),
-                "additionalProperties": false,
-            }),
-            Node::Array(item) => json!({ "type": "array", "items": item.json_schema() }),
-            Node::Record(value) => json!({
-                "type": "object",
-                "propertyNames": { "type": "string" },
-                "additionalProperties": value.json_schema(),
-            }),
-        };
-        if let Some(default) = &self.default {
-            schema["default"] = default.clone();
-        }
-        if let Some(description) = self.description {
-            schema["description"] = description.into();
-        }
-        schema
-    }
 }
 
 impl Node {
@@ -549,7 +497,7 @@ fn object(fields: Vec<(&'static str, Schema)>) -> Schema {
                     .collect(),
             )
         });
-    Schema { node: Node::Object(fields), default, optional: false, description: None }
+    Schema { node: Node::Object(fields), default, optional: false }
 }
 
 /// TS storage/types.ts rawQuasarConfig, field by field
@@ -575,10 +523,12 @@ fn quasar_config_schema() -> Schema {
             ("smartHome", object(vec![("light", boolean(false)), ("tv", boolean(false))])),
             ("tv", object(vec![("backToHome", boolean(false)), ("navigation", boolean(false))])),
         ])),
-        ("jingle", boolean(false).describe("Enables \"blimp\" sound on activation and cancellation")),
+        // the "blimp" sound on activation and cancellation
+        ("jingle", boolean(false)),
         ("saveHistoryUsage", boolean(true)),
         ("smartActivation", boolean(true)),
-        ("spotter", string("alisa").describe("Specifies spotter word, currently working are: alisa, yandex and yasmina")),
+        // the spotter word; working ones: alisa, yandex and yasmina
+        ("spotter", string("alisa")),
         ("useBiometryChildScoring", boolean(true)),
         ("useRichModelForPro", boolean(true)),
         ("userWifiConfig", object(vec![(
@@ -601,12 +551,13 @@ fn quasar_config_schema() -> Schema {
         ])),
         ("led", object(vec![
             ("brightness", object(vec![("auto", boolean(true)), ("value", number(0.5))])),
-            ("idleAnimation", boolean(false).describe("Enables idle animation after 20 seconds of idling")),
+            // an idle animation after 20 seconds of idling
+            ("idleAnimation", boolean(false)),
             ("musicEqualizerVisualization", object(vec![
-                ("auto", boolean(false).describe("Enables automatic LED pattern switching while playing music")),
-                ("style", string("lava_beat").describe(
-                    "Specify LED pattern (auto: false) while playing music: lava_beat, blink, polar_shining and none",
-                )),
+                // switch LED patterns by themselves while music plays
+                ("auto", boolean(false)),
+                // the pattern while music plays (auto: false): lava_beat, blink, polar_shining or none
+                ("style", string("lava_beat")),
             ])),
             ("timeVisualization", object(vec![("format", one_of(&["24h", "12h"]).default("24h"))])),
         ])),
@@ -620,14 +571,14 @@ fn quasar_config_schema() -> Schema {
             ("deepStandbyEnabled", boolean(true)),
             ("deepStandbyTimeoutMinutes", number(240)),
         ])),
+        // the stereo pair: which speaker this station is, its partner's DUID,
+        // and its role (a follower only plays music, the leader listens to requests)
         ("stereoPair", object(vec![
-            ("channel", one_of(&["left", "right"]).describe("Specifies what speaker will this station be")),
-            ("partnerDeviceId", Schema::new(Node::String).describe("Partner speaker DUID")),
-            ("role", one_of(&["follower", "leader"])
-                .describe("Role for this speaker: follower only plays music, leader listens to user requests")),
+            ("channel", one_of(&["left", "right"])),
+            ("partnerDeviceId", Schema::new(Node::String)),
+            ("role", one_of(&["follower", "leader"])),
         ])
-        .optional()
-        .describe("Config for stereopair")),
+        .optional()),
         ("tvBeta", boolean(false)),
     ]);
 

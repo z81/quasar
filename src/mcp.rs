@@ -3,8 +3,7 @@
 //! tools become functions `<prefix>_<tool>` whose results go back to the LLM
 //! (TS hasResponse), with the tools' descriptions and JSON schemas.
 //! PROCESSOR_MCP_SERVER_TOKENS (`<prefix>:<token>`) authorizes a server with
-//! `Authorization: Bearer` (Home Assistant: a long-lived access token);
-//! tokens are kept out of every log line and error text.
+//! `Authorization: Bearer` (Home Assistant: a long-lived access token).
 //!
 //! Each server is connected in the background (`initialize`, the
 //! `notifications/initialized` notification, `tools/list` page by page), with
@@ -17,7 +16,7 @@
 //!
 //! A server with a `GetLiveContext` tool (Home Assistant: the entities
 //! exposed to Assist with their areas and states; `homeassistant__GetLiveContext`
-//! when its MCP server serves all its LLM APIs, which namespaces the tools)
+//! since HA 2026.9, with one more prefix when HA serves several LLM APIs)
 //! also feeds the turn's state as `<prefix>_live_context`
 //! (PROCESSOR_MCP_LIVE_CONTEXT, on by default), fetched as early as possible
 //! within a short budget.
@@ -26,7 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use futures_util::StreamExt;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_TYPE;
@@ -42,11 +41,8 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// `initialize`, one page of the tool list
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// A tool call
-const CALL_TIMEOUT: Duration = Duration::from_secs(10);
+/// A request, and a whole tool call (a new session included)
+const TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The tool list is fetched again this often
 const REFRESH_INTERVAL: Duration = Duration::from_secs(300);
@@ -55,7 +51,8 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 const RETRY_FIRST: Duration = Duration::from_secs(2);
 const RETRY_LAST: Duration = Duration::from_secs(60);
 
-/// How long a turn's state waits for the live context
+/// How long the live context may take from the start of its fetch (for a
+/// voice input, the start of the speech): a later one is skipped for the turn
 const LIVE_CONTEXT_BUDGET: Duration = Duration::from_millis(1500);
 
 /// Home Assistant's tool that lists the exposed entities with their areas and states
@@ -176,8 +173,6 @@ struct Session {
     /// `Mcp-Session-Id`, if the server keeps sessions
     id: Option<String>,
     protocol_version: String,
-    /// counts the sessions, so an expiry is handled once
-    generation: u64,
 }
 
 /// The session is over: start a new one (HTTP 404 to a request with a session id)
@@ -234,12 +229,11 @@ impl Server {
                     }
                 }
                 Err(error) => {
-                    let error = self.redact(&format!("{error:#}"));
                     if failing {
-                        tracing::debug!("MCP server {}: still unavailable ({error})", self.name());
+                        tracing::debug!("MCP server {}: still unavailable ({error:#})", self.name());
                     } else {
                         tracing::warn!(
-                            "MCP server {}: unavailable ({error}); it offers no functions until it answers, retrying",
+                            "MCP server {}: unavailable ({error:#}); it offers no functions until it answers, retrying",
                             self.name()
                         );
                     }
@@ -294,7 +288,7 @@ impl Server {
                 Some(cursor) => json!({ "cursor": cursor }),
                 None => json!({}),
             };
-            let page = self.request("tools/list", params, REQUEST_TIMEOUT).await?;
+            let page = self.request("tools/list", params).await?;
             for tool in page["tools"].as_array().map(Vec::as_slice).unwrap_or_default() {
                 let Some(name) = tool["name"].as_str() else {
                     continue;
@@ -316,12 +310,16 @@ impl Server {
     /// A tool call for the LLM: its result, `error: …` otherwise; logged
     async fn call_for_llm(&self, tool: &str, arguments: Value) -> String {
         let started = Instant::now();
-        let outcome = self.request("tools/call", json!({ "name": tool, "arguments": arguments }), CALL_TIMEOUT).await;
+        // the call may wait for a new session first: TIMEOUT bounds the whole of it
+        let call = self.request("tools/call", json!({ "name": tool, "arguments": arguments }));
+        let outcome = tokio::time::timeout(TIMEOUT, call)
+            .await
+            .unwrap_or_else(|_| Err(anyhow!("no answer to tools/call within {TIMEOUT:?}")));
         let elapsed = started.elapsed().as_millis();
         match outcome {
             Ok(result) => {
-                let (text, is_error) = describe_result(&result);
-                let text = self.redact(&text);
+                let (text, is_error) = result_text(&result);
+                let text = limited(text);
                 if is_error {
                     tracing::warn!("MCP {}_{tool}: error result in {elapsed} ms: {}", self.prefix, cut(&text, 300));
                     format!("error: {text}")
@@ -331,9 +329,8 @@ impl Server {
                 }
             }
             Err(error) => {
-                let error = self.redact(&format!("{error:#}"));
-                tracing::warn!("MCP {}_{tool}: failed in {elapsed} ms: {error}", self.prefix);
-                format!("error: {error}")
+                tracing::warn!("MCP {}_{tool}: failed in {elapsed} ms: {error:#}", self.prefix);
+                format!("error: {error:#}")
             }
         }
     }
@@ -341,26 +338,30 @@ impl Server {
     /// The live context as a state entry, if it comes within the budget
     async fn live_context(&self, tool: &str) -> Option<StateEntry> {
         let started = Instant::now();
-        let call = self.request("tools/call", json!({ "name": tool, "arguments": {} }), CALL_TIMEOUT);
+        let call = self.request("tools/call", json!({ "name": tool, "arguments": {} }));
         let skipped = match tokio::time::timeout(LIVE_CONTEXT_BUDGET, call).await {
-            Ok(Ok(result)) => match describe_result(&result) {
+            Ok(Ok(result)) => match result_text(&result) {
                 (text, false) => {
-                    // Home Assistant wraps the listing in {"result": "…"}
+                    // Home Assistant wraps the listing in {"result": "…"}, unwrapped before the cut
                     let text = serde_json::from_str::<Value>(&text)
                         .ok()
                         .and_then(|value| value["result"].as_str().map(str::to_string))
                         .unwrap_or(text);
+                    let text = limited(text);
                     let elapsed = started.elapsed().as_millis();
                     tracing::info!("MCP {}: live context in {elapsed} ms ({} characters)", self.prefix, text.chars().count());
                     let description = format!(
-                        "smart home of MCP server '{0}': the devices you can control with the {0}_ functions, with their names, areas and current states",
+                        "smart home of MCP server '{0}': the devices you can control with the {0}_ functions, with their \
+                         names, areas and current states. Answer questions about them from this list without calling \
+                         functions; only a device missing from a cut list needs {0}_{tool}. Give the {0}_ functions \
+                         device and area names exactly as written here",
                         self.prefix
                     );
-                    return Some((format!("{}_live_context", self.prefix), (description, self.redact(&text))));
+                    return Some((format!("{}_live_context", self.prefix), (description, text)));
                 }
-                (text, true) => format!("an error result: {}", cut(&self.redact(&text), 200)),
+                (text, true) => format!("an error result: {}", cut(&text, 200)),
             },
-            Ok(Err(error)) => self.redact(&format!("{error:#}")),
+            Ok(Err(error)) => format!("{error:#}"),
             Err(_) => format!("no answer within {LIVE_CONTEXT_BUDGET:?}"),
         };
         tracing::info!("MCP {}: live context skipped for this turn ({skipped})", self.prefix);
@@ -369,76 +370,64 @@ impl Server {
 
     /// A request in the current session; an expired session is replaced and
     /// the request repeated once
-    async fn request(&self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
-        let session = self.session().await?;
-        match self.exchange(&session, method, &params, timeout).await {
+    async fn request(&self, method: &str, params: Value) -> Result<Value> {
+        let session = self.session(None).await?;
+        match self.post(Some(&session), method, params.clone()).await {
             Err(error) if error.is::<Expired>() => {
                 tracing::info!("MCP server {}: the session expired, starting a new one", self.name());
-                let session = self.renew(&session).await?;
+                let session = self.session(Some(&session)).await?;
                 // a server that lost the session may have new tools too
                 self.refresh.notify_one();
-                self.exchange(&session, method, &params, timeout).await
+                Ok(self.post(Some(&session), method, params).await?.0)
             }
-            outcome => outcome,
+            outcome => Ok(outcome?.0),
         }
     }
 
-    async fn session(&self) -> Result<Session> {
+    /// The current session; a new one when there is none yet or it is the
+    /// `expired` one (another request may have replaced that meanwhile)
+    async fn session(&self, expired: Option<&Session>) -> Result<Session> {
         let mut session = self.session.lock().await;
-        if let Some(session) = session.as_ref() {
-            return Ok(session.clone());
-        }
-        let fresh = self.initialize(0).await?;
-        *session = Some(fresh.clone());
-        Ok(fresh)
-    }
-
-    /// A new session after `expired`, unless another request made one meanwhile
-    async fn renew(&self, expired: &Session) -> Result<Session> {
-        let mut session = self.session.lock().await;
-        if let Some(current) = session.as_ref().filter(|current| current.generation != expired.generation) {
+        if let Some(current) = session.as_ref().filter(|current| expired.is_none_or(|expired| expired.id != current.id)) {
             return Ok(current.clone());
         }
         *session = None;
-        let fresh = self.initialize(expired.generation + 1).await?;
+        let fresh = self.initialize().await?;
         *session = Some(fresh.clone());
         Ok(fresh)
     }
 
-    async fn initialize(&self, generation: u64) -> Result<Session> {
+    async fn initialize(&self) -> Result<Session> {
         let params = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": { "name": "alice-server", "version": env!("CARGO_PKG_VERSION") },
         });
-        let (result, id) = tokio::time::timeout(REQUEST_TIMEOUT, self.post(None, "initialize", params))
-            .await
-            .map_err(|_| anyhow!("no answer to initialize within {REQUEST_TIMEOUT:?}"))??;
+        let (result, id) = self.post(None, "initialize", params).await?;
         let protocol_version = result["protocolVersion"].as_str().unwrap_or(PROTOCOL_VERSION).to_string();
-        let session = Session { id, protocol_version, generation };
+        let session = Session { id, protocol_version };
         let initialized = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-        tokio::time::timeout(REQUEST_TIMEOUT, self.send(Some(&session), &initialized))
+        tokio::time::timeout(TIMEOUT, self.send(Some(&session), &initialized))
             .await
-            .map_err(|_| anyhow!("no answer to notifications/initialized within {REQUEST_TIMEOUT:?}"))??;
+            .map_err(|_| anyhow!("no answer to notifications/initialized within {TIMEOUT:?}"))??;
         Ok(session)
-    }
-
-    async fn exchange(&self, session: &Session, method: &str, params: &Value, timeout: Duration) -> Result<Value> {
-        let (result, _) = tokio::time::timeout(timeout, self.post(Some(session), method, params.clone()))
-            .await
-            .map_err(|_| anyhow!("no answer to {method} within {timeout:?}"))??;
-        Ok(result)
     }
 
     /// A JSON-RPC request: its result, and the session id the server assigned
     async fn post(&self, session: Option<&Session>, method: &str, params: Value) -> Result<(Value, Option<String>)> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let body = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-        let response = self.send(session, &body).await?;
-        let session_id = response.headers().get("mcp-session-id").and_then(|value| value.to_str().ok()).map(str::to_string);
-        let message = read_response(response, id).await.with_context(|| method.to_string())?;
+        let exchange = async {
+            let response = self.send(session, &body).await?;
+            let session_id = response.headers().get("mcp-session-id").and_then(|value| value.to_str().ok()).map(str::to_string);
+            let message = read_response(response, id).await.with_context(|| method.to_string())?;
+            anyhow::Ok((message, session_id))
+        };
+        let (message, session_id) = tokio::time::timeout(TIMEOUT, exchange)
+            .await
+            .map_err(|_| anyhow!("no answer to {method} within {TIMEOUT:?}"))??;
         if let Some(error) = message.get("error") {
-            bail!("{method} failed: {} {}", error["code"], self.redact(error["message"].as_str().unwrap_or_default()));
+            bail!("{method} failed: {} {}", error["code"], error["message"].as_str().unwrap_or_default());
         }
         Ok((message["result"].clone(), session_id))
     }
@@ -454,24 +443,16 @@ impl Server {
                 request = request.header("Mcp-Session-Id", id);
             }
         }
-        let response = request.send().await.map_err(|error| anyhow!("{}", self.redact(&format!("{:#}", anyhow::Error::from(error)))))?;
+        let response = request.send().await?;
         let status = response.status();
         if status == StatusCode::NOT_FOUND && session.is_some_and(|session| session.id.is_some()) {
             return Err(Expired.into());
         }
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            bail!("HTTP {status}: {}", cut(&self.redact(&body), 300));
+            bail!("HTTP {status}: {}", cut(&body, 300));
         }
         Ok(response)
-    }
-
-    /// Keeps the token out of logs and of what the LLM is told
-    fn redact(&self, text: &str) -> String {
-        match self.token.as_deref().filter(|token| !token.is_empty()) {
-            Some(token) => text.replace(token, "[token]"),
-            None => text.to_string(),
-        }
     }
 }
 
@@ -486,7 +467,8 @@ async fn read_response(response: reqwest::Response, id: u64) -> Result<Value> {
         .is_some_and(|value| value.starts_with("text/event-stream"));
     if !sse {
         let message: Value = response.json().await.context("invalid JSON response")?;
-        return answer(message, id).ok_or_else(|| anyhow!("the response does not answer the request"));
+        ensure!(answers(&message, id), "the response does not answer the request");
+        return Ok(message);
     }
     let mut stream = response.bytes_stream();
     let mut buffer = Vec::new();
@@ -504,7 +486,7 @@ async fn read_response(response: reqwest::Response, id: u64) -> Result<Value> {
             let line = String::from_utf8_lossy(&line);
             let line = line.trim_end_matches(['\r', '\n']);
             if line.is_empty() {
-                if let Some(message) = serde_json::from_str(&data).ok().and_then(|message| answer(message, id)) {
+                if let Some(message) = serde_json::from_str(&data).ok().filter(|message| answers(message, id)) {
                     return Ok(message);
                 }
                 data.clear();
@@ -521,20 +503,15 @@ async fn read_response(response: reqwest::Response, id: u64) -> Result<Value> {
     }
 }
 
-/// The message (or the one in a batch) that answers request `id`
-fn answer(message: Value, id: u64) -> Option<Value> {
-    let answers = |message: &Value| {
-        message["id"].as_u64() == Some(id) && (message.get("result").is_some() || message.get("error").is_some())
-    };
-    match message {
-        Value::Array(messages) => messages.into_iter().find(answers),
-        message => answers(&message).then_some(message),
-    }
+/// Whether `message` answers request `id` (one message per request: the
+/// protocol has no batches since 2025-06-18)
+fn answers(message: &Value, id: u64) -> bool {
+    message["id"].as_u64() == Some(id) && (message.get("result").is_some() || message.get("error").is_some())
 }
 
 /// A tool's result for the LLM: the text contents joined, the other ones
-/// named, cut when huge; and whether it is an error
-fn describe_result(result: &Value) -> (String, bool) {
+/// named; and whether it is an error
+fn result_text(result: &Value) -> (String, bool) {
     let mut parts = Vec::new();
     for item in result["content"].as_array().map(Vec::as_slice).unwrap_or_default() {
         let kind = item["type"].as_str().unwrap_or("unknown");
@@ -554,12 +531,15 @@ fn describe_result(result: &Value) -> (String, bool) {
             parts.push(structured.to_string());
         }
     }
-    let text = parts.join("\n");
-    let text = match text.char_indices().nth(MAX_RESULT_CHARS) {
+    (parts.join("\n"), result["isError"].as_bool().unwrap_or(false))
+}
+
+/// A huge result cut to MAX_RESULT_CHARS, saying so
+fn limited(text: String) -> String {
+    match text.char_indices().nth(MAX_RESULT_CHARS) {
         Some((end, _)) => format!("{}… (cut here: {} more characters)", &text[..end], text[end..].chars().count()),
         None => text,
-    };
-    (text, result["isError"].as_bool().unwrap_or(false))
+    }
 }
 
 /// At most `limit` characters on one line, for a log

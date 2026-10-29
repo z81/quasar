@@ -490,7 +490,6 @@ class Bridge:
             # the station pauses with the answer itself, not only by a push in the middle of the dialog
             "spotify_pause": {"description": "Pause the Spotify music on this speaker; use it rather than smart_speaker_player_pause "
                                              "while Spotify plays", "arguments": {}, "directive": "smart_speaker_player_pause"},
-            "spotify_now_playing": {"description": "What plays in Spotify on this speaker now (has response)", "arguments": {}, "hasResponse": True},
         }
         if self.api:
             functions["spotify_next"] = {"description": "Next track in Spotify on this speaker", "arguments": {}}
@@ -513,8 +512,6 @@ class Bridge:
             if name == "spotify_previous":
                 self.api.call("previous")
                 return "ok"
-            if name == "spotify_now_playing":
-                return self.now_playing()
             return f"error: no function {name}"
         except SpotifyError as error:
             return f"error: {error}"

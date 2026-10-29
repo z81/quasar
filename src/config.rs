@@ -129,10 +129,14 @@ fn mcp_servers() -> Vec<McpServerConfig> {
             _ => tracing::warn!("PROCESSOR_MCP_SERVER_TOKENS entry {} is not <prefix>:<token>, ignored", index + 1),
         }
     }
-    let mut servers = Vec::new();
+    let mut servers: Vec<McpServerConfig> = Vec::new();
     for entry in env::var("PROCESSOR_MCP_SERVER_URLS").unwrap_or_default().split(',').map(str::trim) {
         // as TS: <mcp-endpoint-url>#<function-name-prefix>
-        match entry.split_once('#') {
+        match entry.split_once('#').map(|(url, prefix)| (url.trim(), prefix.trim())) {
+            // one prefix names one server's functions
+            Some((_, prefix)) if servers.iter().any(|server| server.prefix == prefix) => {
+                tracing::warn!("PROCESSOR_MCP_SERVER_URLS entry '{entry}' repeats the prefix '{prefix}', ignored")
+            }
             Some((url, prefix)) if !url.is_empty() && !prefix.is_empty() => servers.push(McpServerConfig {
                 url: url.to_string(),
                 prefix: prefix.to_string(),

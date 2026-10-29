@@ -97,7 +97,7 @@ pub async fn handle_socket(
     let (outbox, mut writer) = outbox::spawn_writer(sink);
     let (command_sender, mut commands) = mpsc::unbounded_channel::<StationCommand>();
     let connection_id = registry.register(&device_id, command_sender);
-    let mut connection = Connection::new(context, outbox);
+    let mut connection = Connection::new(context, outbox, device_id.clone(), registry.clone());
 
     loop {
         tokio::select! {
@@ -152,7 +152,6 @@ struct VoiceInput {
     /// the station's time zone when the request came
     zone: Zone,
     agent: Arc<Agent>,
-    device_state: Option<Vec<u8>>,
     biometry: BiometrySlot,
     /// buffered for OpenRouter: the provider, or the fallback of gigastt
     ogg: Vec<u8>,
@@ -208,10 +207,14 @@ struct Connection {
     unknown_audio_stream: Option<i64>,
     /// The time zone the station named last (`Application.Timezone`)
     station_zone: Option<String>,
+    /// The station and its connections, for directives scheduled for later:
+    /// by then it may talk through another connection
+    device_id: String,
+    registry: ConnectionRegistry,
 }
 
 impl Connection {
-    fn new(context: Arc<UniproxyContext>, outbox: Outbox) -> Self {
+    fn new(context: Arc<UniproxyContext>, outbox: Outbox, device_id: String, registry: ConnectionRegistry) -> Self {
         Self {
             context,
             outbox,
@@ -224,6 +227,8 @@ impl Connection {
             ended_stream: None,
             unknown_audio_stream: None,
             station_zone: None,
+            device_id,
+            registry,
         }
     }
 
@@ -303,7 +308,6 @@ impl Connection {
             },
             zone,
             agent,
-            device_state: metadata::take_device_state(&mut request),
             biometry: self.biometry.clone(),
             ogg: Vec::new(),
             truncated: false,
@@ -360,7 +364,7 @@ impl Connection {
                 input.started_at.elapsed().as_secs_f64(),
                 input.ogg.len()
             );
-            let mut request = self.request(input.target, input.device_state, input.zone);
+            let mut request = self.request(input.target, input.zone);
             request.live_context = input.live_context;
             let utterance = Utterance {
                 ogg: input.ogg,
@@ -402,7 +406,7 @@ impl Connection {
         );
         report(self.outbox.asr_result(&endpoint.text, &input.target.reference_message_id));
         self.ended_stream = Some(EndedStream { stream_id, ended_at: Instant::now(), late_audio_bytes: 0 });
-        let mut request = self.request(input.target, input.device_state, input.zone);
+        let mut request = self.request(input.target, input.zone);
         request.live_context = input.live_context;
         let utterance = Utterance {
             ogg: input.ogg,
@@ -446,7 +450,6 @@ impl Connection {
         let station_dialog_id = request_header.dialog_id.as_deref();
         let zone = self.zone_for(&request);
         let kind = text_input::classify(&request);
-        let device_state = metadata::take_device_state(&mut request);
         let target = |dialog_id: String| ResponseTarget {
             dialog_id,
             request_id: request_header.request_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
@@ -458,19 +461,19 @@ impl Connection {
             TextInputKind::ExternalEvent(event) => {
                 tracing::info!("external event: '{event}'");
                 let (dialog_id, agent) = self.dialog.for_event(&self.context, station_dialog_id, &zone);
-                let mut request = self.request(target(dialog_id), device_state, zone);
+                let mut request = self.request(target(dialog_id), zone);
                 request.live_context = self.context.mcp.live_context();
                 self.spawn_turn(request.answer_event(agent, event));
             }
             TextInputKind::Utterance(text) => {
                 tracing::info!("typed utterance: '{text}'");
                 let (dialog_id, agent) = self.dialog.for_voice_input(&self.context, station_dialog_id, &zone);
-                let mut request = self.request(target(dialog_id), device_state, zone);
+                let mut request = self.request(target(dialog_id), zone);
                 request.live_context = self.context.mcp.live_context();
                 self.spawn_turn(request.answer_utterance(agent, text));
             }
             TextInputKind::Tts(text) => {
-                let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), device_state, zone);
+                let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), zone);
                 self.tasks.spawn(request.answer_tts(text));
             }
             TextInputKind::ContinueStage1 { dialog_id } => {
@@ -482,11 +485,11 @@ impl Connection {
             }
             TextInputKind::ContinueStage2 { dialog_id } => {
                 // the next part of that dialog's answer; a part of an older dialog is never delivered
-                let request = self.request(target(self.dialog.response_dialog_id(dialog_id.as_deref())), device_state, zone);
+                let request = self.request(target(self.dialog.response_dialog_id(dialog_id.as_deref())), zone);
                 self.spawn_turn(request.answer_continue());
             }
             TextInputKind::Text(text) => {
-                let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), device_state, zone);
+                let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), zone);
                 match directives::text_command(&text) {
                     Some(command) => {
                         self.tasks.spawn(request.answer_directives(vec![command]));
@@ -505,16 +508,17 @@ impl Connection {
         }
     }
 
-    fn request(&self, target: ResponseTarget, device_state: Option<Vec<u8>>, zone: Zone) -> Request {
+    fn request(&self, target: ResponseTarget, zone: Zone) -> Request {
         Request {
             context: self.context.clone(),
             outbox: self.outbox.clone(),
             dialog: self.dialog.clone(),
             target,
-            device_state,
             speech_end: None,
             zone,
             live_context: None,
+            device_id: self.device_id.clone(),
+            registry: self.registry.clone(),
         }
     }
 

@@ -32,17 +32,6 @@ pub fn to_directive(call: &DirectiveResult) -> Option<TDirective> {
         },
         "smart_speaker_set_sound_volume_louder" => client_action("sound_louder", json!({}), true),
         "smart_speaker_set_sound_volume_quieter" => client_action("sound_quiter", json!({}), true),
-        "smart_speaker_play_iot_sound" => match arguments["isPowerOn"].as_bool() {
-            Some(is_power_on) => client_action(
-                "local_audio_file_play",
-                json!({
-                    "play_times": 1,
-                    "sound_to_play": if is_power_on { "AliceIoTSoundsTurnOn" } else { "AliceIoTSoundsTurnOff" },
-                }),
-                true,
-            ),
-            None => return invalid(call),
-        },
         _ => {
             tracing::warn!("no station directive for function '{}'", call.name);
             return None;

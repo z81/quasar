@@ -21,9 +21,10 @@ use super::metadata::{BiometrySlot, InputMetadata};
 use super::outbox::{Outbox, ResponseTarget};
 use super::speech::{self, SpeechEnd};
 use super::{UniproxyContext, report};
-use crate::agent::protocol::FunctionCall;
+use crate::agent::protocol::{DirectiveResult, FunctionCall};
 use crate::agent::{Agent, AgentOutput, AgentTurn, ERROR_RESPONSE_TEXT, FunctionExecutor, OutputText};
 use crate::audio;
+use crate::connections::{ConnectionRegistry, StationCommand};
 use crate::directives;
 use crate::gigastt::{Endpoint, Recognition, Transcript};
 use crate::mcp::{LiveContext, Mcp};
@@ -201,8 +202,6 @@ pub struct Request {
     pub outbox: Outbox,
     pub dialog: DialogSlot,
     pub target: ResponseTarget,
-    /// The request's TDeviceState: metadata for remote servers
-    pub device_state: Option<Vec<u8>>,
     /// A voice request: when the user stopped speaking, for the latency of
     /// the answer's first audio
     pub speech_end: Option<SpeechEnd>,
@@ -210,6 +209,9 @@ pub struct Request {
     pub zone: Zone,
     /// The MCP servers' live context for the turn's state, already on its way
     pub live_context: Option<LiveContext>,
+    /// The station and its connections, for directives scheduled for later
+    pub device_id: String,
+    pub registry: ConnectionRegistry,
 }
 
 impl Request {
@@ -232,7 +234,7 @@ impl Request {
             return;
         }
         // MatchedUser may arrive while the utterance is transcribed, so biometry is read only now (as in TS)
-        let metadata = InputMetadata::new(self.device_state.as_deref(), biometry.get());
+        let metadata = InputMetadata::new(biometry.get());
         self.speech_end = Some(SpeechEnd { speech: speech_ended_at, utterance: ended_at });
         let live_context = self.live_context.take();
         self.answer_with_agent(&agent, AgentTurn { external_event: false, text }, &metadata, live_context).await;
@@ -240,14 +242,14 @@ impl Request {
 
     /// TextInput with an external event pushed through the API
     pub async fn answer_event(mut self, agent: Arc<Agent>, event: String) {
-        let metadata = InputMetadata::new(self.device_state.as_deref(), None);
+        let metadata = InputMetadata::new(None);
         let live_context = self.live_context.take();
         self.answer_with_agent(&agent, AgentTurn { external_event: true, text: event }, &metadata, live_context).await;
     }
 
     /// TextInput with text pushed through the API as if the user said it
     pub async fn answer_utterance(mut self, agent: Arc<Agent>, text: String) {
-        let metadata = InputMetadata::new(self.device_state.as_deref(), None);
+        let metadata = InputMetadata::new(None);
         let live_context = self.live_context.take();
         self.answer_with_agent(&agent, AgentTurn { external_event: false, text }, &metadata, live_context).await;
     }
@@ -309,6 +311,8 @@ impl Request {
             mcp: self.context.mcp.clone(),
             session_id,
             metadata: metadata_json,
+            device_id: self.device_id.clone(),
+            registry: self.registry.clone(),
         };
         if let Err(error) = agent.run_turn(turn, state_prompt, &executor, &parts).await {
             tracing::error!("agent turn failed: {error:#}");
@@ -478,12 +482,15 @@ async fn dialog_state(
 }
 
 /// Calls the functions of one turn: the MCP servers' tools, the remote
-/// function servers' functions with the turn's session id and metadata
+/// function servers' functions with the turn's session id and metadata,
+/// and the station directives scheduled for later
 struct RemoteExecutor {
     remote: Arc<RemoteServers>,
     mcp: Arc<Mcp>,
     session_id: String,
     metadata: Value,
+    device_id: String,
+    registry: ConnectionRegistry,
 }
 
 impl RemoteExecutor {
@@ -527,5 +534,18 @@ impl FunctionExecutor for RemoteExecutor {
     /// Part of the turn: an interrupted turn cancels it
     fn call(&self, call: FunctionCall) -> BoxFuture<'static, String> {
         self.call_any(call)
+    }
+
+    /// Detached like `spawn`; it goes through the connection the station has then
+    fn schedule_directive(&self, directive: DirectiveResult, delay_ms: u64) {
+        let (device_id, registry) = (self.device_id.clone(), self.registry.clone());
+        tracing::info!("sending {} after {delay_ms}ms", directive.name);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            if let Some(station_directive) = directives::to_directive(&directive) {
+                let delivered = registry.send(&device_id, StationCommand::Directives { directives: vec![station_directive] });
+                tracing::info!("pushed the scheduled {} to {delivered} connection(s) of {device_id}", directive.name);
+            }
+        });
     }
 }

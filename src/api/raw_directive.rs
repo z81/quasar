@@ -1,21 +1,15 @@
-//! Raw station directives of the management API: protobufjs
-//! `TDirective.fromObject` (TS push-directive) and the directives TS pushes
-//! itself. Field names are the .proto ones (`Name`, `Type`, `IsLedSilent`...),
-//! scalars get JS coercions, a Struct is in protobufjs form
-//! (`{ "fields": [{ "key": "k", "value": { "stringValue": "v" } }] }`), and the
-//! TypeErrors protobufjs throws become errors.
+//! Raw station directives of the management API: the part of protobufjs
+//! `TDirective.fromObject` (TS push-directive) that pushes use, and the
+//! directives TS pushes itself. Field names are the .proto ones (`Name`,
+//! `Type`, `IsLedSilent`, `Payload`), scalars get JS coercions, a Struct is in
+//! protobufjs form (`{ "fields": [{ "key": "k", "value": { "stringValue": "v" } }] }`),
+//! and the TypeErrors protobufjs throws become errors.
 
-use base64::Engine;
 use serde_json::{Map, Number, Value};
 
 use crate::proto::google::protobuf::{self as pb, r#struct::FieldsEntry, value::Kind};
-use crate::proto::n_alice::n_alice_api::t_directive::{
-    OptionalMultiroomSessionId, OptionalPersId, PayloadType, TOnFinishEvent, t_on_finish_event,
-};
-use crate::proto::n_alice::n_alice_api::{
-    TDirective, TLocalIoTSource, TLocalScenarioSource, TSourceInfo, t_source_info,
-};
-use crate::proto::n_alice::t_capability::EDirectiveType;
+use crate::proto::n_alice::n_alice_api::TDirective;
+use crate::proto::n_alice::n_alice_api::t_directive::PayloadType;
 
 /// TS pushUpdateConfigDirective: the station fetches get_sync_info again
 pub fn push_update_config() -> TDirective {
@@ -26,6 +20,7 @@ pub fn push_update_config() -> TDirective {
     }
 }
 
+/// The fields the Spotify bridge sends; other fields are ignored
 pub fn from_object(value: &Value) -> Result<TDirective, String> {
     let object = object(value, ".NAlice.NAliceApi.TDirective")?;
     let mut directive = TDirective::default();
@@ -35,100 +30,14 @@ pub fn from_object(value: &Value) -> Result<TDirective, String> {
     if let Some(value) = field(object, "Name") {
         directive.name = js_string(value);
     }
-    if let Some(value) = field(object, "AnalyticsType") {
-        directive.analytics_type = js_string(value);
-    }
-    directive.ignore_answer = field(object, "IgnoreAnswer").is_some_and(truthy);
-    if let Some(ids) = object.get("RoomDeviceIds").filter(|ids| truthy(ids)) {
-        let Value::Array(ids) = ids else {
-            return Err(".NAlice.NAliceApi.TDirective.RoomDeviceIds: array expected".to_string());
-        };
-        directive.room_device_ids = ids.iter().map(js_string).collect();
-    }
     directive.is_led_silent = field(object, "IsLedSilent").is_some_and(truthy);
-    if let Some(endpoint_id) = field(object, "EndpointId") {
-        let endpoint_id = self::object(endpoint_id, ".NAlice.NAliceApi.TDirective.EndpointId")?;
-        directive.endpoint_id = Some(pb::StringValue {
-            value: field(endpoint_id, "value").map(js_string).unwrap_or_default(),
-        });
-    }
-    directive.is_parallel = field(object, "IsParallel").is_some_and(truthy);
-    if let Some(value) = field(object, "TimeBeforeDropMs") {
-        directive.time_before_drop_ms = to_uint32(to_number(value));
-    }
-    if let Some(on_finish) = field(object, "OnFinish") {
-        let on_finish = self::object(on_finish, ".NAlice.NAliceApi.TDirective.OnFinish")?;
-        let event = field(on_finish, "TypedCallbackRequest")
-            .map(|request| {
-                struct_from_object(request, ".NAlice.NAliceApi.TDirective.TOnFinishEvent.TypedCallbackRequest")
-            })
-            .transpose()?
-            .map(t_on_finish_event::Event::TypedCallbackRequest);
-        directive.on_finish = Some(TOnFinishEvent { event });
-    }
-    if let Some(source_info) = field(object, "SourceInfo") {
-        directive.source_info = Some(source_info_from_object(source_info)?);
-    }
-    directive.attach_to_multiroom = field(object, "AttachToMultiroom").is_some_and(truthy);
-    match object.get("DirectiveType") {
-        Some(Value::Number(number)) => directive.directive_type = number.as_f64().map_or(0, |value| value as i32),
-        Some(Value::String(name)) => {
-            if let Some(directive_type) = EDirectiveType::from_str_name(name) {
-                directive.directive_type = directive_type as i32;
-            }
-        }
-        _ => {}
-    }
     if let Some(payload) = field(object, "Payload") {
         directive.payload_type = Some(PayloadType::Payload(struct_from_object(
             payload,
             ".NAlice.NAliceApi.TDirective.Payload",
         )?));
     }
-    // both set: protobufjs encodes both and the decoder keeps the later field
-    match field(object, "PayloadRaw") {
-        Some(Value::String(encoded)) => {
-            let engine = base64::engine::GeneralPurpose::new(
-                &base64::alphabet::STANDARD,
-                base64::engine::GeneralPurposeConfig::new()
-                    .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
-            );
-            let bytes = engine.decode(encoded).map_err(|_| "invalid encoding".to_string())?;
-            directive.payload_type = Some(PayloadType::PayloadRaw(bytes));
-        }
-        Some(Value::Array(bytes)) => {
-            let bytes = bytes.iter().map(|byte| to_uint32(to_number(byte)).to_le_bytes()[0]).collect();
-            directive.payload_type = Some(PayloadType::PayloadRaw(bytes));
-        }
-        _ => {}
-    }
-    if let Some(value) = field(object, "MultiroomSessionId") {
-        directive.optional_multiroom_session_id =
-            Some(OptionalMultiroomSessionId::MultiroomSessionId(js_string(value)));
-    }
-    if let Some(value) = field(object, "PersId") {
-        directive.optional_pers_id = Some(OptionalPersId::PersId(js_string(value)));
-    }
-    directive.id = field(object, "Id").map(js_string);
     Ok(directive)
-}
-
-fn source_info_from_object(value: &Value) -> Result<TSourceInfo, String> {
-    let object = object(value, ".NAlice.NAliceApi.TDirective.SourceInfo")?;
-    let mut source_info = TSourceInfo::default();
-    if let Some(source) = field(object, "LocalIoTSource") {
-        let source = self::object(source, ".NAlice.NAliceApi.TSourceInfo.LocalIoTSource")?;
-        source_info.source = Some(t_source_info::Source::LocalIoTSource(TLocalIoTSource {
-            endpoint_id: field(source, "EndpointId").map(js_string).unwrap_or_default(),
-        }));
-    }
-    if let Some(source) = field(object, "LocalScenarioSource") {
-        let source = self::object(source, ".NAlice.NAliceApi.TSourceInfo.LocalScenarioSource")?;
-        source_info.source = Some(t_source_info::Source::LocalScenarioSource(TLocalScenarioSource {
-            scenario_id: field(source, "ScenarioId").map(js_string).unwrap_or_default(),
-        }));
-    }
-    Ok(source_info)
 }
 
 fn struct_from_object(value: &Value, name: &str) -> Result<pb::Struct, String> {
@@ -241,14 +150,5 @@ fn to_number(value: &Value) -> f64 {
         Value::String(text) => text.trim().parse().unwrap_or(f64::NAN),
         Value::Null => 0.0,
         Value::Array(_) | Value::Object(_) => f64::NAN,
-    }
-}
-
-/// JS `value >>> 0`
-fn to_uint32(value: f64) -> u32 {
-    if value.is_finite() {
-        value.trunc().rem_euclid(4_294_967_296.0) as u32
-    } else {
-        0
     }
 }

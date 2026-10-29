@@ -54,7 +54,7 @@ impl RemoteServers {
     }
 
     /// Calls the server that owns the given function name; `session_id` and
-    /// `metadata` (device state, speaker biometry) describe the dialog, as in
+    /// `metadata` (speaker biometry, server type) describe the dialog, as in
     /// TS. Returns the response body (the result of a has-response function)
     pub async fn call_by_name(
         &self,

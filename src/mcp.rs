@@ -61,6 +61,10 @@ const LIVE_CONTEXT_TOOL: &str = "GetLiveContext";
 /// Longer results are cut, with a note
 const MAX_RESULT_CHARS: usize = 8000;
 
+/// The live context goes into every LLM request, but a cut one hides devices
+/// from the model; so its limit is higher
+const MAX_LIVE_CONTEXT_CHARS: usize = 30_000;
+
 /// Pages of one tool list at most
 const MAX_PAGES: usize = 50;
 
@@ -319,7 +323,7 @@ impl Server {
         match outcome {
             Ok(result) => {
                 let (text, is_error) = result_text(&result);
-                let text = limited(text);
+                let text = limited(text, MAX_RESULT_CHARS);
                 if is_error {
                     tracing::warn!("MCP {}_{tool}: error result in {elapsed} ms: {}", self.prefix, cut(&text, 300));
                     format!("error: {text}")
@@ -347,7 +351,7 @@ impl Server {
                         .ok()
                         .and_then(|value| value["result"].as_str().map(str::to_string))
                         .unwrap_or(text);
-                    let text = limited(text);
+                    let text = limited(text, MAX_LIVE_CONTEXT_CHARS);
                     let elapsed = started.elapsed().as_millis();
                     tracing::info!("MCP {}: live context in {elapsed} ms ({} characters)", self.prefix, text.chars().count());
                     let description = format!(
@@ -534,9 +538,9 @@ fn result_text(result: &Value) -> (String, bool) {
     (parts.join("\n"), result["isError"].as_bool().unwrap_or(false))
 }
 
-/// A huge result cut to MAX_RESULT_CHARS, saying so
-fn limited(text: String) -> String {
-    match text.char_indices().nth(MAX_RESULT_CHARS) {
+/// A huge result cut to `max` characters, saying so
+fn limited(text: String, max: usize) -> String {
+    match text.char_indices().nth(max) {
         Some((end, _)) => format!("{}… (cut here: {} more characters)", &text[..end], text[end..].chars().count()),
         None => text,
     }

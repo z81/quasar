@@ -1,0 +1,21 @@
+# AirPlay on its own: next to the other services, or as a Compose service in Dokploy.
+# The host's network is a must: AirPlay finds the speaker by mDNS, and AirPlay 2 keeps
+# time over PTP on ports 319 and 320. mDNS is left to the host's avahi-daemon; on a
+# machine without one, remove ENABLE_AVAHI and its two volumes: the image runs its own.
+services:
+  airplay:
+    build:
+      context: ../..
+      dockerfile: docker/airplay/Dockerfile
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      ENABLE_AVAHI: 0
+    volumes:
+      - airplay:/airplay
+      - /var/run/dbus:/var/run/dbus
+      - /var/run/avahi-daemon:/var/run/avahi-daemon
+
+volumes:
+  airplay:
+    name: airplay

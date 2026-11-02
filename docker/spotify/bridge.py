@@ -16,6 +16,11 @@ gets voice control: search and play, pause, next and previous track (the
 function server protocol of alice-server at /functions, the playback state at
 /state).
 
+With AIRPLAY_FIFO_PATH the speaker takes AirPlay as well: shairport-sync
+(docker/airplay) writes the sound it receives to that named pipe, which goes
+out in the same stream. Of Spotify and AirPlay, the last to start has the
+station.
+
 librespot runs this file as its --onevent program too: with PLAYER_EVENT in
 the environment it only hands the event over to the running bridge.
 """
@@ -56,6 +61,7 @@ import http.server
 import json
 import logging
 import secrets
+import select
 import signal
 import socket
 import subprocess
@@ -87,6 +93,7 @@ CACHE = DATA / "librespot"
 CREDENTIALS = CACHE / "credentials.json"
 TOKENS = DATA / "spotify-api.json"
 FIFO = Path(env("FIFO_PATH", "/tmp/librespot.pcm"))
+AIRPLAY_FIFO = env("AIRPLAY_FIFO_PATH")
 
 RATE = 44100 * 2 * 2  # bytes per second of 16-bit stereo PCM at 44.1 kHz
 CHUNK = RATE // 20  # 50 ms
@@ -101,6 +108,8 @@ HOLD_AFTER = 5
 # itself: with nothing to wake it, it sits on the dead session for days, gone from
 # the user's devices (librespot-org/librespot#1692)
 CONNECTION_LOST = ("Connection to server closed", "Websocket peer does not respond")
+# AirPlay's sound that stops for this long was paused or disconnected
+AIRPLAY_QUIET = 3
 SCOPES = "user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -203,6 +212,8 @@ class Bridge:
         self.events = collections.deque(maxlen=20)
         self.api = SpotifyApi() if CLIENT_ID and CLIENT_SECRET else None
         self.encoder = None
+        # AirPlay's sound: None while there is none, "playing" on the station, or "ignored" after Spotify took it
+        self.airplay = None
 
     # librespot
 
@@ -352,7 +363,7 @@ class Bridge:
 
     def taking(self, listener):
         """Whether librespot's sound goes on to this listener (under the lock)"""
-        if not listener or listener.closed:
+        if not listener or listener.closed or self.airplay == "playing":
             return False
         return not listener.stalled or (self.api is not None and time.monotonic() - listener.stalled_at < HOLD_AFTER)
 
@@ -429,7 +440,7 @@ class Bridge:
         with self.lock:
             listener.stalled = False
             self.lock.notify_all()
-            paused = self.state != "playing"
+            paused = self.state != "playing" and self.airplay != "playing"
         log.info("the station reads the stream again")
         if paused and self.api:
             self.api.try_call("resume")
@@ -438,6 +449,52 @@ class Bridge:
         """Whether the station reads the stream now"""
         with self.lock:
             return bool(self.listener and not self.listener.closed and not self.listener.stalled)
+
+    # AirPlay
+
+    def run_airplay(self):
+        """shairport-sync's PCM into the encoder. It comes at the pace of real
+        time and cannot be held back: what the station does not read is dropped.
+        Opened for writing too, so that a restart of shairport-sync is no end of file"""
+        try:
+            os.mkfifo(AIRPLAY_FIFO)
+        except FileExistsError:
+            pass
+        pipe = os.open(AIRPLAY_FIFO, os.O_RDWR)
+        while True:
+            if select.select([pipe], [], [], AIRPLAY_QUIET)[0]:
+                self.airplay_sound(os.read(pipe, CHUNK))
+            else:
+                self.airplay_quiet()
+
+    def airplay_sound(self, data):
+        with self.lock:
+            started = self.airplay is None
+            if started:
+                self.airplay = "playing"
+                self.events.append(f"{time.strftime('%H:%M:%S')} AirPlay")
+            playing, spotify = self.airplay == "playing", self.state == "playing"
+        if started:
+            log.info("AirPlay started")
+            # the pipe has to be read on in the meantime
+            threading.Thread(target=self.airplay_take_over, args=(spotify,), daemon=True).start()
+        if playing and self.listening():
+            self.encode(data)
+
+    def airplay_take_over(self, spotify):
+        self.station.play()
+        if spotify and self.api:
+            self.api.try_call("pause")
+
+    def airplay_quiet(self):
+        with self.lock:
+            if self.airplay is None:
+                return
+            playing, self.airplay = self.airplay == "playing", None
+            self.lock.notify_all()
+        log.info("AirPlay stopped")
+        if playing:
+            self.station.pause()
 
     # librespot's events
 
@@ -452,6 +509,8 @@ class Bridge:
                 self.track = {"name": fields.get("NAME", ""), "artists": artists, "uri": fields.get("URI", "")}
             elif event == "playing":
                 self.state = "playing"
+                if self.airplay:
+                    self.airplay = "ignored"
             elif event == "paused":
                 self.state = "paused"
             elif event in ("stopped", "session_disconnected"):
@@ -466,7 +525,7 @@ class Bridge:
                 self.jumped = True
             if event in ("playing", "paused", "stopped", "session_disconnected"):
                 self.state_changes += 1
-            state = self.state
+            state, airplay = self.state, self.airplay == "playing"
             # what the station has buffered is stale after a jump: a new connection drops it
             restart = state == "playing" and event in ("playing", "seeked") and self.jumped
             if restart:
@@ -482,7 +541,7 @@ class Bridge:
                     self.last_play_push = time.monotonic()
             if not recent:
                 self.station.play()
-        elif event in ("paused", "stopped", "session_disconnected") and state != "playing":
+        elif event in ("paused", "stopped", "session_disconnected") and state != "playing" and not airplay:
             self.station.pause()
 
     # the assistant's functions and state (alice-server's protocols)
@@ -529,11 +588,11 @@ class Bridge:
 
     def play(self, query, kind):
         if not query:
-            if not self.api:
+            with self.lock:
+                changes, playing, airplay = self.state_changes, self.state == "playing", self.airplay == "playing"
+            if airplay or not self.api:
                 self.station.play()
                 return "ok: продолжаю"
-            with self.lock:
-                changes, playing = self.state_changes, self.state == "playing"
             if playing:
                 if not (self.station.playing and self.listening()):
                     self.station.play()
@@ -559,7 +618,9 @@ class Bridge:
 
     def now_playing(self):
         with self.lock:
-            track, state = self.track, self.state
+            track, state, airplay = self.track, self.state, self.airplay == "playing"
+        if airplay:
+            return "На колонке играет звук по AirPlay"
         if not track or state == "stopped":
             return "В Spotify на колонке сейчас ничего не играет"
         title = f"«{track['name']}» — {track['artists']}" if track["artists"] else f"«{track['name']}»"
@@ -813,7 +874,10 @@ def main():
     if not ALICE_API_URL:
         log.warning("ALICE_API_URL is not set: the station will not follow Spotify")
     bridge = Bridge()
-    for target in (bridge.run_librespot, bridge.run_encoder, bridge.run_pump):
+    targets = [bridge.run_librespot, bridge.run_encoder, bridge.run_pump]
+    if AIRPLAY_FIFO:
+        targets.append(bridge.run_airplay)
+    for target in targets:
         threading.Thread(target=target, daemon=True).start()
     log.info("Spotify bridge for «%s» on port %d, stream %s, station %s", NAME, PORT, STREAM_URL, STATION_ID)
     # as PID 1 of a container the process ignores SIGTERM without a handler

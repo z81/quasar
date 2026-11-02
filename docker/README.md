@@ -1,6 +1,6 @@
 # Запуск сервисов
 
-alice-server работает и один: речь и ответы идут через OpenRouter. Остальные контейнеры добавляют локальное распознавание и синтез речи, Spotify и базу для станций. Здесь описано, как их запустить и подключить к alice-server. Настройки самого alice-server — в [основном README](../README.md#настройка).
+alice-server работает и один: речь и ответы идут через OpenRouter. Остальные контейнеры добавляют локальное распознавание и синтез речи, Spotify, AirPlay и базу для станций. Здесь описано, как их запустить и подключить к alice-server. Настройки самого alice-server — в [основном README](../README.md#настройка).
 
 | Сервис | Зачем | Образ | Порт | Данные |
 |---|---|---|---|---|
@@ -9,6 +9,7 @@ alice-server работает и один: речь и ответы идут ч�
 | [Piper](#piper) | Синтез речи, самый быстрый | `docker/piper` | 5000 | `/data` |
 | [Vosk](#vosk) | Синтез речи, звучит естественнее Piper | `docker/vosk` | 5000 | `/data` |
 | [Spotify](#spotify) | Делает станцию колонкой Spotify Connect | `docker/spotify` | 8090 | `/data` |
+| [AirPlay](#airplay) | Делает станцию колонкой AirPlay 2 | `docker/airplay` | сеть хоста | `/airplay` |
 
 Любой из них можно не запускать, а из синтезаторов достаточно одного. Образы из `docker/` собираются из корня репозитория.
 
@@ -35,7 +36,7 @@ alice-server работает и один: речь и ответы идут ч�
 | gigastt | `GIGASTT_VAD` |
 | Piper | `PIPER_VOICE` |
 | Vosk | `VOSK_SPEAKER`, `VOSK_THREADS`, `VOSK_MODEL` |
-| Spotify | `STREAM_URL`, `ALICE_API_URL`, `STATION_ID`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` и другие `SPOTIFY_*`, `MP3_BITRATE` |
+| Spotify | `STREAM_URL`, `ALICE_API_URL`, `STATION_ID`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` и другие `SPOTIFY_*`, `MP3_BITRATE`, `AIRPLAY_FIFO_PATH` |
 
 `PIPER_VOICE` есть и у alice-server, но голос удобнее выбирать в контейнере Piper: он скачивает только этот голос.
 
@@ -279,6 +280,7 @@ docker run -d --name spotify --network alice --restart unless-stopped \
 | `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` | — | Приложение с developer.spotify.com для [голосового управления](#голосовое-управление) |
 | `SPOTIFY_REDIRECT_URI` | `http://127.0.0.1:8888/callback` | Redirect URI этого приложения |
 | `MP3_BITRATE` | `256k` | Битрейт потока |
+| `AIRPLAY_FIFO_PATH` | — | Именованный канал со звуком [AirPlay](#airplay). Без него AirPlay выключен |
 
 ### Вход в Spotify
 
@@ -302,6 +304,34 @@ PROCESSOR_STATE_SERVER_URLS=http://spotify:8090/state
 1. Создайте приложение на [developer.spotify.com](https://developer.spotify.com/dashboard) с Redirect URI `http://127.0.0.1:8888/callback`.
 2. Задайте его `SPOTIFY_CLIENT_ID` и `SPOTIFY_CLIENT_SECRET` контейнеру Spotify, а не alice-server.
 3. Откройте страницу сервиса и подключите управление тем же способом, что и вход. Страница напишет «Голосовое управление подключено».
+
+## AirPlay
+
+Делает станцию колонкой AirPlay 2: на iPhone и Mac появляется устройство «Алиса». Внутри работает [shairport-sync](https://github.com/mikebrady/shairport-sync). Он пишет принятый звук в именованный канал, а сервис [Spotify](#spotify) отдаёт этот звук станции своим потоком. Поэтому сервис Spotify нужен, а вход в Spotify нет. Как это устроено, описано в [основном README](../README.md#airplay).
+
+```bash
+docker compose -f docker/airplay/docker-compose.yml up -d --build
+```
+
+Сервису Spotify подключите тот же том и укажите канал:
+
+```yaml
+services:
+  spotify:
+    environment:
+      AIRPLAY_FIFO_PATH: /airplay/audio
+    volumes:
+      - airplay:/airplay
+
+volumes:
+  airplay:
+    external: true
+```
+
+- Контейнеру нужна сеть хоста, поэтому AirPlay работает только на Linux: на Docker Desktop сеть хоста другая.
+- Порты 7000/tcp, 319/udp и 320/udp должны быть свободны.
+- mDNS в `docker-compose.yml` отдан avahi-daemon на хосте. Если его нет, уберите `ENABLE_AVAHI` и оба тома с `/var/run`: образ запустит свой.
+- Имя колонки задаётся в `docker/airplay/shairport-sync.conf`.
 
 ## alice-server
 
@@ -336,6 +366,7 @@ PROCESSOR_STATE_SERVER_URLS=http://spotify:8090/state
 - **gigastt** — из образа `ghcr.io/ekhodzitsky/gigastt:2.18.0`.
 - **PostgreSQL** удобно создать как базу Dokploy и взять для `POSTGRES_URL` её внутренний адрес подключения.
 - **alice-server, Piper, Vosk и Spotify** собираются из этого репозитория: тип сборки Dockerfile, путь — `Dockerfile` или `docker/<сервис>/Dockerfile`, контекст сборки — корень репозитория.
+- **AirPlay** создайте как сервис типа Compose с файлом `./docker/airplay/docker-compose.yml`, а не как приложение: при деплое приложения новый контейнер запускался бы рядом со старым и упирался в занятые порты. В приложении Spotify добавьте том `airplay` с путём `/airplay` и переменную `AIRPLAY_FIFO_PATH=/airplay/audio`.
 - **Переменные** задаются во вкладке Environment того приложения, которому они нужны: см. [таблицу](#какая-переменная-в-какой-контейнер).
 - **Порты** публикуйте только [нужные снаружи](#как-сервисы-связаны). **Тома** подключите к `/data` и к папке моделей gigastt, иначе после каждого деплоя модели будут скачиваться заново, а вход в Spotify потеряется.
 - **alice-server деплойте последним.** После изменений в функциях Spotify передеплойте и его.
@@ -353,6 +384,8 @@ PROCESSOR_STATE_SERVER_URLS=http://spotify:8090/state
 | После перезагрузки машины пропали функции Spotify или база | Docker поднимает контейнеры без учёта порядка. Перезапустите alice-server |
 | Spotify играет, станция молчит, а на странице Spotify «Станция не слушает поток» | Станция не может открыть `STREAM_URL`: в нём должны быть адрес машины в домашней сети и опубликованный порт. Проверьте с другого компьютера: `curl http://192.168.1.10:8090/health` должен ответить `ok` |
 | Станция не реагирует на Spotify, а в логе Spotify `ALICE_API_URL is not set` | Задайте `ALICE_API_URL` контейнеру Spotify |
+| «Алиса» не видна в списке AirPlay | Контейнер AirPlay запущен не в сети хоста, или на машине не работает mDNS. Проверьте с Mac: `dns-sd -B _airplay._tcp` |
+| AirPlay выбран, станция молчит, а в событиях на странице Spotify нет `AirPlay` | Контейнеры AirPlay и Spotify используют разные тома, или контейнеру Spotify не задан `AIRPLAY_FIFO_PATH` |
 | На странице Spotify «Голосовое управление выключено» | `SPOTIFY_CLIENT_ID` и `SPOTIFY_CLIENT_SECRET` нужны контейнеру Spotify, а не alice-server |
 | В логе alice-server `end of utterance by gigastt (blank, …)` | gigastt работает без VAD: задайте `GIGASTT_VAD=true` контейнеру gigastt |
 | В логе alice-server `MCP server 'ha' (…): unavailable (HTTP 401 Unauthorized …` | Home Assistant не принял токен. Проверьте токен и префикс в `PROCESSOR_MCP_SERVER_TOKENS`: он должен совпадать с префиксом после `#` в `PROCESSOR_MCP_SERVER_URLS` |

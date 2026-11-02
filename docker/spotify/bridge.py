@@ -97,6 +97,10 @@ STALL = float(env("STALL_MS", "2000")) / 1000
 # with the Web API such a station has Spotify paused, and librespot holds back
 # only after this long: blocked in its write it would not take that pause
 HOLD_AFTER = 5
+# librespot's log lines for a lost connection to Spotify. It may not come back by
+# itself: with nothing to wake it, it sits on the dead session for days, gone from
+# the user's devices (librespot-org/librespot#1692)
+CONNECTION_LOST = ("Connection to server closed", "Websocket peer does not respond")
 SCOPES = "user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -279,10 +283,17 @@ class Bridge:
             if "Bad credentials" in line or "BadCredentials" in line:
                 log.warning("Spotify refused the saved credentials: signing in again")
                 CREDENTIALS.unlink(missing_ok=True)
+            if any(message in line for message in CONNECTION_LOST):
+                log.warning("librespot lost its connection: restarting it")
+                process.terminate()
         code = process.wait()
         with self.lock:
             self.librespot_status = f"перезапуск (код {code})"
+            playing = self.state == "playing"
         log.warning("librespot exited with %s", code)
+        if playing:
+            # no event comes from a librespot that is gone
+            self.on_event({"PLAYER_EVENT": "session_disconnected"})
 
     # sound
 

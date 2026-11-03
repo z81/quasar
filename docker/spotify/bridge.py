@@ -7,7 +7,9 @@ Connect speaker. Its PCM is encoded to MP3 by ffmpeg and served at
 playing on the speaker the station is told to play the stream, when Spotify
 pauses or moves to another device the station pauses (push-directive of
 alice-server's management API). While the station does not read the stream
-(its own pause), librespot is held back until it reads again.
+(its own pause), librespot is held back until it reads again. The sender's
+volume moves the station's own volume, which changes at once: in the stream a
+change would be heard only after what the station has buffered.
 
 The first start needs a Spotify sign-in: the page at / shows the link and
 takes the address Spotify redirects to afterwards. With SPOTIFY_CLIENT_ID and
@@ -110,6 +112,10 @@ HOLD_AFTER = 5
 CONNECTION_LOST = ("Connection to server closed", "Websocket peer does not respond")
 # AirPlay's sound that stops for this long was paused or disconnected
 AIRPLAY_QUIET = 3
+# a step of the station's volume for a tenth of Spotify's slider, and for each press of a
+# Mac's volume key (AirPlay's -30 to 0 dB in 16 presses, the step a little under one)
+SPOTIFY_VOLUME_STEP = 65535 / 10
+AIRPLAY_VOLUME_STEP = 1.8
 SCOPES = "user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -153,6 +159,15 @@ def struct(value):
     return {"fields": [{"key": key, "value": wrap(item)} for key, item in value.items()]}
 
 
+def file_version(path):
+    """What tells one write of a file from the next; None while there is no file"""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_ino, stat.st_mtime_ns
+
+
 class Station:
     """The station, through the management API of alice-server"""
 
@@ -179,7 +194,36 @@ class Station:
 
     def pause(self):
         self.playing = False
-        self.push("player_pause", {}, True)
+        # player_pause is taken only with the next directive: the station played out what it had
+        # buffered first, two seconds and more. audio_stop stops it at once, and play() starts
+        # a new stream anyway
+        self.push("audio_stop", {}, True)
+
+    def change_volume(self, steps):
+        for _ in range(abs(steps)):
+            self.push("sound_louder" if steps > 0 else "sound_quiter", {}, True)
+
+
+class VolumeSteps:
+    """A sender's volume as steps of the station's, from where the sender was when first
+    heard: it does not know the station's volume, which would jump to the sender's"""
+
+    def __init__(self, step):
+        self.step = step
+        self.last = None
+
+    def follow(self, volume):
+        """The station's steps to this volume, louder above zero"""
+        if self.last is None:
+            self.last = volume
+            return 0
+        steps = int((volume - self.last) / self.step)
+        self.last += steps * self.step
+        return steps
+
+    def forget(self):
+        """The next volume is where the sender starts again"""
+        self.last = None
 
 
 class Listener:
@@ -214,6 +258,8 @@ class Bridge:
         self.encoder = None
         # AirPlay's sound: None while there is none, "playing" on the station, or "ignored" after Spotify took it
         self.airplay = None
+        self.spotify_volume = VolumeSteps(SPOTIFY_VOLUME_STEP)
+        self.airplay_volume = VolumeSteps(AIRPLAY_VOLUME_STEP)
 
     # librespot
 
@@ -282,8 +328,11 @@ class Bridge:
                 log.info("librespot: %s", line)
 
     def play_librespot(self):
+        # the volume goes to the station's (on_event), so the stream keeps its level: 0.1 dB is about
+        # the least range librespot's cubic curve takes, at 0 it is linear, and fixed hides the slider
         command = self.librespot_command("--backend", "pipe", "--device", str(FIFO), "--format", "S16", "--bitrate", "320",
-                                         "--initial-volume", "100", "--onevent", str(Path(__file__).resolve()))
+                                         "--initial-volume", "100", "--volume-ctrl", "cubic", "--volume-range", "0.1",
+                                         "--onevent", str(Path(__file__).resolve()))
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         with self.lock:
             self.librespot_status = "работает"
@@ -493,10 +542,36 @@ class Bridge:
             if self.airplay is None:
                 return
             playing, self.airplay = self.airplay == "playing", None
+            # macOS starts each session at a third of its slider
+            self.airplay_volume.forget()
             self.lock.notify_all()
         log.info("AirPlay stopped")
         if playing:
             self.station.pause()
+
+    def run_airplay_volume(self):
+        """The sender's volume, which docker/airplay/airplay-volume writes next to the pipe on
+        each change: -30 to 0 dB, -144 for mute"""
+        path = Path(AIRPLAY_FIFO).with_name("volume")
+        # one written before the bridge started is no change
+        seen = file_version(path)
+        while True:
+            time.sleep(0.1)
+            version = file_version(path)
+            if version == seen:
+                continue
+            seen = version
+            try:
+                volume = float(path.read_text())
+            except (OSError, ValueError):
+                continue
+            # mute and anything else leave the station's volume as it is
+            if not -30 <= volume <= 0:
+                continue
+            with self.lock:
+                steps = self.airplay_volume.follow(volume)
+            if steps:
+                self.station.change_volume(steps)
 
     # librespot's events
 
@@ -525,6 +600,11 @@ class Bridge:
                 self.played_out = False
             elif event == "seeked":
                 self.jumped = True
+            elif event in ("session_connected", "session_client_changed"):
+                # another controller, with a slider of its own
+                self.spotify_volume.forget()
+            volume = fields.get("VOLUME", "") if event == "volume_changed" else ""
+            volume_steps = self.spotify_volume.follow(int(volume)) if volume.isdigit() else 0
             if event in ("playing", "paused", "stopped", "session_disconnected"):
                 self.state_changes += 1
             state, airplay = self.state, self.airplay == "playing"
@@ -534,6 +614,8 @@ class Bridge:
                 self.jumped = False
             self.lock.notify_all()
         log.info("librespot event %s", event)
+        if volume_steps:
+            self.station.change_volume(volume_steps)
         if state == "playing" and event in ("playing", "seeked") and (restart or not (self.station.playing and self.listening())):
             # the station plays the stream; a push that is still connecting is not repeated
             with self.lock:
@@ -878,7 +960,7 @@ def main():
     bridge = Bridge()
     targets = [bridge.run_librespot, bridge.run_encoder, bridge.run_pump]
     if AIRPLAY_FIFO:
-        targets.append(bridge.run_airplay)
+        targets += [bridge.run_airplay, bridge.run_airplay_volume]
     for target in targets:
         threading.Thread(target=target, daemon=True).start()
     log.info("Spotify bridge for «%s» on port %d, stream %s, station %s", NAME, PORT, STREAM_URL, STATION_ID)

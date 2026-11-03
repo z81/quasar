@@ -1,0 +1,5 @@
+#!/bin/sh
+# run_this_when_volume_is_set of shairport-sync.conf: the sender's volume (-30 to 0 dB, -144
+# for mute) next to the sound's pipe, where the bridge of docker/spotify takes it. Written
+# whole and then renamed, so that the bridge never reads half of it
+printf '%s\n' "$1" > "/airplay/volume.$$" && mv -f "/airplay/volume.$$" /airplay/volume

@@ -310,7 +310,9 @@ class Bridge:
 
     def run_encoder(self):
         while True:
-            command = ["ffmpeg", "-loglevel", "error", "-f", "s16le", "-ar", "44100", "-ac", "2", "-i", "pipe:0",
+            # no analysis of the input: it would hold back the first 4.6 s of sound that comes in real time
+            command = ["ffmpeg", "-loglevel", "error", "-probesize", "32", "-analyzeduration", "0",
+                       "-f", "s16le", "-ar", "44100", "-ac", "2", "-i", "pipe:0",
                        "-c:a", "libmp3lame", "-b:a", BITRATE, "-f", "mp3", "-write_xing", "0", "-id3v2_version", "0",
                        "-flush_packets", "1", "pipe:1"]
             process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE)

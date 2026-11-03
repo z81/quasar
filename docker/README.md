@@ -386,6 +386,7 @@ PROCESSOR_STATE_SERVER_URLS=http://spotify:8090/state
 | Станция не реагирует на Spotify, а в логе Spotify `ALICE_API_URL is not set` | Задайте `ALICE_API_URL` контейнеру Spotify |
 | «Алиса» не видна в списке AirPlay | Контейнер AirPlay запущен не в сети хоста, или на машине не работает mDNS. Проверьте с Mac: `dns-sd -B _airplay._tcp` |
 | AirPlay выбран, станция молчит, а в событиях на странице Spotify нет `AirPlay` | Контейнеры AirPlay и Spotify используют разные тома, или контейнеру Spotify не задан `AIRPLAY_FIFO_PATH` |
+| Устройство подключается к «Алисе» дольше пяти секунд | В сети хоста приёмник отдаёт отправителю все адреса машины, и тот перебирает их по одному. Посмотрите `ip -6 addr`: временные IPv6-адреса копятся десятками. Отключите их, например `nmcli connection modify <профиль> ipv6.ip6-privacy 0` |
 | На странице Spotify «Голосовое управление выключено» | `SPOTIFY_CLIENT_ID` и `SPOTIFY_CLIENT_SECRET` нужны контейнеру Spotify, а не alice-server |
 | В логе alice-server `end of utterance by gigastt (blank, …)` | gigastt работает без VAD: задайте `GIGASTT_VAD=true` контейнеру gigastt |
 | В логе alice-server `MCP server 'ha' (…): unavailable (HTTP 401 Unauthorized …` | Home Assistant не принял токен. Проверьте токен и префикс в `PROCESSOR_MCP_SERVER_TOKENS`: он должен совпадать с префиксом после `#` в `PROCESSOR_MCP_SERVER_URLS` |

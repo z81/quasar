@@ -19,6 +19,9 @@ pub enum TextInputKind {
     /// Text pushed through the API as if the user said it: answered by the
     /// dialog agent like a voice input
     Utterance(String),
+    /// The station's play or continue button. The station also sends it by
+    /// itself when a pushed audio_play resumes its paused player
+    PlayButton,
     /// Step 1 of the TS keep-alive handshake: answered with a push of step 2
     ContinueStage1 {
         dialog_id: Option<String>,
@@ -58,7 +61,7 @@ fn classify_payload(payload: &Value) -> TextInputKind {
     };
 
     if frame("music_play_semantic_frame") {
-        play_button()
+        TextInputKind::PlayButton
     } else if let Some(event) = text("/typed_semantic_frame/external_event_semantic_frame/event") {
         TextInputKind::ExternalEvent(event)
     } else if let Some(text) = text("/typed_semantic_frame/tts_semantic_frame/text") {
@@ -78,18 +81,14 @@ fn classify_payload(payload: &Value) -> TextInputKind {
     }
 }
 
-/// The station's play and continue buttons: a request to the assistant, which
-/// resumes the music if a music service gave it the functions for that
-fn play_button() -> TextInputKind {
-    TextInputKind::Utterance("продолжи музыку".to_string())
-}
-
 /// `@@mm_semantic_frame` with a serialized TSemanticFrameRequestData: the
 /// station's play/continue buttons
 fn classify_semantic_frame(raw: &[u8]) -> TextInputKind {
     match TSemanticFrameRequestData::decode(raw) {
         Ok(request) => match request.typed_semantic_frame.and_then(|frame| frame.r#type) {
-            Some(TypedFrame::MusicPlaySemanticFrame(_) | TypedFrame::PlayerContinueSemanticFrame(_)) => play_button(),
+            Some(TypedFrame::MusicPlaySemanticFrame(_) | TypedFrame::PlayerContinueSemanticFrame(_)) => {
+                TextInputKind::PlayButton
+            }
             other => TextInputKind::Unknown(format!("semantic frame {other:?}")),
         },
         Err(error) => TextInputKind::Unknown(format!("undecodable semantic frame: {error}")),

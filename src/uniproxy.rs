@@ -21,7 +21,7 @@ mod text_input;
 
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use futures_util::StreamExt;
@@ -88,6 +88,10 @@ const MAX_UTTERANCE_BYTES: usize = 8 * 1024 * 1024;
 
 /// What the station listens for; its voice stream starts with them
 const WAKE_WORDS: [&str; 2] = ["алиса", "яндекс"];
+
+/// A press of the continue button this soon after a pushed audio_play is the
+/// station's own echo of it (about 50 ms later in its logs)
+const AUDIO_PLAY_ECHO: Duration = Duration::from_secs(2);
 
 pub async fn handle_socket(
     socket: WebSocket,
@@ -209,6 +213,8 @@ struct Connection {
     unknown_audio_stream: Option<i64>,
     /// The time zone the station named last (`Application.Timezone`)
     station_zone: Option<String>,
+    /// When the management API pushed an audio_play last (a music service resuming)
+    audio_play_pushed_at: Option<Instant>,
     /// The station and its connections, for directives scheduled for later:
     /// by then it may talk through another connection
     device_id: String,
@@ -229,6 +235,7 @@ impl Connection {
             ended_stream: None,
             unknown_audio_stream: None,
             station_zone: None,
+            audio_play_pushed_at: None,
             device_id,
             registry,
         }
@@ -255,6 +262,9 @@ impl Connection {
             }
             StationCommand::Directives { directives } => directives,
         };
+        if pushed.iter().any(|directive| directive.name == "audio_play") {
+            self.audio_play_pushed_at = Some(Instant::now());
+        }
         report(self.outbox.push(pushed));
     }
 
@@ -451,7 +461,13 @@ impl Connection {
         let request_header = request.header.take().unwrap_or_default();
         let station_dialog_id = request_header.dialog_id.as_deref();
         let zone = self.zone_for(&request);
-        let kind = text_input::classify(&request);
+        let echo = self.audio_play_pushed_at.is_some_and(|at| at.elapsed() < AUDIO_PLAY_ECHO);
+        let kind = match text_input::classify(&request) {
+            // a press asks the assistant, which resumes the music if a music
+            // service gave it the functions for that
+            TextInputKind::PlayButton if !echo => TextInputKind::Utterance("продолжи музыку".to_string()),
+            kind => kind,
+        };
         let target = |dialog_id: String| ResponseTarget {
             dialog_id,
             request_id: request_header.request_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
@@ -477,6 +493,11 @@ impl Connection {
             TextInputKind::Tts(text) => {
                 let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), zone);
                 self.tasks.spawn(request.answer_tts(text));
+            }
+            TextInputKind::PlayButton => {
+                // the music plays already: the assistant would only talk over it
+                tracing::info!("the station's continue button right after a pushed audio_play: answered with nothing");
+                report(self.outbox.empty_response(&target(self.dialog.response_dialog_id(station_dialog_id))));
             }
             TextInputKind::ContinueStage1 { dialog_id } => {
                 // as TS: the answer is a push of step 2 with the dialog id, the request gets no AliceResponse;

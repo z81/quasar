@@ -173,7 +173,7 @@ fn new_agent(context: &UniproxyContext, zone: &Zone) -> Agent {
         String::new()
     });
     Agent::new(
-        context.openrouter.clone(),
+        context.llm.clone(),
         context.config.processor_model.clone(),
         functions,
         system_prompt,

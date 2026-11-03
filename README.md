@@ -1,6 +1,6 @@
 # alice-server
 
-Свой сервер для Яндекс.Станции (Quasar) с голосовым ассистентом. Он эмулирует облако Яндекса, с которым общается прошивка станции, а ответы пользователю готовит LLM через [OpenRouter](https://openrouter.ai). Речь распознаётся и синтезируется через OpenRouter или локально: GigaAM, Piper, Vosk.
+Свой сервер для Яндекс.Станции (Quasar) с голосовым ассистентом. Он эмулирует облако Яндекса, с которым общается прошивка станции, а ответы пользователю готовит LLM через [OpenRouter](https://openrouter.ai) или напрямую через API Anthropic. Речь распознаётся и синтезируется через OpenRouter или локально: GigaAM, Piper, Vosk.
 
 ## Возможности
 
@@ -32,6 +32,7 @@
 - **Токен OpenRouter** ([openrouter.ai/keys](https://openrouter.ai/settings/keys)).
 - **Docker,** где ffmpeg уже есть в образе. Или Rust и ffmpeg, чтобы собрать сервер из исходников.
 - **По желанию** ([как запустить](docker/README.md)):
+  - ключ API Anthropic, чтобы отвечала модель Anthropic напрямую;
   - PostgreSQL;
   - gigastt для распознавания;
   - Piper или Vosk для синтеза;
@@ -89,8 +90,14 @@ PostgreSQL, gigastt, Piper, Vosk и Spotify работают в отдельны
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
-| `OPENROUTER_PROCESSOR_MODEL` | `google/gemini-3.8-flash` | Модель, которая отвечает пользователю |
+| `PROCESSOR_PROVIDER` | `openrouter` | Кто отвечает пользователю: `openrouter` или `anthropic`, то есть API Anthropic напрямую. Речь в обоих случаях идёт через OpenRouter или локальные серверы |
+| `OPENROUTER_PROCESSOR_MODEL` | `google/gemini-3.8-flash` | Модель OpenRouter, которая отвечает пользователю |
 | `OPENROUTER_PROCESSOR_REASONING` | — | Глубина рассуждений: `none`, `minimal`, `low`, `medium`, `high`. Пустое значение оставляет настройку модели по умолчанию. Если модель не принимает параметр, сервер перестаёт его отправлять |
+| `ANTHROPIC_API_KEY` | — | Ключ API Anthropic. Обязателен при `PROCESSOR_PROVIDER=anthropic` |
+| `ANTHROPIC_PROCESSOR_MODEL` | `claude-opus-5-5` | Модель Anthropic, которая отвечает пользователю. Если Opus 5 и новее, Sonnet 5.5 или Fable откажутся отвечать по правилам безопасности, запрос продолжит другая модель Anthropic |
+| `ANTHROPIC_PROCESSOR_EFFORT` | `low` | Сколько модель думает перед ответом: `low`, `medium`, `high`, `xhigh`, `max`. Чем выше, тем дольше пауза перед ответом. Пустое значение оставляет настройку модели по умолчанию |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Адрес API Anthropic |
+| `ANTHROPIC_TIMEOUT_MS` | `10000` | Таймаут запросов к Anthropic |
 | `PROCESSOR_PROMPT_TEMPLATE_PATH` | `prompt.handlebars` | Шаблон системного промпта |
 | `PROCESSOR_PROMPT_STATE_TEMPLATE_PATH` | `prompt-state.handlebars` | Шаблон сообщения о состоянии |
 | `PROCESSOR_CACHE_SIZE` | `1000` | Сколько ответов помнить в кэше. `0` выключает кэш |

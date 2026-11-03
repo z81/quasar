@@ -118,13 +118,13 @@ impl OpenRouter {
             bail!("chat completions failed: {status}: {}", readable_error(&body));
         }
 
-        Ok(ChatStream {
-            stream: Box::pin(response.bytes_stream()),
-            buffer: Vec::new(),
-            done: false,
-            reasoning: reasoning.map(|reasoning| reasoning.effort.clone()),
-            timing: ChatTiming { started, response: started.elapsed(), first_event: None, first_content: None },
-        })
+        let timing = ChatTiming { started, response: started.elapsed(), first_event: None, first_content: None };
+        Ok(ChatStream::new(
+            response,
+            StreamFormat::ChatCompletions,
+            reasoning.map(|reasoning| reasoning.effort.clone()),
+            timing,
+        ))
     }
 
     async fn post_chat(
@@ -261,7 +261,7 @@ fn readable_error(body: &str) -> String {
     one_line(&format!("{message} ({}: {raw})", metadata["provider_name"].as_str().unwrap_or("provider")))
 }
 
-fn one_line(text: &str) -> String {
+pub(crate) fn one_line(text: &str) -> String {
     let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
     match line.char_indices().nth(ERROR_BODY_CHARS) {
         Some((cut, _)) => format!("{}…", &line[..cut]),
@@ -276,9 +276,61 @@ pub struct ChatStream {
     /// network chunks, so lines are decoded only once complete
     buffer: Vec<u8>,
     done: bool,
+    format: StreamFormat,
     /// the reasoning effort the request asked for
     reasoning: Option<String>,
     timing: ChatTiming,
+}
+
+/// How the SSE events of a chat stream carry the answer
+#[derive(Clone, Copy)]
+pub enum StreamFormat {
+    /// OpenAI's chat completions (OpenRouter): `choices[0].delta.content`, then `[DONE]`
+    ChatCompletions,
+    /// Anthropic's Messages API: the text deltas of content blocks, then `message_stop`
+    Messages,
+}
+
+/// What one SSE event of a chat stream means
+enum StreamEvent {
+    Content(String),
+    Failed(anyhow::Error),
+    End,
+    Other,
+}
+
+impl StreamFormat {
+    fn event(self, value: &Value) -> StreamEvent {
+        // both report a failure mid-stream as an event with an `error` member
+        if let Some(error) = value.get("error") {
+            return StreamEvent::Failed(anyhow::anyhow!("chat stream error: {error}"));
+        }
+        let content = match self {
+            Self::ChatCompletions => value["choices"][0]["delta"]["content"].as_str(),
+            Self::Messages => match value["type"].as_str() {
+                // thinking deltas are not the answer; after a refusal the `fallback`
+                // block's model goes on with the text
+                Some("content_block_delta") if value["delta"]["type"].as_str() == Some("text_delta") => {
+                    value["delta"]["text"].as_str()
+                }
+                // a refused or cut-off answer is partial: it must not pass for a whole one
+                Some("message_delta") => {
+                    return match value["delta"]["stop_reason"].as_str() {
+                        Some("refusal" | "max_tokens" | "model_context_window_exceeded") => {
+                            StreamEvent::Failed(anyhow::anyhow!("the answer stopped early: {}", value["delta"]))
+                        }
+                        _ => StreamEvent::Other,
+                    };
+                }
+                Some("message_stop") => return StreamEvent::End,
+                _ => None,
+            },
+        };
+        match content {
+            Some(content) if !content.is_empty() => StreamEvent::Content(content.to_string()),
+            _ => StreamEvent::Other,
+        }
+    }
 }
 
 /// When a chat completion's parts came, since its request
@@ -294,6 +346,11 @@ pub struct ChatTiming {
 }
 
 impl ChatStream {
+    /// The answer of a request that `timing` started
+    pub fn new(response: reqwest::Response, format: StreamFormat, reasoning: Option<String>, timing: ChatTiming) -> Self {
+        Self { stream: Box::pin(response.bytes_stream()), buffer: Vec::new(), done: false, format, reasoning, timing }
+    }
+
     pub fn timing(&self) -> ChatTiming {
         self.timing
     }
@@ -329,16 +386,20 @@ impl futures_util::Stream for ChatStream {
                     if let Ok(value) = serde_json::from_str::<Value>(data) {
                         let elapsed = self.timing.started.elapsed();
                         self.timing.first_event.get_or_insert(elapsed);
-                        // OpenRouter reports mid-stream failures as an error event
-                        if let Some(error) = value.get("error") {
-                            self.done = true;
-                            return Poll::Ready(Some(Err(anyhow::anyhow!("chat completions stream error: {error}"))));
-                        }
-                        if let Value::String(content) = &value["choices"][0]["delta"]["content"] {
-                            if !content.is_empty() {
+                        match self.format.event(&value) {
+                            StreamEvent::Content(content) => {
                                 self.timing.first_content.get_or_insert(elapsed);
-                                return Poll::Ready(Some(Ok(ChatDelta(content.clone()))));
+                                return Poll::Ready(Some(Ok(ChatDelta(content))));
                             }
+                            StreamEvent::Failed(error) => {
+                                self.done = true;
+                                return Poll::Ready(Some(Err(error)));
+                            }
+                            StreamEvent::End => {
+                                self.done = true;
+                                return Poll::Ready(None);
+                            }
+                            StreamEvent::Other => {}
                         }
                     }
                 }

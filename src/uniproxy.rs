@@ -30,7 +30,7 @@ use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 use uuid::Uuid;
 
-use crate::agent::{Agent, Functions, ResponseCache};
+use crate::agent::{Agent, Functions, Llm, ResponseCache};
 use crate::config::Config;
 use crate::connections::{ConnectionRegistry, StationCommand};
 use crate::directives;
@@ -51,6 +51,8 @@ use text_input::TextInputKind;
 pub struct UniproxyContext {
     pub config: Config,
     pub openrouter: OpenRouter,
+    /// who answers the dialog: OpenRouter, or Anthropic's API
+    pub llm: Llm,
     pub prompt_generator: PromptGenerator,
     /// The station's functions and those of the remote function servers
     pub functions: Functions,

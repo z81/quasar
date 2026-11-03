@@ -3,6 +3,7 @@
 //! API_PORT serves the management API.
 
 mod agent;
+mod anthropic;
 mod api;
 mod audio;
 mod config;
@@ -84,6 +85,15 @@ async fn main() -> Result<()> {
         config.openrouter_timeout_ms,
         config.processor_reasoning.as_deref(),
     )?;
+    let llm = match &config.anthropic {
+        Some(anthropic) => agent::Llm::Anthropic(anthropic::Anthropic::new(
+            &anthropic.base_url,
+            &anthropic.api_key,
+            anthropic.timeout_ms,
+            anthropic.effort.as_deref(),
+        )?),
+        None => agent::Llm::OpenRouter(openrouter.clone()),
+    };
 
     let remote = Arc::new(RemoteServers::new(
         csv_urls("PROCESSOR_FUNCTION_SERVER_URLS"),
@@ -126,6 +136,7 @@ async fn main() -> Result<()> {
         functions: Arc::new(functions),
         cache: agent::new_response_cache(config.processor_cache_size as usize),
         openrouter,
+        llm,
         remote,
         mcp,
         gigastt: gigastt::Gigastt::from_config(&config),

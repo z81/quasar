@@ -49,6 +49,20 @@ pub enum TtsFormat {
 /// The reasoning efforts of OPENROUTER_PROCESSOR_REASONING
 const REASONING_EFFORTS: [&str; 5] = ["none", "minimal", "low", "medium", "high"];
 
+/// PROCESSOR_PROVIDER=anthropic: the dialog goes to Anthropic's Messages API
+#[derive(Clone)]
+pub struct AnthropicConfig {
+    pub api_key: String,
+    pub base_url: String,
+    pub timeout_ms: u64,
+    /// `output_config.effort`, how much the model thinks before it answers;
+    /// None: not sent, the model's default
+    pub effort: Option<String>,
+}
+
+/// The efforts of ANTHROPIC_PROCESSOR_EFFORT
+const ANTHROPIC_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
 /// Who decides that the user stopped speaking
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EndOfSpeech {
@@ -92,6 +106,9 @@ pub struct Config {
     /// speak an answer while the LLM still writes it (the TS fork's
     /// OPENROUTER_TTS_STREAMING); false: the whole text once it is complete
     pub tts_streaming: bool,
+    /// set with PROCESSOR_PROVIDER=anthropic; None: OpenRouter answers the dialog
+    pub anthropic: Option<AnthropicConfig>,
+    /// the dialog's model at its provider
     pub processor_model: String,
     /// the dialog LLM's reasoning effort, sent as `reasoning: {effort}`; None:
     /// no `reasoning` field, the model's default
@@ -208,8 +225,33 @@ fn piper_config(tts_speed: f32) -> PiperConfig {
     }
 }
 
+/// ANTHROPIC_*: read only with PROCESSOR_PROVIDER=anthropic; an invalid value stops the server at start
+fn anthropic_config() -> AnthropicConfig {
+    // unset: low, as the first words of a spoken answer matter more than deep
+    // thought; an explicitly empty value leaves the model's default
+    let effort = match env::var("ANTHROPIC_PROCESSOR_EFFORT") {
+        Ok(value) if value.trim().is_empty() => None,
+        Ok(value) => Some(value.trim().to_ascii_lowercase()),
+        Err(_) => Some("low".to_string()),
+    };
+    if let Some(effort) = effort.as_deref().filter(|effort| !ANTHROPIC_EFFORTS.contains(effort)) {
+        panic!("ANTHROPIC_PROCESSOR_EFFORT must be one of {}, not '{effort}'", ANTHROPIC_EFFORTS.join("|"));
+    }
+    AnthropicConfig {
+        api_key: opt_var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY is required with PROCESSOR_PROVIDER=anthropic"),
+        base_url: var_or("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+        timeout_ms: var_or("ANTHROPIC_TIMEOUT_MS", "10000").parse().expect("ANTHROPIC_TIMEOUT_MS must be a number"),
+        effort,
+    }
+}
+
 impl Config {
     pub fn from_env() -> Self {
+        let anthropic = match var_or("PROCESSOR_PROVIDER", "openrouter").trim().to_ascii_lowercase().as_str() {
+            "openrouter" => None,
+            "anthropic" => Some(anthropic_config()),
+            other => panic!("PROCESSOR_PROVIDER must be openrouter or anthropic, not '{other}'"),
+        };
         let tts_speed: f32 = var_or("OPENROUTER_TTS_SPEED", "1").parse().expect("OPENROUTER_TTS_SPEED must be a number");
         let tts_provider = match var_or("TTS_PROVIDER", "openrouter").trim().to_ascii_lowercase().as_str() {
             "openrouter" => TtsProvider::OpenRouter,
@@ -231,8 +273,9 @@ impl Config {
             glagol_jwt_key: opt_var("GLAGOL_JWT_KEY")
                 .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string())
                 .into_bytes(),
-            openrouter_api_key: opt_var("OPENROUTER_API_KEY")
-                .expect("OPENROUTER_API_KEY is required: STT, TTS and the dialog processor all go through OpenRouter"),
+            openrouter_api_key: opt_var("OPENROUTER_API_KEY").expect(
+                "OPENROUTER_API_KEY is required: STT and TTS go through OpenRouter, at least as the fallback of gigastt and Piper",
+            ),
             openrouter_base_url: var_or("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
             openrouter_timeout_ms: var_or("OPENROUTER_TIMEOUT_MS", "10000").parse().expect("OPENROUTER_TIMEOUT_MS must be a number"),
             stt_model: var_or("OPENROUTER_STT_MODEL", "openai/whisper-large-v3"),
@@ -262,7 +305,11 @@ impl Config {
             tts_provider,
             piper: (tts_provider == TtsProvider::Piper).then(|| piper_config(tts_speed)),
             tts_streaming: var_or("OPENROUTER_TTS_STREAMING", "true").trim().eq_ignore_ascii_case("true"),
-            processor_model: var_or("OPENROUTER_PROCESSOR_MODEL", "google/gemini-3.8-flash"),
+            processor_model: match anthropic {
+                Some(_) => var_or("ANTHROPIC_PROCESSOR_MODEL", "claude-opus-5-5"),
+                None => var_or("OPENROUTER_PROCESSOR_MODEL", "google/gemini-3.8-flash"),
+            },
+            anthropic,
             processor_reasoning: opt_var("OPENROUTER_PROCESSOR_REASONING")
                 .map(|effort| effort.trim().to_ascii_lowercase())
                 .filter(|effort| !effort.is_empty())

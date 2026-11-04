@@ -88,6 +88,7 @@ pub enum Panel {
     Advanced,
     Favorites,
     Schedules,
+    Timers,
     Settings,
     Access,
 }
@@ -100,6 +101,7 @@ impl Panel {
             Self::Advanced => "Директивы",
             Self::Favorites => "Избранное",
             Self::Schedules => "Будильники",
+            Self::Timers => "Таймеры",
             Self::Settings => "Настройки",
             Self::Access => "Доступ",
         }

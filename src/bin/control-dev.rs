@@ -63,6 +63,8 @@ async fn main() -> Result<()> {
         .route("/devices/{duid}/weather/location", put(forward))
         .route("/devices/{duid}/schedules/{id}", any(forward))
         .route("/devices/{duid}/schedules/{id}/{action}", any(forward))
+        .route("/devices/{duid}/timers/{id}", any(forward))
+        .route("/devices/{duid}/timers/{id}/{action}", any(forward))
         .route("/weather/{*path}", get(forward))
         .route("/control/{*path}", any(forward))
         .route("/auth/{*path}", any(forward))

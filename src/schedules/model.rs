@@ -5,6 +5,25 @@ use serde::{Deserialize, Serialize};
 pub enum Kind {
     Alarm,
     Reminder,
+    Timer,
+}
+
+impl Kind {
+    pub fn rings(self) -> bool {
+        matches!(self, Self::Alarm | Self::Timer)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateTimer {
+    #[serde(default = "timer_title")]
+    pub title: String,
+    pub duration_seconds: u32,
+}
+
+fn timer_title() -> String {
+    "Таймер".into()
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -48,6 +67,10 @@ pub struct Schedule {
     pub active_run_id: Option<String>,
     pub ringing_until: Option<String>,
     pub snoozed_until: Option<String>,
+    #[serde(default)]
+    pub duration_seconds: Option<u32>,
+    #[serde(default)]
+    pub remaining_ms: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }

@@ -498,6 +498,40 @@ select { font: inherit; color: var(--text); background: var(--surface); }
 .schedule-error svg { flex-shrink: 0; margin-top: 2px; }
 .schedule-item-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
 .schedule-delete-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 11px; color: var(--secondary); }
+.timers-grid { display: grid; grid-template-columns: minmax(300px, .85fr) minmax(0, 1.15fr); align-items: start; gap: 24px; }
+.timer-editor .card-kicker svg, .timer-item .card-kicker svg { color: var(--accent-text); }
+.timer-editor h2 { margin-top: 18px; }
+.timer-editor > .schedule-error { margin: -8px 0 18px; }
+.timer-duration { display: grid; grid-template-columns: minmax(0, 1fr) 10px minmax(0, 1fr) 10px minmax(0, 1fr); align-items: end; gap: 6px; }
+.timer-duration .form-field { margin-bottom: 0; min-width: 0; }
+.timer-duration .form-field > span { font-size: 10px; }
+.timer-duration input { text-align: center; padding: 10px 4px; font-size: 26px; font-weight: 550; font-variant-numeric: tabular-nums; }
+.timer-colon { text-align: center; padding-bottom: 10px; color: var(--muted); font-size: 24px; }
+.timer-duration-help { margin-top: 10px; color: var(--muted); font-size: 10px; line-height: 1.7; }
+.timer-duration-help.failure { color: var(--error); }
+.timer-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 18px; }
+.timer-preset { padding: 7px 10px; min-height: 34px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--secondary); font-size: 11px; }
+.timer-preset:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+.timer-preset.chosen { border-color: var(--accent-text); background: var(--accent-soft); color: var(--accent-text); }
+.timer-item { padding: 22px; overflow: hidden; }
+.timer-item.active-timer { border-color: var(--accent-text); }
+.timer-item-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.timer-item-heading .schedule-status { font-size: 10px; }
+.timer-item h3 { margin-top: 18px; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.timer-countdown { margin-top: 6px; font-size: 42px; font-weight: 500; line-height: 1.3; font-variant-numeric: tabular-nums; letter-spacing: -1px; }
+.timer-total { margin-top: 4px; font-size: 11px; color: var(--muted); }
+.timer-track { height: 4px; border-radius: 4px; background: var(--surface-soft); margin-top: 20px; overflow: hidden; }
+.timer-track > span { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width .3s linear; }
+.timer-track.paused > span { background: var(--muted); }
+.timer-waiting { margin-top: 12px; color: var(--secondary); font-size: 11px; line-height: 1.7; }
+.timer-item-actions { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; }
+.timer-playback-actions { display: flex; flex-wrap: wrap; gap: 14px; }
+@media (max-width: 1180px) { .timers-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) {
+  .timer-editor, .timer-item { padding: 20px; }
+  .timer-countdown { font-size: 36px; }
+  .timer-preset { padding: 7px 9px; }
+}
 @media (max-width: 1180px) { .schedules-grid { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
 @media (max-width: 760px) {
   .schedule-editor { padding: 20px; }

@@ -170,14 +170,14 @@ impl Scheduler {
                 entry.schedule.last_run_at = Some(stamp(due));
                 entry.schedule.last_error = None;
                 entry.schedule.updated_at = stamp(now);
-                if entry.schedule.kind == Kind::Alarm {
+                if entry.schedule.kind.rings() {
                     entry.schedule.active_run_id = Some(token.clone());
                     entry.schedule.ringing_until = Some(stamp(now + Duration::seconds(ACTIVE_WINDOW)));
                 }
                 blocked.insert(entry.schedule.duid.clone());
                 pending.push(PendingDelivery { schedule: entry.schedule.clone(), token });
             }
-            if pending.iter().any(|delivery| delivery.schedule.kind == Kind::Alarm) {
+            if pending.iter().any(|delivery| delivery.schedule.kind.rings()) {
                 // Auto-stop applies to the shared alarm channel. Show its actual
                 // deadline on every overlapping occurrence, including older ones.
                 let mut deadlines = HashMap::<String, String>::new();
@@ -197,7 +197,7 @@ impl Scheduler {
                     }
                 }
                 for delivery in &mut pending {
-                    if delivery.schedule.kind == Kind::Alarm {
+                    if delivery.schedule.kind.rings() {
                         delivery.schedule.ringing_until = deadlines.get(&delivery.schedule.duid).cloned();
                     }
                 }
@@ -211,7 +211,7 @@ impl Scheduler {
             let Some(entry) = doc.entries.iter_mut().find(|entry| entry.schedule.id == pending.schedule.id && entry.claim.as_ref().is_some_and(|claim| claim.token == pending.token)) else { return Ok(()); };
             entry.claim = None;
             entry.schedule.updated_at = stamp(Utc::now());
-            let confirmed = entry.schedule.kind == Kind::Alarm
+            let confirmed = entry.schedule.kind.rings()
                 && (entry.schedule.status == "ringing"
                     || (entry.schedule.status == "stopped" && entry.schedule.active_run_id.is_none()));
             if success || confirmed {
@@ -223,7 +223,7 @@ impl Scheduler {
             } else {
                 entry.schedule.status = "failed".into();
                 entry.schedule.last_error = Some("Не удалось подтвердить отправку. Автоматического повтора нет, чтобы не озвучить событие дважды".into());
-                if entry.schedule.kind == Kind::Alarm {
+                if entry.schedule.kind.rings() {
                     retire_station(doc, &pending.schedule.duid, "failed", Utc::now());
                 }
             }
@@ -250,7 +250,12 @@ fn consume(entry: &mut Entry, now: DateTime<Utc>) -> Result<()> {
         .transpose()?
         .is_some_and(|at| at <= now)
     {
-        entry.regular_next_at = next(&entry.schedule.input(), now)?;
+        entry.regular_next_at = if entry.schedule.kind == Kind::Timer {
+            entry.schedule.remaining_ms = None;
+            None
+        } else {
+            next(&entry.schedule.input(), now)?
+        };
     }
     entry.schedule.enabled =
         entry.regular_next_at.is_some() || entry.schedule.snoozed_until.is_some();

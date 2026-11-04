@@ -48,6 +48,7 @@ pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Rout
         .route("/weather/locations", get(crate::weather_api::locations))
         .route("/devices/{duid}/weather/location", put(crate::weather_api::set_location))
         .merge(crate::schedule_api::router())
+        .merge(crate::timer_api::router())
         .route(
             "/devices/{duid}/player",
             get(player_status).post(player_action),

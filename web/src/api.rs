@@ -12,7 +12,14 @@ pub fn encoded(value: &str) -> String {
 
 pub async fn checked(mut state: ControlState, response: Response) -> Result<Response, String> {
     if response.status() == 401 {
-        state.auth.write().authenticated = false;
+        // Protection may have been enabled since the last /auth/status poll.
+        // Close the gate immediately; repeated 401s must not retrigger effects.
+        let mut auth = *state.auth.peek();
+        auth.configured = true;
+        auth.authenticated = false;
+        if *state.auth.peek() != auth {
+            state.auth.set(auth);
+        }
         return Err("Войдите, чтобы продолжить работу.".to_string());
     }
     if response.ok() {

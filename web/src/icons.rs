@@ -16,6 +16,7 @@ pub fn Icon(name: &'static str, #[props(default = 20)] size: u32) -> Element {
         "grid" => "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
         "history" => "M3 11a9 9 0 1 1 2.5 7 M3 4v7h7 M12 7v5l3 2",
         "alarm" => "M12 8v5l3 2 M5 4 2 7 M19 4l3 3 M6 20l-2 2 M18 20l2 2 M20 13a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z",
+        "timer" => "M9 2h6 M12 2v3 M18 6l2-2 M12 9v5l3 2 M20 13a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z",
         "bell" => "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9 M10 21h4",
         "edit" => "m15 4 5 5 M4 15 15 4a3.5 3.5 0 0 1 5 5L9 20H4v-5Z",
         "globe" => "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z M3 12h18 M12 3c5 5 5 13 0 18-5-5-5-13 0-18Z",

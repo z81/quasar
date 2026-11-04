@@ -9,6 +9,10 @@ pub(super) fn stamp(time: DateTime<Utc>) -> String {
     time.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
+pub(super) fn stamp_millis(time: DateTime<Utc>) -> String {
+    time.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
 pub(super) fn parse_stamp(value: &str) -> Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .map(|time| time.with_timezone(&Utc))
@@ -16,11 +20,15 @@ pub(super) fn parse_stamp(value: &str) -> Result<DateTime<Utc>> {
 }
 
 pub(super) fn validate(mut input: Input, now: DateTime<Utc>) -> Result<(Input, Option<String>)> {
+    if input.kind == Kind::Timer {
+        return invalid("Для таймера используйте управление таймерами");
+    }
     input.title = input.title.trim().to_owned();
     if input.title.is_empty() {
         input.title = match input.kind {
             Kind::Alarm => "Будильник",
             Kind::Reminder => "Напоминание",
+            Kind::Timer => "Таймер",
         }
         .to_owned();
     }

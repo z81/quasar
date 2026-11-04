@@ -1,9 +1,10 @@
-//! Persistent station alarms and spoken reminders. Claims are saved before any
+//! Persistent station alarms, timers and spoken reminders. Claims are saved before any
 //! command is queued, and ambiguous reminder deliveries are never replayed.
 
 mod engine;
 mod model;
 mod time;
+mod timers;
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -18,9 +19,9 @@ use uuid::Uuid;
 
 use crate::storage::Storage;
 use model::{Cleanup, Document, Entry};
-use time::{stamp, validate};
+use time::{parse_stamp, stamp, validate};
 
-pub use model::{Input, Kind, Result, Schedule, ScheduleError};
+pub use model::{CreateTimer, Input, Kind, Result, Schedule, ScheduleError};
 
 const KEY: &str = "schedules:v1";
 const MAX_TOTAL: usize = 1000;
@@ -83,6 +84,15 @@ impl Scheduler {
     }
 
     pub async fn list(&self, duid: &str) -> Result<Vec<Schedule>> {
+        Ok(self
+            .list_all(duid)
+            .await?
+            .into_iter()
+            .filter(|item| item.kind != Kind::Timer)
+            .collect())
+    }
+
+    pub async fn list_all(&self, duid: &str) -> Result<Vec<Schedule>> {
         self.require_station(duid).await?;
         let (_, doc) = self.read().await?;
         let mut items: Vec<_> = doc
@@ -91,12 +101,14 @@ impl Scheduler {
             .filter(|entry| entry.schedule.duid == duid)
             .map(|entry| entry.schedule)
             .collect();
-        items.sort_by(|a, b| {
-            a.next_run_at
-                .is_none()
-                .cmp(&b.next_run_at.is_none())
-                .then(a.next_run_at.cmp(&b.next_run_at))
-                .then(a.created_at.cmp(&b.created_at))
+        items.sort_by_cached_key(|item| {
+            (
+                item.next_run_at.is_none(),
+                item.next_run_at
+                    .as_deref()
+                    .and_then(|at| parse_stamp(at).ok()),
+                parse_stamp(&item.created_at).ok(),
+            )
         });
         Ok(items)
     }
@@ -107,18 +119,7 @@ impl Scheduler {
         let (input, next) = validate(input, now)?;
         let id = Uuid::new_v4().to_string();
         self.change(|doc| {
-            if doc.entries.len() >= MAX_TOTAL
-                || doc
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.schedule.duid == duid)
-                    .count()
-                    >= MAX_STATION
-            {
-                return Err(ScheduleError::Conflict(
-                    "Достигнут лимит записей расписания".into(),
-                ));
-            }
+            ensure_capacity(doc, duid)?;
             let schedule = Schedule {
                 id: id.clone(),
                 duid: duid.to_owned(),
@@ -142,6 +143,8 @@ impl Scheduler {
                 active_run_id: None,
                 ringing_until: None,
                 snoozed_until: None,
+                duration_seconds: None,
+                remaining_ms: None,
                 created_at: stamp(now),
                 updated_at: stamp(now),
             };
@@ -161,6 +164,7 @@ impl Scheduler {
         let (input, next) = validate(input, now)?;
         self.change(|doc| {
             let entry = find_mut(doc, duid, id)?;
+            calendar(entry)?;
             editable(entry)?;
             let item = &mut entry.schedule;
             item.kind = input.kind;
@@ -191,6 +195,7 @@ impl Scheduler {
         self.require_station(duid).await?;
         self.change(|doc| {
             let entry = find_mut(doc, duid, id)?;
+            calendar(entry)?;
             editable(entry)?;
             let mut input = entry.schedule.input();
             input.enabled = enabled;
@@ -210,7 +215,9 @@ impl Scheduler {
     pub async fn delete(&self, duid: &str, id: &str) -> Result<()> {
         self.require_station(duid).await?;
         self.change(|doc| {
-            editable(find_mut(doc, duid, id)?)?;
+            let entry = find_mut(doc, duid, id)?;
+            calendar(entry)?;
+            editable(entry)?;
             doc.entries
                 .retain(|entry| !(entry.schedule.duid == duid && entry.schedule.id == id));
             Ok(())
@@ -230,9 +237,12 @@ impl Scheduler {
         self.require_station(duid).await?;
         self.change(|doc| {
             let target = find_mut(doc, duid, id)?;
-            if target.schedule.kind != Kind::Alarm || target.schedule.active_run_id.is_none() {
+            if !target.schedule.kind.rings()
+                || (snooze && target.schedule.kind != Kind::Alarm)
+                || target.schedule.active_run_id.is_none()
+            {
                 return Err(ScheduleError::Conflict(
-                    "Этот будильник сейчас не звонит".into(),
+                    "Этот будильник или таймер сейчас не звонит либо не поддерживает повтор".into(),
                 ));
             }
             ensure_no_claims(doc, duid)?;
@@ -350,11 +360,36 @@ fn editable(entry: &Entry) -> Result<()> {
         return busy();
     }
     if entry.schedule.active_run_id.is_some() {
-        return Err(ScheduleError::Conflict(
-            "Сначала остановите звонок будильника".into(),
-        ));
+        return Err(ScheduleError::Conflict("Сначала остановите сигнал".into()));
     }
     Ok(())
+}
+
+fn calendar(entry: &Entry) -> Result<()> {
+    if entry.schedule.kind == Kind::Timer {
+        Err(ScheduleError::Invalid(
+            "Для таймера используйте управление таймерами".into(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_capacity(doc: &Document, duid: &str) -> Result<()> {
+    if doc.entries.len() >= MAX_TOTAL
+        || doc
+            .entries
+            .iter()
+            .filter(|entry| entry.schedule.duid == duid)
+            .count()
+            >= MAX_STATION
+    {
+        Err(ScheduleError::Conflict(
+            "Достигнут лимит записей расписания".into(),
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn ensure_no_claims(doc: &Document, duid: &str) -> Result<()> {

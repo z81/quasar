@@ -10,6 +10,7 @@ mod settings;
 mod sidebar;
 mod state;
 mod station;
+mod timers;
 mod weather;
 
 use dioxus::prelude::*;
@@ -118,13 +119,14 @@ fn App() -> Element {
                     div { class: "page-heading",
                         div {
                             div { class: "eyebrow", "ВАША АЛИСА. ВАШИ ПРАВИЛА." }
-                            h1 { match panel { Panel::Control => "Всё под контролем.", Panel::History => "История команд.", Panel::Advanced => "Прямой доступ.", Panel::Favorites => "Всегда под рукой.", Panel::Schedules => "Будильники и напоминания.", Panel::Settings => "На ваш лад.", Panel::Access => "Только для своих." } }
+                            h1 { match panel { Panel::Control => "Всё под контролем.", Panel::History => "История команд.", Panel::Advanced => "Прямой доступ.", Panel::Favorites => "Всегда под рукой.", Panel::Schedules => "Будильники и напоминания.", Panel::Timers => "Время пошло.", Panel::Settings => "На ваш лад.", Panel::Access => "Только для своих." } }
                             p { match panel {
                                 Panel::Control => "Скажите, что нужно сделать. Остальное — за Алисой.",
                                 Panel::History => "Запросы, ответы Алисы и результаты обработки.",
                                 Panel::Advanced => "Отправляйте колонке команды её собственного протокола.",
                                 Panel::Favorites => "Любимые команды для каждого дня. Сохраните и запускайте одним нажатием.",
                                 Panel::Schedules => "Планы на утро, важные дела и время для себя.",
+                                Panel::Timers => "Для чая, готовки и короткой паузы. Колонка напомнит сигналом.",
                                 Panel::Settings => "Имя, погода и голосовые настройки выбранной колонки.",
                                 Panel::Access => "Вход в пульт и ключи для ваших интеграций.",
                             } }
@@ -154,6 +156,7 @@ fn App() -> Element {
                         Panel::History => rsx! { history::History { state, compact: false } },
                         Panel::Favorites => rsx! { favorites::Favorites { state } },
                         Panel::Schedules => rsx! { schedules::Schedules { state } },
+                        Panel::Timers => rsx! { timers::Timers { state } },
                         Panel::Settings => rsx! { settings::Settings { state } },
                         Panel::Access => rsx! { access::Access { state } },
                         Panel::Advanced => rsx! {

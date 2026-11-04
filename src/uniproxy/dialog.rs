@@ -648,6 +648,8 @@ impl RemoteExecutor {
                 crate::weather_tool::call(&weather, &device_id, call.arguments.as_ref()).await
             } else if crate::schedule_tool::handles(&call.name) {
                 crate::schedule_tool::call(&schedules, &registry, &device_id, &call.name, call.arguments.as_ref()).await
+            } else if crate::timer_tool::handles(&call.name) {
+                crate::timer_tool::call(&schedules, &registry, &device_id, &call.name, call.arguments.as_ref()).await
             } else if !remote.owns(&call.name) && mcp.routes(&call.name) {
                 mcp.call(&call.name, &call.arguments).await
             } else {

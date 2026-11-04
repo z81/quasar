@@ -218,7 +218,7 @@ fn take_id(args: &mut Map<String, Value>) -> Result<Option<String>> {
 
 pub async fn stop_active(service: &Scheduler, duid: &str) -> Result<Option<Schedule>> {
     match service
-        .list(duid)
+        .list_all(duid)
         .await?
         .into_iter()
         .find(|item| item.active_run_id.is_some())

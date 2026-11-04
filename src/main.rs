@@ -26,6 +26,8 @@ mod schedule_api;
 mod schedule_delivery;
 mod schedule_tool;
 mod schedules;
+mod timer_api;
+mod timer_tool;
 mod station_config;
 mod stations;
 mod storage;
@@ -124,6 +126,7 @@ async fn main() -> Result<()> {
             .collect();
     functions.insert("get_weather".to_string(), weather_tool::definition());
     functions.extend(schedule_tool::definitions());
+    functions.extend(timer_tool::definitions());
     for (name, definition) in remote.functions().await {
         if functions.contains_key(&name) {
             tracing::warn!("duplicate function '{name}' from a remote server, keeping the builtin one");

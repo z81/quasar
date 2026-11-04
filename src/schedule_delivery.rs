@@ -18,7 +18,7 @@ pub async fn observe(
     duid: &str,
     alarms: Vec<(String, bool)>,
 ) {
-    match service.list(duid).await {
+    match service.list_all(duid).await {
         Ok(items) => {
             for item in items {
                 if let Some(run_id) = item.active_run_id.as_deref() {
@@ -50,7 +50,7 @@ impl Delivery for StationDelivery {
 
     async fn deliver(&self, item: &Schedule, run_id: &str) -> Result<()> {
         match item.kind {
-            Kind::Alarm => {
+            Kind::Alarm | Kind::Timer => {
                 ensure!(
                     self.registry.alarm_support(&item.duid) != Some(false),
                     "Колонка не поддерживает нативные будильники"

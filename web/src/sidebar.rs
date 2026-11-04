@@ -19,7 +19,7 @@ pub fn Sidebar(mut state: ControlState) -> Element {
             div { class: "workspace-tag", span { class: "workspace-avatar", "Q" } div { strong { "Моё пространство" } span { "Пульт управления" } } }
             div { class: "nav-label", "ПРОСТРАНСТВО" }
             nav { class: "navigation", aria_label: "Разделы пульта",
-                for (panel, icon) in [(Panel::Control, "grid"), (Panel::Favorites, "star"), (Panel::Schedules, "alarm"), (Panel::History, "history"), (Panel::Settings, "settings"), (Panel::Access, "lock"), (Panel::Advanced, "code")] {
+                for (panel, icon) in [(Panel::Control, "grid"), (Panel::Favorites, "star"), (Panel::Schedules, "alarm"), (Panel::Timers, "timer"), (Panel::History, "history"), (Panel::Settings, "settings"), (Panel::Access, "lock"), (Panel::Advanced, "code")] {
                     button { class: if (state.panel)() == panel { "nav-item active" } else { "nav-item" }, aria_current: if (state.panel)() == panel { "page" } else { "false" },
                         onclick: move |_| state.panel.set(panel),
                         Icon { name: icon, size: 18 } "{panel.label()}"

@@ -180,12 +180,12 @@ async fn snooze(
     }
 }
 
-fn schedule_error(cause: ScheduleError) -> Response {
+pub(crate) fn schedule_error(cause: ScheduleError) -> Response {
     let status =
         StatusCode::from_u16(cause.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     error(status, &cause.to_string())
 }
 
-fn error(status: StatusCode, message: &str) -> Response {
+pub(crate) fn error(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({"error":message}))).into_response()
 }

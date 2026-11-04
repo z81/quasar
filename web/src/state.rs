@@ -87,6 +87,7 @@ pub enum Panel {
     History,
     Advanced,
     Favorites,
+    Schedules,
     Settings,
     Access,
 }
@@ -98,6 +99,7 @@ impl Panel {
             Self::History => "История команд",
             Self::Advanced => "Директивы",
             Self::Favorites => "Избранное",
+            Self::Schedules => "Будильники",
             Self::Settings => "Настройки",
             Self::Access => "Доступ",
         }

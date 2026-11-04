@@ -355,6 +355,23 @@ impl Request {
     ) {
         let _guard = self.feedback.as_ref().map(crate::control::FeedbackGuard::new);
         if let Some(feedback)=&self.feedback { feedback.running().await; }
+        if !turn.external_event && is_alarm_stop(&turn.text) {
+            match crate::schedule_tool::stop_active(&self.context.schedules, &self.device_id).await {
+                Ok(Some(_)) => {
+                    if let Some(feedback) = &self.feedback {
+                        feedback.action("stop_alarm", "completed", Some("Остановка звонка запрошена")).await;
+                        feedback.completed().await;
+                    }
+                    let _ = parts.send(AgentOutput {
+                        directives: Vec::new(), finished: true, should_listen: false,
+                        text: OutputText::Complete(String::new()),
+                    });
+                    return;
+                }
+                Ok(None) => {}
+                Err(error) => tracing::warn!("cannot stop active alarm: {error}"),
+            }
+        }
         let metadata_json = metadata.to_json();
         let session_id = agent.session_id().to_string();
         let state = dialog_state(&self.context, &session_id, metadata, &metadata_json, &self.zone, live_context).await;
@@ -366,6 +383,7 @@ impl Request {
             feedback: self.feedback.clone(),
             remote: self.context.remote.clone(),
             weather: self.context.weather.clone(),
+            schedules: self.context.schedules.clone(),
             mcp: self.context.mcp.clone(),
             session_id,
             metadata: metadata_json,
@@ -556,6 +574,16 @@ async fn transcribe_buffered(context: &UniproxyContext, ogg: &[u8]) -> String {
     }
 }
 
+fn is_alarm_stop(text: &str) -> bool {
+    let normalized = text.to_lowercase();
+    let normalized = normalized.trim_matches(|c: char| c.is_whitespace() || matches!(c, ',' | '.' | '!'));
+    let normalized = ["алиса", "яндекс", "ясмина"].iter()
+        .find_map(|wake| normalized.strip_prefix(wake))
+        .unwrap_or(normalized)
+        .trim_matches(|c: char| c.is_whitespace() || c == ',');
+    matches!(normalized, "стоп" | "останови будильник" | "выключи будильник")
+}
+
 /// The per-turn state shown to the LLM: system facts, the speaker, the MCP
 /// servers' live context, remote state servers (system entries win over
 /// remote duplicates, as in TS)
@@ -591,6 +619,7 @@ struct RemoteExecutor {
     feedback: Option<crate::control::CommandFeedback>,
     remote: Arc<RemoteServers>,
     weather: Arc<crate::weather::WeatherService>,
+    schedules: Arc<crate::schedules::Scheduler>,
     mcp: Arc<Mcp>,
     session_id: String,
     metadata: Value,
@@ -609,12 +638,16 @@ impl RemoteExecutor {
         );
         let feedback = self.feedback.clone();
         let weather = self.weather.clone();
+        let schedules = self.schedules.clone();
+        let registry = self.registry.clone();
         let device_id = self.device_id.clone();
         Box::pin(async move {
             let name = call.name.clone();
             // a function server's own function wins over an MCP prefix
             let result = if call.name == "get_weather" {
                 crate::weather_tool::call(&weather, &device_id, call.arguments.as_ref()).await
+            } else if crate::schedule_tool::handles(&call.name) {
+                crate::schedule_tool::call(&schedules, &registry, &device_id, &call.name, call.arguments.as_ref()).await
             } else if !remote.owns(&call.name) && mcp.routes(&call.name) {
                 mcp.call(&call.name, &call.arguments).await
             } else {

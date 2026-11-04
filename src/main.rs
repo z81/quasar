@@ -3,6 +3,7 @@
 //! API_PORT serves the management API.
 
 mod agent;
+mod alarm_protocol;
 mod anthropic;
 mod api;
 mod audio;
@@ -21,6 +22,10 @@ mod prompt;
 mod proto;
 mod quasar_router;
 mod remote;
+mod schedule_api;
+mod schedule_delivery;
+mod schedule_tool;
+mod schedules;
 mod station_config;
 mod stations;
 mod storage;
@@ -118,6 +123,7 @@ async fn main() -> Result<()> {
             .map(|(name, definition)| (name.clone(), definition.clone()))
             .collect();
     functions.insert("get_weather".to_string(), weather_tool::definition());
+    functions.extend(schedule_tool::definitions());
     for (name, definition) in remote.functions().await {
         if functions.contains_key(&name) {
             tracing::warn!("duplicate function '{name}' from a remote server, keeping the builtin one");
@@ -138,6 +144,10 @@ async fn main() -> Result<()> {
     }
     let control = control::Control::load(storage.clone()).await?;
     let auth = auth::AuthManager::load(storage.clone()).await?;
+    let schedules = schedules::Scheduler::load(storage.clone(), Arc::new(schedule_delivery::StationDelivery {
+        registry: registry.clone(),
+        control: control.clone(),
+    })).await?;
 
     let prompt_generator = PromptGenerator::new(
         &config.processor_prompt_path,
@@ -154,6 +164,7 @@ async fn main() -> Result<()> {
         remote,
         mcp,
         weather: weather.clone(),
+        schedules: schedules.clone(),
         gigastt: gigastt::Gigastt::from_config(&config),
         piper: piper::Piper::from_config(&config),
         config,
@@ -198,11 +209,13 @@ async fn main() -> Result<()> {
             control,
             remote: context.remote.clone(),
             weather,
+            schedules: schedules.clone(),
         }),
         auth,
     );
     let api_listener = tokio::net::TcpListener::bind(("0.0.0.0", api_port)).await?;
     tracing::info!("management API listening on {}", api_listener.local_addr()?);
+    schedules.start();
 
     // stop on SIGINT/SIGTERM: as PID 1 in Docker there is no default handler,
     // so without this `docker stop` waits 10 s and kills the process

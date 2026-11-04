@@ -40,6 +40,8 @@ pub struct ConnectionRegistry {
     next_id: Arc<AtomicU64>,
     pub player: crate::player::PlayerRegistry,
     timezones: Arc<Mutex<HashMap<String, String>>>,
+    reported_timezones: Arc<Mutex<HashMap<String, String>>>,
+    alarm_support: Arc<Mutex<HashMap<String, bool>>>,
 }
 
 impl ConnectionRegistry {
@@ -54,6 +56,40 @@ impl ConnectionRegistry {
 
     pub fn timezone(&self, device_id: &str) -> Option<String> {
         self.timezones.lock().unwrap().get(device_id).cloned()
+    }
+
+    pub fn report_timezone(&self, device_id: &str, timezone: &str) {
+        if timezone.parse::<chrono_tz::Tz>().is_ok() {
+            self.reported_timezones.lock().unwrap().insert(device_id.to_owned(), timezone.to_owned());
+        }
+    }
+
+    pub fn effective_timezone(&self, device_id: &str) -> Option<String> {
+        self.timezone(device_id).or_else(|| self.reported_timezones.lock().unwrap().get(device_id).cloned())
+    }
+
+    pub fn report_alarm_support(&self, device_id: &str, supported: bool) {
+        self.alarm_support.lock().unwrap().insert(device_id.to_owned(), supported);
+    }
+
+    pub fn alarm_support(&self, device_id: &str) -> Option<bool> {
+        self.alarm_support.lock().unwrap().get(device_id).copied()
+    }
+
+    pub fn is_current(&self, duid: &str, connection_id: u64) -> bool {
+        self.connections.lock().unwrap().get(duid)
+            .and_then(|targets| targets.iter().filter(|(_, sender)| !sender.is_closed()).map(|(id, _)| *id).max())
+            == Some(connection_id)
+    }
+
+    /// A scheduled occurrence must reach only one live socket during reconnects.
+    pub fn send_one(&self, duid: &str, command: StationCommand) -> bool {
+        let connections = self.connections.lock().unwrap();
+        let Some(targets) = connections.get(duid) else { return false; };
+        targets.iter()
+            .filter(|(_, sender)| !sender.is_closed())
+            .max_by_key(|(id, _)| *id)
+            .is_some_and(|(_, sender)| sender.send(command).is_ok())
     }
     /// Whether the server still has an open command channel for this station.
     pub fn is_connected(&self, device_id: &str) -> bool {

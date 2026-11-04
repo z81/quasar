@@ -25,6 +25,7 @@ pub struct ApiState {
     pub control: Arc<crate::control::Control>,
     pub remote: Arc<crate::remote::RemoteServers>,
     pub weather: Arc<crate::weather::WeatherService>,
+    pub schedules: Arc<crate::schedules::Scheduler>,
 }
 
 impl ApiState {
@@ -46,6 +47,7 @@ pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Rout
         .route("/devices/{duid}/weather", get(crate::weather_api::forecast))
         .route("/weather/locations", get(crate::weather_api::locations))
         .route("/devices/{duid}/weather/location", put(crate::weather_api::set_location))
+        .merge(crate::schedule_api::router())
         .route(
             "/devices/{duid}/player",
             get(player_status).post(player_action),

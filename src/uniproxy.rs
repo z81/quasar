@@ -59,6 +59,7 @@ pub struct UniproxyContext {
     pub functions: Functions,
     pub remote: Arc<crate::remote::RemoteServers>,
     pub weather: Arc<crate::weather::WeatherService>,
+    pub schedules: Arc<crate::schedules::Scheduler>,
     /// MCP servers: their tools as functions, their live context in the state
     pub mcp: Arc<Mcp>,
     pub cache: ResponseCache,
@@ -105,7 +106,7 @@ pub async fn handle_socket(
     let (outbox, mut writer) = outbox::spawn_writer(sink);
     let (command_sender, mut commands) = mpsc::unbounded_channel::<StationCommand>();
     let connection_id = registry.register(&device_id, command_sender);
-    let mut connection = Connection::new(context, outbox, device_id.clone(), registry.clone());
+    let mut connection = Connection::new(context, outbox, device_id.clone(), registry.clone(), connection_id);
 
     loop {
         tokio::select! {
@@ -223,19 +224,30 @@ struct Connection {
     /// The station and its connections, for directives scheduled for later:
     /// by then it may talk through another connection
     device_id: String,
+    connection_id: u64,
     registry: ConnectionRegistry,
     pending_commands: HashMap<String, crate::control::CommandFeedback>,
+    alarm_events: mpsc::UnboundedSender<Vec<(String, bool)>>,
 }
 
 impl Connection {
-    fn new(context: Arc<UniproxyContext>, outbox: Outbox, device_id: String, registry: ConnectionRegistry) -> Self {
+    fn new(context: Arc<UniproxyContext>, outbox: Outbox, device_id: String, registry: ConnectionRegistry, connection_id: u64) -> Self {
+        let (alarm_events, mut observations) = mpsc::unbounded_channel();
+        let schedules = context.schedules.clone();
+        let alarm_device = device_id.clone();
+        let mut tasks = JoinSet::new();
+        tasks.spawn(async move {
+            while let Some(alarms) = observations.recv().await {
+                crate::schedule_delivery::observe(&schedules, &alarm_device, alarms).await;
+            }
+        });
         Self {
             context,
             outbox,
             dialog: DialogSlot::default(),
             voice_input: None,
             biometry: BiometrySlot::default(),
-            tasks: JoinSet::new(),
+            tasks,
             turns: Vec::new(),
             answering_stream: None,
             ended_stream: None,
@@ -243,8 +255,10 @@ impl Connection {
             station_zone: None,
             audio_play_pushed_at: None,
             device_id,
+            connection_id,
             registry,
             pending_commands: HashMap::new(),
+            alarm_events,
         }
     }
 
@@ -341,6 +355,16 @@ impl Connection {
                     Some(ClientEvent::TextInput(request)) => self.handle_text_input(header, request),
                     Some(ClientEvent::LogSpotter(_)) => report(self.outbox.log_ack(&header.message_id)),
                     Some(ClientEvent::MatchedUser(request)) => self.handle_matched_user(&request),
+                    Some(ClientEvent::CapabilityUpdateState(event)) if self.registry.is_current(&self.device_id, self.connection_id) => {
+                        if let Some(state) = crate::alarm_protocol::capability_state(&event) {
+                            if let Some(supported) = state.supported {
+                                self.registry.report_alarm_support(&self.device_id, supported);
+                            }
+                            if let Some(alarms) = state.alarms {
+                                let _ = self.alarm_events.send(alarms);
+                            }
+                        }
+                    }
                     Some(ClientEvent::SyncPushResponse(response)) => {
                         if let Some(crate::proto::n_alice::n_alice_api::t_sync_response::Response::GetDeviceStateResponse(response)) = response.sync_response.and_then(|response| response.response) {
                             if let Some(state)=response.device_state { self.registry.player.observe_state(&self.device_id, &state); }
@@ -590,6 +614,15 @@ impl Connection {
             }
             TextInputKind::Text(text) => {
                 let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), zone);
+                if text.trim().to_lowercase() == "стоп" {
+                    let schedules = self.context.schedules.clone();
+                    let duid = self.device_id.clone();
+                    self.tasks.spawn(async move {
+                        if let Err(error) = crate::schedule_tool::stop_active(&schedules, &duid).await {
+                            tracing::warn!("cannot stop active alarm: {error}");
+                        }
+                    });
+                }
                 match directives::text_command(&text) {
                     Some(command) => {
                         self.tasks.spawn(request.answer_directives(vec![command]));
@@ -629,6 +662,7 @@ impl Connection {
     fn zone_for(&mut self, request: &TAliceRequestProto) -> Zone {
         let named = request.application.as_ref().and_then(|application| application.timezone.as_deref());
         if let Some(name) = named.filter(|name| self.station_zone.as_deref() != Some(*name)) {
+            self.registry.report_timezone(&self.device_id, name);
             match self.station_zone.replace(name.to_string()) {
                 None => tracing::info!("station time zone: '{name}'"),
                 Some(previous) => {

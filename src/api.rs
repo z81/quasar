@@ -12,7 +12,7 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::connections::{ConnectionRegistry, StationCommand};
 use crate::station_config;
@@ -22,6 +22,8 @@ use crate::storage::Storage;
 pub struct ApiState {
     pub registry: ConnectionRegistry,
     pub storage: Arc<Storage>,
+    pub control: Arc<crate::control::Control>,
+    pub remote: Arc<crate::remote::RemoteServers>,
 }
 
 impl ApiState {
@@ -32,17 +34,40 @@ impl ApiState {
     }
 }
 
-pub fn router(state: Arc<ApiState>) -> Router {
-    crate::control_ui::router()
+pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Router {
+    Router::new()
         .route("/devices", get(devices))
         .route("/devices/{duid}", patch(update_device))
         .route("/devices/{duid}/push", post(push_event))
         .route("/devices/{duid}/push-raw", post(push_raw))
         .route("/devices/{duid}/push-text", post(push_text))
         .route("/devices/{duid}/push-directive", post(push_directive))
-        .route("/debug", get(|| async { Html(include_str!("api/debug.html")) }))
+        .route(
+            "/devices/{duid}/player",
+            get(player_status).post(player_action),
+        )
+        .route(
+            "/debug",
+            get(|| async { Html(include_str!("api/debug.html")) }),
+        )
         .fallback(|| async { (StatusCode::NOT_FOUND, "NOT_FOUND") })
-        .with_state(state)
+        .with_state(state.clone())
+        .merge(crate::control::router(state.control.clone()))
+        .layer(axum::middleware::from_fn_with_state(
+            auth.clone(),
+            crate::auth::require_auth,
+        ))
+        .merge(crate::auth::router(auth))
+        .merge(crate::control_ui::router())
+        .layer(axum::middleware::from_fn(no_cache))
+}
+
+async fn no_cache(request: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 async fn devices(State(state): State<Arc<ApiState>>) -> Response {
@@ -67,21 +92,50 @@ async fn update_device(
     };
     let (name, quasar_config) = match update_fields(body.as_ref()) {
         Ok(fields) => fields,
-        Err(issues) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "errors": issues }))).into_response(),
+        Err(issues) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({ "errors": issues })),
+            )
+                .into_response()
+        }
+    };
+    let timezone = match body.as_ref().and_then(|body| body.get("timezone")) {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(Value::String(zone)) if zone.trim().is_empty() => Some(None),
+        Some(Value::String(zone)) if zone.parse::<chrono_tz::Tz>().is_ok() => {
+            Some(Some(zone.clone()))
+        }
+        _ => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "timezone must be an IANA zone or null",
+            )
+                .into_response()
+        }
     };
     match state
         .storage
-        .update_name_and_config(&duid, name.as_deref(), quasar_config.as_ref())
+        .update_name_and_config(
+            &duid,
+            name.as_deref(),
+            quasar_config.as_ref(),
+            timezone.as_ref(),
+        )
         .await
     {
         Ok(Some(station)) => {
+            state
+                .registry
+                .set_timezone(&duid, station.timezone.as_deref());
             let directives = vec![raw_directive::push_update_config()];
             let delivered = state.registry.send(&duid, StationCommand::Directives { directives });
             tracing::info!("updated device {duid}, push_update_config sent to {delivered} connection(s)");
             Json(state.device(&station)).into_response()
         }
         // TS throws here, which Elysia answers with 500 and the message
-        Ok(None) => (StatusCode::INTERNAL_SERVER_ERROR, "Station does not exist").into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "Station does not exist").into_response(),
         Err(error) => internal_error("PATCH /devices/:duid", &error),
     }
 }
@@ -94,7 +148,13 @@ fn update_fields(body: Option<&Value>) -> Result<(Option<String>, Option<Value>)
     let mut issues = Vec::new();
     let name = match fields.get("name") {
         None => None,
-        Some(Value::String(name)) => Some(name.clone()),
+        Some(Value::String(name)) if !name.trim().is_empty() && name.chars().count() <= 200 => {
+            Some(name.trim().to_owned())
+        }
+        Some(Value::String(_)) => {
+            issues.push(json!({"path":["name"],"message":"Name must contain 1 to 200 characters"}));
+            None
+        }
         Some(other) => {
             issues.push(station_config::invalid_type_issue("string", Some(other), &[json!("name")]));
             None
@@ -122,9 +182,14 @@ async fn push_event(
         Ok(text) => text,
         Err(rejection) => return rejection.into_response(),
     };
-    let delivered = state.registry.send(&duid, StationCommand::Event { text });
-    tracing::info!("pushed an event to {delivered} connection(s) of {duid}");
-    Json(json!({ "delivered": delivered })).into_response()
+    dispatch(
+        &state,
+        &duid,
+        "push",
+        json!({"eventText":text}),
+        StationCommand::Event { text },
+    )
+    .await
 }
 
 /// The text is spoken as is (TS pushTts); `duid` may be `all`
@@ -137,9 +202,14 @@ async fn push_raw(
         Ok(text) => text,
         Err(rejection) => return rejection.into_response(),
     };
-    let delivered = state.registry.send(&duid, StationCommand::Speak { text });
-    tracing::info!("pushed a raw event to {delivered} connection(s) of {duid}");
-    Json(json!({ "delivered": delivered })).into_response()
+    dispatch(
+        &state,
+        &duid,
+        "push-raw",
+        json!({"eventText":text}),
+        StationCommand::Speak { text },
+    )
+    .await
 }
 
 /// The text is answered as if the user said it: spoken answer, functions run; `duid` may be `all`
@@ -152,9 +222,14 @@ async fn push_text(
         Ok(text) => text,
         Err(rejection) => return rejection.into_response(),
     };
-    let delivered = state.registry.send(&duid, StationCommand::Utterance { text });
-    tracing::info!("pushed a typed utterance to {delivered} connection(s) of {duid}");
-    Json(json!({ "delivered": delivered })).into_response()
+    dispatch(
+        &state,
+        &duid,
+        "push-text",
+        json!({"eventText":text}),
+        StationCommand::Utterance { text },
+    )
+    .await
 }
 
 /// A raw TDirective in protobufjs object form (TS pushRawDirectives); `duid` may be `all`
@@ -173,9 +248,105 @@ async fn push_directive(
         Ok(directive) => directive,
         Err(message) => return Rejection::Validation(message).into_response(),
     };
-    let delivered = state.registry.send(&duid, StationCommand::Directives { directives: vec![directive] });
-    tracing::info!("pushed a raw directive to {delivered} connection(s) of {duid}");
-    Json(json!({ "delivered": delivered })).into_response()
+    dispatch(
+        &state,
+        &duid,
+        "push-directive",
+        body.unwrap_or_default(),
+        StationCommand::Directives {
+            directives: vec![directive],
+        },
+    )
+    .await
+}
+
+async fn command_record(
+    state: &ApiState,
+    duid: &str,
+    action: &str,
+    body: Value,
+) -> Result<crate::control::CommandFeedback, Response> {
+    let stations = state
+        .storage
+        .list()
+        .await
+        .map_err(|error| internal_error("command station", &error))?;
+    let station = if duid == "all" {
+        "Все колонки"
+    } else {
+        stations
+            .iter()
+            .find(|station| station.duid == duid)
+            .map(|station| station.name.as_str())
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "Station does not exist").into_response())?
+    };
+    state
+        .control
+        .create(duid, station, action, body)
+        .await
+        .map_err(|error| internal_error("record command", &error))
+}
+
+async fn dispatch(
+    state: &ApiState,
+    duid: &str,
+    action: &str,
+    body: Value,
+    command: StationCommand,
+) -> Response {
+    let feedback = match command_record(state, duid, action, body).await {
+        Ok(feedback) => feedback,
+        Err(response) => return response,
+    };
+    let delivered = state.registry.send(
+        duid,
+        StationCommand::Tracked {
+            feedback: feedback.clone(),
+            command: Box::new(command),
+        },
+    );
+    feedback.delivered(delivered).await;
+    if delivered == 0 {
+        feedback.failed("Нет открытого соединения с колонкой").await;
+    }
+    Json(json!({"delivered":delivered,"commandId":feedback.id})).into_response()
+}
+
+async fn player_status(
+    State(state): State<Arc<ApiState>>,
+    Path(duid): Path<String>,
+) -> Json<crate::player::PlayerStatus> {
+    Json(crate::player::status(&state.registry, &state.remote, &duid).await)
+}
+
+async fn player_action(
+    State(state): State<Arc<ApiState>>,
+    Path(duid): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let feedback = match command_record(&state, &duid, "player", body.clone()).await {
+        Ok(feedback) => feedback,
+        Err(response) => return response,
+    };
+    feedback.running().await;
+    match crate::player::action(&state.registry, &state.remote, &duid, &body).await {
+        Ok(receipt) => {
+            feedback.delivered(receipt.delivered).await;
+            feedback
+                .action(
+                    body["action"].as_str().unwrap_or("player"),
+                    "sent",
+                    Some(&receipt.result),
+                )
+                .await;
+            feedback.completed().await;
+            Json(json!({"delivered":receipt.delivered,"result":receipt.result,"commandId":feedback.id})).into_response()
+        }
+        Err(error) => {
+            feedback.failed(error.1).await;
+            (error.0, error.1).into_response()
+        }
+    }
 }
 
 /// A request body that is rejected
@@ -190,13 +361,16 @@ impl IntoResponse for Rejection {
     fn into_response(self) -> Response {
         match self {
             Self::BadRequest => (StatusCode::BAD_REQUEST, "Bad Request").into_response(),
-            Self::Validation(message) => (StatusCode::UNPROCESSABLE_ENTITY, message).into_response(),
+            Self::Validation(message) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, message).into_response()
+            }
         }
     }
 }
 
 /// None for an empty body
 fn read_body(body: &[u8]) -> Result<Option<Value>, Rejection> {
+    if body.len() > 64 * 1024 { return Err(Rejection::Validation("Request body exceeds 64 KiB".into())); }
     if body.iter().all(u8::is_ascii_whitespace) {
         return Ok(None);
     }
@@ -210,8 +384,17 @@ fn read_body(body: &[u8]) -> Result<Option<Value>, Rejection> {
 fn event_text(body: &[u8]) -> Result<String, Rejection> {
     match read_body(body)? {
         Some(Value::Object(fields)) => match fields.get("eventText") {
-            Some(Value::String(text)) => Ok(text.clone()),
-            _ => Err(Rejection::Validation("eventText must be a string".to_string())),
+            Some(Value::String(text))
+                if !text.trim().is_empty() && text.chars().count() <= 8000 =>
+            {
+                Ok(text.clone())
+            }
+            Some(Value::String(_)) => Err(Rejection::Validation(
+                "eventText must contain 1 to 8000 characters".into(),
+            )),
+            _ => Err(Rejection::Validation(
+                "eventText must be a string".to_string(),
+            )),
         },
         _ => Err(Rejection::Validation("the body must be a JSON object with eventText".to_string())),
     }
@@ -219,5 +402,5 @@ fn event_text(body: &[u8]) -> Result<String, Rejection> {
 
 fn internal_error(route: &str, error: &anyhow::Error) -> Response {
     tracing::error!("Error on {route}: {error:#}");
-    (StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")).into_response()
+    (StatusCode::INTERNAL_SERVER_ERROR, "Не удалось обработать запрос. Проверьте журнал сервера.").into_response()
 }

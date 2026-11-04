@@ -83,6 +83,7 @@ def env(name, default=None):
 NAME = env("SPOTIFY_NAME", "Алиса")
 STREAM_URL = env("STREAM_URL")
 ALICE_API_URL = (env("ALICE_API_URL") or "").rstrip("/")
+ALICE_API_TOKEN = env("ALICE_API_TOKEN")
 STATION_ID = env("STATION_ID", "all")
 PROXY = env("SPOTIFY_PROXY")
 CLIENT_ID = env("SPOTIFY_CLIENT_ID")
@@ -174,6 +175,7 @@ class Station:
     def __init__(self):
         # what the station was told last: a paused station still connects to the stream to fill its buffer
         self.playing = False
+        self.stream_id = None
 
     def push(self, name, payload, led_silent):
         if not ALICE_API_URL:
@@ -181,14 +183,16 @@ class Station:
             return
         directive = {"Name": name, "Type": "client_action", "Payload": struct(payload), "IsLedSilent": led_silent}
         try:
-            http_json("POST", f"{ALICE_API_URL}/devices/{urllib.parse.quote(STATION_ID)}/push-directive", body=directive)
+            headers = {"Authorization": f"Bearer {ALICE_API_TOKEN}"} if ALICE_API_TOKEN else None
+            http_json("POST", f"{ALICE_API_URL}/devices/{urllib.parse.quote(STATION_ID)}/push-directive", body=directive, headers=headers)
             log.info("station %s: %s", STATION_ID, name)
         except (OSError, ValueError) as error:
             log.warning("pushing %s to the station failed: %s", name, error)
 
     def play(self):
         url = f"{STREAM_URL}{'&' if '?' in STREAM_URL else '?'}session={uuid.uuid4().hex}"
-        stream = {"format": "MP3", "id": str(uuid.uuid4()), "type": "Track", "url": url}
+        self.stream_id = str(uuid.uuid4())
+        stream = {"format": "MP3", "id": self.stream_id, "type": "Track", "url": url}
         self.playing = True
         self.push("audio_play", {"background_mode": "Ducking", "callbacks": {}, "screen_type": "Music", "stream": stream}, False)
 
@@ -632,6 +636,11 @@ class Bridge:
 
     def catalog(self):
         functions = {
+            "speaker_player_resume": {
+                "description": "Resume the current Spotify or AirPlay stream on this speaker, without changing its source",
+                "arguments": {},
+                "hasResponse": True,
+            },
             "spotify_play": {
                 "description": "Play music on this speaker from Spotify (has response). Without a query it resumes what was "
                                "playing; with one it searches Spotify. Use it for any request to play or resume music.",
@@ -652,6 +661,8 @@ class Bridge:
 
     def call(self, name, arguments):
         try:
+            if name == "speaker_player_resume":
+                return self.play(None, "track")
             if name == "spotify_play":
                 return self.play(arguments.get("query"), arguments.get("type") or "track")
             if name == "spotify_pause":
@@ -711,7 +722,24 @@ class Bridge:
         return f"Сейчас играет {title}" if state == "playing" else f"На паузе {title}"
 
     def state_entries(self):
-        return {"spotify": {"description": "Spotify music on this speaker", "value": self.now_playing()}}
+        with self.lock:
+            airplay = self.airplay == "playing"
+            state = "playing" if airplay else self.state
+            if state == "playing" and self.listener and self.listener.stalled:
+                state = "paused"
+            track = self.track if not airplay and state != "stopped" else None
+            player = {
+                "duid": STATION_ID,
+                "source": "AirPlay" if airplay else "Spotify",
+                "state": state,
+                "title": track.get("name") if track else None,
+                "artist": track.get("artists") if track else None,
+                "stream_id": self.station.stream_id,
+            }
+        return {
+            "spotify": {"description": "Spotify music on this speaker", "value": self.now_playing()},
+            "player": {"description": "Playback source and track on this speaker", "value": player},
+        }
 
 
 class SpotifyError(Exception):

@@ -274,6 +274,7 @@ docker run -d --name spotify --network alice --restart unless-stopped \
 |---|---|---|
 | `STREAM_URL` | — | **Обязательна.** Адрес `/stream.mp3` этого сервиса, по которому до него дотянется станция |
 | `ALICE_API_URL` | — | API управления alice-server, например `http://alice-server:31116`. Без него станция не узнает, что Spotify начал играть |
+| `ALICE_API_TOKEN` | — | API-токен из раздела «Доступ» Quasar. Нужен после включения входа по паролю; передаётся как `Authorization: Bearer` |
 | `STATION_ID` | `all` | Станция, которой отдаются команды (`duid` из `GET /devices`) |
 | `SPOTIFY_NAME` | `Алиса` | Имя колонки в Spotify |
 | `SPOTIFY_PROXY` | — | HTTP-прокси для librespot и Web API, если Spotify недоступен напрямую |

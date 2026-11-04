@@ -6,14 +6,17 @@ mod agent;
 mod anthropic;
 mod api;
 mod audio;
+mod auth;
 mod config;
 mod connections;
+mod control;
 mod control_ui;
 mod directives;
 mod gigastt;
 mod mcp;
-mod piper;
 mod openrouter;
+mod piper;
+mod player;
 mod prompt;
 mod proto;
 mod quasar_router;
@@ -125,6 +128,11 @@ async fn main() -> Result<()> {
         &config.updates_config_path,
     )?);
     let registry = ConnectionRegistry::default();
+    for station in storage.list().await? {
+        registry.set_timezone(&station.duid, station.timezone.as_deref());
+    }
+    let control = control::Control::load(storage.clone()).await?;
+    let auth = auth::AuthManager::load(storage.clone()).await?;
 
     let prompt_generator = PromptGenerator::new(
         &config.processor_prompt_path,
@@ -177,10 +185,15 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
     tracing::info!("quasar (uni.ws + domains) listening on {}", listener.local_addr()?);
 
-    let api = api::router(Arc::new(ApiState {
-        registry: registry.clone(),
-        storage,
-    }));
+    let api = api::router(
+        Arc::new(ApiState {
+            registry: registry.clone(),
+            storage,
+            control,
+            remote: context.remote.clone(),
+        }),
+        auth,
+    );
     let api_listener = tokio::net::TcpListener::bind(("0.0.0.0", api_port)).await?;
     tracing::info!("management API listening on {}", api_listener.local_addr()?);
 

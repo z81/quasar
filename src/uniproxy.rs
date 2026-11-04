@@ -19,6 +19,7 @@ mod outbox;
 mod speech;
 mod text_input;
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -38,11 +39,11 @@ use crate::gigastt::{Endpoint, Gigastt, Recognition};
 use crate::mcp::{LiveContext, Mcp};
 use crate::openrouter::OpenRouter;
 use crate::prompt::PromptGenerator;
-use crate::time_zone::Zone;
-use crate::proto::n_alice::TAliceRequestProto;
 use crate::proto::n_alice::n_alice_api::t_client_message::{self, t_event::Event as ClientEvent};
 use crate::proto::n_alice::n_alice_api::t_stream_control::{self, t_action_close::EReason};
 use crate::proto::n_alice::n_alice_api::{TClientMessage, TEventHeader, TStreamControl};
+use crate::proto::n_alice::TAliceRequestProto;
+use crate::time_zone::Zone;
 use dialog::{DialogSlot, Request, Utterance};
 use metadata::BiometrySlot;
 use outbox::{Outbox, ResponseTarget};
@@ -138,6 +139,9 @@ pub async fn handle_socket(
     registry.unregister(&device_id, connection_id);
     // like TS handleClose: whatever the dialog was doing stops with the socket
     connection.tasks.abort_all();
+    for feedback in connection.pending_commands.into_values() {
+        tokio::spawn(async move { feedback.failed("Соединение с колонкой закрыто до получения результата").await; });
+    }
 }
 
 /// The next end of utterance gigastt reports for the voice input being recorded
@@ -219,6 +223,7 @@ struct Connection {
     /// by then it may talk through another connection
     device_id: String,
     registry: ConnectionRegistry,
+    pending_commands: HashMap<String, crate::control::CommandFeedback>,
 }
 
 impl Connection {
@@ -238,34 +243,81 @@ impl Connection {
             audio_play_pushed_at: None,
             device_id,
             registry,
+            pending_commands: HashMap::new(),
         }
     }
 
     /// Management API commands: everything reaches the station as a Push
     fn handle_command(&mut self, command: StationCommand) {
+        let (command, feedback) = match command {
+            StationCommand::Tracked { feedback, command } => (*command, Some(feedback)),
+            command => (command, None),
+        };
+        let tracked_frame = |mut frame: serde_json::Value| {
+            if let Some(feedback) = &feedback {
+                frame["quasar_command_id"] = serde_json::json!(feedback.id);
+            }
+            directives::mm_semantic_frame(&frame)
+        };
+        let expects_callback = !matches!(
+            &command,
+            StationCommand::Directives { .. } | StationCommand::RefreshPlayer
+        );
         let pushed = match command {
             // TS pushEvent: the station sends the frame back as a TextInput, answered by the agent
             StationCommand::Event { text } if !text.trim().is_empty() => {
-                vec![directives::mm_semantic_frame(&directives::external_event_frame(&text))]
+                vec![tracked_frame(directives::external_event_frame(&text))]
             }
             // TS pushTts: the station sends the frame back as a TextInput, answered with the text spoken
             StationCommand::Speak { text } if !text.trim().is_empty() => {
-                vec![directives::mm_semantic_frame(&directives::tts_frame(&text))]
+                vec![tracked_frame(directives::tts_frame(&text))]
             }
             // the station sends the frame back as a TextInput, answered like a recognized utterance
             StationCommand::Utterance { text } if !text.trim().is_empty() => {
-                vec![directives::mm_semantic_frame(&directives::utterance_frame(&text))]
+                vec![tracked_frame(directives::utterance_frame(&text))]
             }
             StationCommand::Event { .. } | StationCommand::Speak { .. } | StationCommand::Utterance { .. } => {
                 tracing::warn!("not pushing an empty text to the station");
                 return;
             }
             StationCommand::Directives { directives } => directives,
+            StationCommand::RefreshPlayer => {
+                report(self.outbox.send(crate::player::refresh_message()));
+                return;
+            }
+            StationCommand::Tracked { .. } => return,
         };
         if pushed.iter().any(|directive| directive.name == "audio_play") {
             self.audio_play_pushed_at = Some(Instant::now());
         }
-        report(self.outbox.push(pushed));
+        let names: Vec<_> = pushed
+            .iter()
+            .map(|directive| directive.name.clone())
+            .collect();
+        match self.outbox.push(pushed) {
+            Err(_) => {
+                if let Some(feedback) = feedback {
+                    tokio::spawn(async move { feedback.failed("Не удалось отправить данные в соединение колонки").await; });
+                }
+            }
+            Ok(()) => {
+                if let Some(feedback) = feedback {
+                    if expects_callback {
+                        if self.pending_commands.len() >= 128 {
+                            self.pending_commands.clear();
+                        }
+                        self.pending_commands.insert(feedback.id.clone(), feedback);
+                    } else {
+                        tokio::spawn(async move {
+                            for name in names {
+                                feedback.action(&name,"sent",Some("Отправлено в соединение; выполнение колонкой не подтверждено")).await;
+                            }
+                            feedback.completed().await;
+                        });
+                    }
+                }
+            }
+        }
     }
 
     fn handle_frame(&mut self, frame: &[u8]) {
@@ -288,15 +340,23 @@ impl Connection {
                     Some(ClientEvent::TextInput(request)) => self.handle_text_input(header, request),
                     Some(ClientEvent::LogSpotter(_)) => report(self.outbox.log_ack(&header.message_id)),
                     Some(ClientEvent::MatchedUser(request)) => self.handle_matched_user(&request),
+                    Some(ClientEvent::SyncPushResponse(response)) => {
+                        if let Some(crate::proto::n_alice::n_alice_api::t_sync_response::Response::GetDeviceStateResponse(response)) = response.sync_response.and_then(|response| response.response) {
+                            if let Some(state)=response.device_state { self.registry.player.observe_state(&self.device_id, &state); }
+                        }
+                    }
                     _ => tracing::debug!("ignoring client event"),
                 }
             }
-            Some(t_client_message::Message::StreamControl(control)) => self.handle_stream_control(control),
+            Some(t_client_message::Message::StreamControl(control)) => {
+                self.handle_stream_control(control)
+            }
             None => {}
         }
     }
 
     fn handle_voice_input(&mut self, header: TEventHeader, mut request: TAliceRequestProto) {
+        self.registry.player.observe(&self.device_id, &request);
         if self.interrupt_turns() {
             tracing::info!("the dialog turn in flight was interrupted by a new voice input");
         }
@@ -451,6 +511,7 @@ impl Connection {
     }
 
     fn handle_matched_user(&self, request: &TAliceRequestProto) {
+        self.registry.player.observe(&self.device_id, request);
         if let Some(biometry) = metadata::biometry(request) {
             tracing::info!("speaker biometry: age {}, gender {}", biometry.age, biometry.gender);
             self.biometry.set(biometry);
@@ -458,6 +519,9 @@ impl Connection {
     }
 
     fn handle_text_input(&mut self, header: TEventHeader, mut request: TAliceRequestProto) {
+        self.registry.player.observe(&self.device_id, &request);
+        let feedback =
+            text_input::command_id(&request).and_then(|id| self.pending_commands.remove(&id));
         let request_header = request.header.take().unwrap_or_default();
         let station_dialog_id = request_header.dialog_id.as_deref();
         let zone = self.zone_for(&request);
@@ -465,7 +529,9 @@ impl Connection {
         let kind = match text_input::classify(&request) {
             // a press asks the assistant, which resumes the music if a music
             // service gave it the functions for that
-            TextInputKind::PlayButton if !echo => TextInputKind::Utterance("продолжи музыку".to_string()),
+            TextInputKind::PlayButton if !echo => {
+                TextInputKind::Utterance("продолжи музыку".to_string())
+            }
             kind => kind,
         };
         let target = |dialog_id: String| ResponseTarget {
@@ -480,6 +546,9 @@ impl Connection {
                 tracing::info!("external event: '{event}'");
                 let (dialog_id, agent) = self.dialog.for_event(&self.context, station_dialog_id, &zone);
                 let mut request = self.request(target(dialog_id), zone);
+                request.feedback = feedback;
+                self.dialog
+                    .set_feedback(&request.target.dialog_id, request.feedback.clone());
                 request.live_context = self.context.mcp.live_context();
                 self.spawn_turn(request.answer_event(agent, event));
             }
@@ -487,11 +556,18 @@ impl Connection {
                 tracing::info!("typed utterance: '{text}'");
                 let (dialog_id, agent) = self.dialog.for_voice_input(&self.context, station_dialog_id, &zone);
                 let mut request = self.request(target(dialog_id), zone);
+                request.feedback = feedback;
+                self.dialog
+                    .set_feedback(&request.target.dialog_id, request.feedback.clone());
                 request.live_context = self.context.mcp.live_context();
                 self.spawn_turn(request.answer_utterance(agent, text));
             }
             TextInputKind::Tts(text) => {
-                let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), zone);
+                let mut request = self.request(
+                    target(self.dialog.response_dialog_id(station_dialog_id)),
+                    zone,
+                );
+                request.feedback = feedback;
                 self.tasks.spawn(request.answer_tts(text));
             }
             TextInputKind::PlayButton => {
@@ -532,7 +608,9 @@ impl Connection {
     }
 
     fn request(&self, target: ResponseTarget, zone: Zone) -> Request {
+        let feedback = self.dialog.feedback(&target.dialog_id);
         Request {
+            feedback,
             context: self.context.clone(),
             outbox: self.outbox.clone(),
             dialog: self.dialog.clone(),
@@ -552,10 +630,13 @@ impl Connection {
         if let Some(name) = named.filter(|name| self.station_zone.as_deref() != Some(*name)) {
             match self.station_zone.replace(name.to_string()) {
                 None => tracing::info!("station time zone: '{name}'"),
-                Some(previous) => tracing::info!("station time zone changed from '{previous}' to '{name}'"),
+                Some(previous) => {
+                    tracing::info!("station time zone changed from '{previous}' to '{name}'")
+                }
             }
         }
-        Zone::of_station(self.station_zone.as_deref())
+        let timezone = self.registry.timezone(&self.device_id);
+        Zone::of_station(timezone.as_deref().or(self.station_zone.as_deref()))
     }
 
     fn spawn_turn(&mut self, turn: impl Future<Output = ()> + Send + 'static) -> AbortHandle {

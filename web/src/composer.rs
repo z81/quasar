@@ -38,6 +38,11 @@ pub fn Composer(mut state: ControlState) -> Element {
                 span { class: "send-target", Icon { name: "speaker", size: 15 }
                     if let Some(device) = state.device() { span { "{device.label()}" } } else { span { "Колонка не выбрана" } }
                 }
+                button { class: "text-button save-draft", disabled: state.text.read().trim().is_empty() || state.device().is_none(), onclick: move |_| {
+                    let text = state.text.read().trim().to_string();
+                    api::save_favorite(state, text.chars().take(80).collect(), (state.selected)(), mode.path().to_string(), serde_json::json!({"eventText":text}));
+                    state.panel.set(crate::state::Panel::Favorites);
+                }, Icon { name: "star", size: 16 } "Сохранить" }
                 button { class: "button primary", disabled: !enabled, onclick: move |_| api::submit(state),
                     if (state.sending)() { span { class: "spinner" } "Отправляем" } else { "Отправить" Icon { name: "arrow", size: 18 } }
                 }
@@ -87,8 +92,7 @@ pub fn Advanced(state: ControlState) -> Element {
                 span { class: "send-target", Icon { name: "speaker", size: 15 } span { "Прямое управление" } }
                 button { class: "button primary", disabled: !enabled, onclick: move |_| {
                     if let Ok(body) = serde_json::from_str::<Value>(&draft()) {
-                        let name = body.get("Name").and_then(Value::as_str).unwrap_or("Директива").to_string();
-                        api::dispatch(state, (state.selected)(), "Директива".to_string(), name, "push-directive".to_string(), body, false);
+                        api::dispatch(state, (state.selected)(), "push-directive".to_string(), body, false);
                     }
                 }, "Отправить" Icon { name: "arrow", size: 18 } }
             }

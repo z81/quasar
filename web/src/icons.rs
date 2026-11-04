@@ -3,6 +3,16 @@ use dioxus::prelude::*;
 #[component]
 pub fn Icon(name: &'static str, #[props(default = 20)] size: u32) -> Element {
     let path = match name {
+        "star" => "m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2 7.5 14 3 9.6l6.2-.9L12 3Z",
+        "lock" => "M6 10h12v11H6z M8 10V6a4 4 0 0 1 8 0v4 M12 14v3",
+        "key" => "M14 4a5 5 0 1 1-2 9L5 20H2v-3l7-7a5 5 0 0 1 5-6Z M16 7h.01",
+        "settings" => "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z M9 2h6l1 4 4 1 2 5-3 3 1 4-5 3-3-3-4 1-3-5 3-3-1-4 4-2 1-4",
+        "logout" => "M9 3H4v18h5 M13 7l5 5-5 5 M8 12h13",
+        "music" => "M9 18V5l12-2v13 M9 8l12-2 M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z M21 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z",
+        "play" => "m8 4 12 8-12 8V4Z",
+        "pause" => "M7 4h3v16H7z M14 4h3v16h-3z",
+        "previous" => "M5 4v16 M19 4 7 12l12 8V4Z",
+        "next" => "M19 4v16 M5 4l12 8-12 8V4Z",
         "grid" => "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
         "history" => "M3 11a9 9 0 1 1 2.5 7 M3 4v7h7 M12 7v5l3 2",
         "code" => "m8 5-7 7 7 7 M16 5l7 7-7 7 M14 3l-4 18",

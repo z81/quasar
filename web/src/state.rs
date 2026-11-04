@@ -8,6 +8,10 @@ pub struct Device {
     pub name: String,
     #[serde(default)]
     pub connected: Option<bool>,
+    #[serde(default, rename = "quasarConfig")]
+    pub quasar_config: Value,
+    #[serde(default)]
+    pub timezone: Option<String>,
 }
 
 impl Device {
@@ -82,6 +86,9 @@ pub enum Panel {
     Control,
     History,
     Advanced,
+    Favorites,
+    Settings,
+    Access,
 }
 
 impl Panel {
@@ -90,6 +97,9 @@ impl Panel {
             Self::Control => "Управление",
             Self::History => "История команд",
             Self::Advanced => "Директивы",
+            Self::Favorites => "Избранное",
+            Self::Settings => "Настройки",
+            Self::Access => "Доступ",
         }
     }
 }
@@ -141,26 +151,93 @@ impl Theme {
     }
 }
 
-#[derive(Clone, PartialEq)]
-pub enum Delivery {
-    Sending,
-    Sent,
-    Accepted,
-    Failed,
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct Action {
+    pub name: String,
+    #[serde(default)]
+    pub result: Option<String>,
+    #[serde(default)]
+    pub status: String,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Entry {
-    pub id: u64,
-    pub time: String,
+    pub id: String,
+    pub created_at: String,
     pub station: String,
     pub duid: String,
     pub label: String,
     pub text: String,
     pub path: String,
     pub body: Value,
-    pub delivery: Delivery,
-    pub detail: String,
+    pub status: String,
+    #[serde(default)]
+    pub response: Option<String>,
+    #[serde(default)]
+    pub actions: Vec<Action>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub delivered: usize,
+}
+
+impl Entry {
+    pub fn time(&self) -> String {
+        let date = js_sys::Date::new(&self.created_at.clone().into());
+        if date.get_time().is_nan() {
+            return self.created_at.clone();
+        }
+        format!(
+            "{:02}.{:02} {:02}:{:02}",
+            date.get_date(),
+            date.get_month() + 1,
+            date.get_hours(),
+            date.get_minutes()
+        )
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Favorite {
+    pub id: String,
+    pub label: String,
+    pub duid: String,
+    pub path: String,
+    pub body: Value,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+pub struct AuthStatus {
+    #[serde(default = "auth_available")]
+    pub available: bool,
+    pub configured: bool,
+    pub authenticated: bool,
+}
+
+fn auth_available() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct PlayerCapabilities {
+    pub pause: bool,
+    pub resume: bool,
+    pub next: bool,
+    pub previous: bool,
+    pub set_volume: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct Player {
+    pub connected: bool,
+    pub state: String,
+    pub source: Option<String>,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub volume: Option<u8>,
+    pub muted: Option<bool>,
+    pub updated_at: Option<String>,
+    pub capabilities: PlayerCapabilities,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -171,6 +248,14 @@ pub struct ControlState {
     pub server_error: Signal<Option<String>>,
     pub sending: Signal<bool>,
     pub history: Signal<Vec<Entry>>,
+    pub history_error: Signal<Option<String>>,
+    pub favorites: Signal<Vec<Favorite>>,
+    pub persistent: Signal<Option<bool>>,
+    pub player: Signal<Option<Player>>,
+    pub player_error: Signal<Option<String>>,
+    pub auth: Signal<AuthStatus>,
+    pub auth_loaded: Signal<bool>,
+    pub auth_error: Signal<Option<String>>,
     pub mode: Signal<Mode>,
     pub text: Signal<String>,
     pub panel: Signal<Panel>,
@@ -191,5 +276,11 @@ impl ControlState {
         !(self.sending)()
             && self.server_error.read().is_none()
             && self.device().is_some_and(|device| device.can_receive())
+    }
+
+    pub fn allowed(self) -> bool {
+        (self.auth_loaded)()
+            && (self.auth)().available
+            && (!(self.auth)().configured || (self.auth)().authenticated)
     }
 }

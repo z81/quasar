@@ -1,29 +1,91 @@
 use dioxus::prelude::*;
-use gloo_net::http::Request;
+use gloo_net::http::{Request, Response};
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::state::{ControlState, Delivery, Device, Entry};
+use crate::state::{AuthStatus, ControlState, Device, Entry, Favorite, Player};
+
+pub fn encoded(value: &str) -> String {
+    js_sys::encode_uri_component(value).into()
+}
+
+pub async fn checked(mut state: ControlState, response: Response) -> Result<Response, String> {
+    if response.status() == 401 {
+        state.auth.write().authenticated = false;
+        return Err("Войдите, чтобы продолжить работу.".to_string());
+    }
+    if response.ok() {
+        return Ok(response);
+    }
+    let status = response.status();
+    let message = response.text().await.unwrap_or_default();
+    let detail = serde_json::from_str::<Value>(&message)
+        .ok()
+        .and_then(|value| value["error"].as_str().map(str::to_owned))
+        .unwrap_or(message);
+    Err(format!(
+        "HTTP {status}: {}",
+        detail.chars().take(500).collect::<String>()
+    ))
+}
+
+pub async fn get<T: DeserializeOwned>(state: ControlState, url: &str) -> Result<T, String> {
+    let response = Request::get(url)
+        .send()
+        .await
+        .map_err(|_| "Не удалось связаться с сервером".to_string())?;
+    checked(state, response)
+        .await?
+        .json::<T>()
+        .await
+        .map_err(|_| "Сервер вернул непонятный ответ".to_string())
+}
+
+pub async fn mutate(
+    state: ControlState,
+    method: &str,
+    url: &str,
+    body: Option<&Value>,
+) -> Result<Response, String> {
+    let request = match method {
+        "PATCH" => Request::patch(url),
+        "DELETE" => Request::delete(url),
+        _ => Request::post(url),
+    };
+    let request = if let Some(body) = body {
+        request
+            .json(body)
+            .map_err(|_| "Не удалось подготовить запрос".to_string())?
+    } else {
+        request
+            .build()
+            .map_err(|_| "Не удалось подготовить запрос".to_string())?
+    };
+    let response = request.send().await.map_err(|_| {
+        "Соединение прервалось. Результат запроса неизвестен; проверьте историю перед повтором."
+            .to_string()
+    })?;
+    checked(state, response).await
+}
+
+pub async fn refresh_auth(mut state: ControlState) {
+    match get::<AuthStatus>(state, "/auth/status").await {
+        Ok(auth) => {
+            if *state.auth.peek() != auth {
+                state.auth.set(auth);
+            }
+            state.auth_error.set(None);
+            if !*state.auth_loaded.peek() {
+                state.auth_loaded.set(true);
+            }
+        }
+        Err(error) => state.auth_error.set(Some(error)),
+    }
+}
 
 pub async fn refresh(mut state: ControlState) {
-    let result = async {
-        let response = Request::get("/devices")
-            .send()
-            .await
-            .map_err(|_| "Не удалось связаться с сервером".to_string())?;
-        if !response.ok() {
-            return Err(format!(
-                "Сервер не вернул список колонок (HTTP {})",
-                response.status()
-            ));
-        }
-        response
-            .json::<Vec<Device>>()
-            .await
-            .map_err(|_| "Сервер вернул непонятный список колонок".to_string())
-    }
-    .await;
-    match result {
+    match get::<Vec<Device>>(state, "/devices").await {
         Ok(mut devices) => {
             devices.sort_by(|a, b| a.label().cmp(b.label()).then(a.duid.cmp(&b.duid)));
             if !devices
@@ -36,6 +98,7 @@ pub async fn refresh(mut state: ControlState) {
                         .map(|device| device.duid.clone())
                         .unwrap_or_default(),
                 );
+                state.player.set(None);
             }
             state.devices.set(devices);
             state.server_error.set(None);
@@ -43,6 +106,54 @@ pub async fn refresh(mut state: ControlState) {
         Err(error) => state.server_error.set(Some(error)),
     }
     state.loading.set(false);
+}
+
+pub async fn refresh_history(mut state: ControlState) {
+    match get::<Vec<Entry>>(state, "/control/history").await {
+        Ok(history) => {
+            state.history.set(history);
+            state.history_error.set(None);
+        }
+        Err(error) => state.history_error.set(Some(error)),
+    }
+}
+
+pub async fn refresh_saved(mut state: ControlState) {
+    match get::<Vec<Favorite>>(state, "/control/favorites").await {
+        Ok(favorites) => state.favorites.set(favorites),
+        Err(error) => state
+            .notice
+            .set(Some(format!("Не удалось загрузить избранное: {error}"))),
+    }
+    #[derive(Deserialize)]
+    struct Status {
+        persistent: bool,
+    }
+    if let Ok(status) = get::<Status>(state, "/control/status").await {
+        state.persistent.set(Some(status.persistent));
+    }
+}
+
+pub async fn refresh_player(mut state: ControlState) {
+    let duid = (state.selected)();
+    if duid.is_empty() {
+        state.player.set(None);
+        return;
+    }
+    let result = get::<Player>(state, &format!("/devices/{}/player", encoded(&duid))).await;
+    if duid != *state.selected.read() {
+        return;
+    }
+    match result {
+        Ok(player) => {
+            state.player.set(Some(player));
+            state.player_error.set(None);
+        }
+        Err(error) => {
+            state.player.set(None);
+            state.player_error.set(Some(error));
+        }
+    }
 }
 
 pub fn submit(state: ControlState) {
@@ -54,20 +165,16 @@ pub fn submit(state: ControlState) {
     dispatch(
         state,
         (state.selected)(),
-        mode.label().to_string(),
-        text.clone(),
         mode.path().to_string(),
         json!({"eventText": text}),
         true,
     );
 }
 
-pub fn quick_action(state: ControlState, name: &str, label: &str) {
+pub fn quick_action(state: ControlState, name: &str, _label: &str) {
     dispatch(
         state,
         (state.selected)(),
-        "Управление".to_string(),
-        label.to_string(),
         "push-directive".to_string(),
         json!({"Name": name, "Type": "client_action", "IsLedSilent": true, "Payload": {"fields": []}}),
         false,
@@ -76,26 +183,11 @@ pub fn quick_action(state: ControlState, name: &str, label: &str) {
 
 pub fn repeat(mut state: ControlState, entry: Entry) {
     state.selected.set(entry.duid.clone());
-    dispatch(
-        state,
-        entry.duid,
-        entry.label,
-        entry.text,
-        entry.path,
-        entry.body,
-        false,
-    );
+    state.player.set(None);
+    dispatch(state, entry.duid, entry.path, entry.body, false);
 }
 
-pub fn dispatch(
-    mut state: ControlState,
-    duid: String,
-    label: String,
-    text: String,
-    path: String,
-    body: Value,
-    clear: bool,
-) {
+pub fn dispatch(mut state: ControlState, duid: String, path: String, body: Value, clear: bool) {
     if (state.sending)() {
         return;
     }
@@ -105,108 +197,91 @@ pub fn dispatch(
         ));
         return;
     }
-    let device = state
+    if !state
         .devices
         .read()
         .iter()
-        .find(|device| device.duid == duid)
-        .cloned();
-    let Some(device) = device.filter(Device::can_receive) else {
+        .any(|device| device.duid == duid && device.can_receive())
+    {
         state.notice.set(Some(
             "Колонка сейчас не подключена. Обновите список и попробуйте ещё раз.".to_string(),
         ));
         return;
-    };
+    }
     state.sending.set(true);
     state.notice.set(None);
     let submitted_draft = clear.then(|| (state.text)());
-    let now = js_sys::Date::new_0();
-    let id = js_sys::Date::now() as u64;
-    state.history.write().insert(
-        0,
-        Entry {
-            id,
-            time: format!("{:02}:{:02}", now.get_hours(), now.get_minutes()),
-            station: device.label().to_string(),
-            duid: duid.clone(),
-            label,
-            text: text.clone(),
-            path: path.clone(),
-            body: body.clone(),
-            delivery: Delivery::Sending,
-            detail: "Отправляем…".to_string(),
-        },
-    );
-    state.history.write().truncate(100);
-    // Delivery belongs to the app, not the composer/editor that initiated it.
-    // Switching panels must not cancel it and leave the shared state pending.
+    let url = if path.starts_with("/devices/") {
+        path
+    } else {
+        format!("/devices/{}/{path}", encoded(&duid))
+    };
     dioxus::core::spawn_forever(async move {
-        let result = send(&duid, &path, &body).await;
-        let (delivery, detail) = match result {
-            Ok(Some(count)) if count > 0 => {
-                (Delivery::Sent, "Передано в соединение колонки".to_string())
-            }
-            Ok(Some(_)) => (
-                Delivery::Failed,
-                "Колонка отключилась. Команда не передана.".to_string(),
-            ),
-            Ok(None) => (
-                Delivery::Accepted,
-                "Сервер принял запрос, но не сообщает, передан ли он колонке.".to_string(),
-            ),
-            Err(error) => (Delivery::Failed, error),
-        };
-        if matches!(delivery, Delivery::Sent | Delivery::Accepted)
-            && submitted_draft
-                .as_ref()
-                .is_some_and(|draft| *state.text.read() == *draft)
-        {
-            state.text.set(String::new());
+        #[derive(Deserialize)]
+        struct Receipt {
+            delivered: usize,
         }
-        if delivery == Delivery::Failed {
-            state.notice.set(Some(detail.clone()));
-        }
-        if let Some(entry) = state
-            .history
-            .write()
-            .iter_mut()
-            .find(|entry| entry.id == id)
-        {
-            entry.delivery = delivery;
-            entry.detail = detail;
+        match mutate(state, "POST", &url, Some(&body)).await {
+            Ok(response) => match response.json::<Receipt>().await {
+                Ok(receipt) if receipt.delivered > 0 => {
+                    if submitted_draft.as_ref().is_some_and(|draft| *state.text.read() == *draft) { state.text.set(String::new()); }
+                }
+                Ok(_) => state.notice.set(Some("Колонка отключилась. Команда не передана.".to_string())),
+                Err(_) => state.notice.set(Some("Сервер принял запрос, но результат неизвестен. Проверьте историю перед повтором.".to_string())),
+            },
+            Err(error) => state.notice.set(Some(error)),
         }
         state.sending.set(false);
+        refresh_history(state).await;
+        refresh_player(state).await;
     });
 }
 
-async fn send(duid: &str, path: &str, body: &Value) -> Result<Option<usize>, String> {
-    #[derive(Deserialize)]
-    struct Receipt {
-        #[serde(default)]
-        delivered: Option<usize>,
-    }
+pub fn player_action(state: ControlState, action: &str, volume: Option<u8>) {
+    let body = if let Some(volume) = volume {
+        json!({"action":action,"volume":volume})
+    } else {
+        json!({"action":action})
+    };
+    dispatch(state, (state.selected)(), "player".to_string(), body, false);
+}
 
-    let duid: String = js_sys::encode_uri_component(duid).into();
-    let url = format!("/devices/{duid}/{path}");
-    let request = Request::post(&url)
-        .json(body)
-        .map_err(|_| "Не удалось подготовить команду".to_string())?;
-    let response = request.send().await.map_err(|_| {
-        "Соединение прервалось. Доставка неизвестна; проверьте колонку перед повтором.".to_string()
-    })?;
-    if !response.ok() {
-        return Err(format!(
-            "Ошибка запроса (HTTP {}): {}",
-            response.status(),
-            response.text().await.unwrap_or_default()
-        ));
+pub async fn create_favorite(
+    mut state: ControlState,
+    label: String,
+    duid: String,
+    path: String,
+    body: Value,
+) -> Result<(), String> {
+    let path = if path.starts_with("/devices/") {
+        path
+    } else {
+        format!("/devices/{}/{path}", encoded(&duid))
+    };
+    let body = json!({"label":label.trim(),"duid":duid,"path":path,"body":body});
+    mutate(state, "POST", "/control/favorites", Some(&body)).await?;
+    match get::<Vec<Favorite>>(state, "/control/favorites").await {
+        Ok(values) => state.favorites.set(values),
+        Err(error) => state.notice.set(Some(format!(
+            "Команда сохранена, но не удалось обновить список: {error}"
+        ))),
     }
-    response
-        .json::<Receipt>()
-        .await
-        .map(|receipt| receipt.delivered)
-        .map_err(|_| {
-            "Сервер принял запрос, но не подтвердил передачу колонке. Проверьте её перед повтором."
-                .to_string()
-        })
+    Ok(())
+}
+
+pub fn save_favorite(
+    mut state: ControlState,
+    label: String,
+    duid: String,
+    path: String,
+    body: Value,
+) {
+    if label.trim().is_empty() {
+        return;
+    }
+    dioxus::core::spawn_forever(async move {
+        if let Err(error) = create_favorite(state, label, duid, path, body).await {
+            state.notice.set(Some(error));
+        }
+    });
 }

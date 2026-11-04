@@ -7,6 +7,7 @@ use crate::state::{ControlState, Panel, Theme};
 pub fn Sidebar(mut state: ControlState) -> Element {
     let devices = (state.devices)();
     let selected = (state.selected)();
+    let history_count = (state.history)().len();
     let server_ok =
         state.server_error.read().is_none() && (!(state.loading)() || !devices.is_empty());
     rsx! {
@@ -18,11 +19,11 @@ pub fn Sidebar(mut state: ControlState) -> Element {
             div { class: "workspace-tag", span { class: "workspace-avatar", "Q" } div { strong { "Моё пространство" } span { "Пульт управления" } } }
             div { class: "nav-label", "ПРОСТРАНСТВО" }
             nav { class: "navigation", aria_label: "Разделы пульта",
-                for (panel, icon) in [(Panel::Control, "grid"), (Panel::History, "history"), (Panel::Advanced, "code")] {
+                for (panel, icon) in [(Panel::Control, "grid"), (Panel::Favorites, "star"), (Panel::History, "history"), (Panel::Settings, "settings"), (Panel::Access, "lock"), (Panel::Advanced, "code")] {
                     button { class: if (state.panel)() == panel { "nav-item active" } else { "nav-item" }, aria_current: if (state.panel)() == panel { "page" } else { "false" },
                         onclick: move |_| state.panel.set(panel),
                         Icon { name: icon, size: 18 } "{panel.label()}"
-                        if panel == Panel::History && !state.history.read().is_empty() { span { class: "nav-count", "{state.history.read().len()}" } }
+                        if panel == Panel::History && history_count > 0 { span { class: "nav-count", "{history_count}" } }
                     }
                 }
             }
@@ -40,7 +41,7 @@ pub fn Sidebar(mut state: ControlState) -> Element {
                             let connected = device.connected == Some(true) && server_ok;
                             rsx! {
                                 button { key: "{id}", class: if id == selected { "device-item selected" } else { "device-item" },
-                                    aria_pressed: id == selected, onclick: move |_| state.selected.set(id.clone()),
+                                    aria_pressed: id == selected, onclick: move |_| { state.player.set(None); state.selected.set(id.clone()); },
                                     span { class: "device-icon", Icon { name: "speaker", size: 20 } }
                                     span { class: "device-copy", strong { "{device.label()}" } span { if server_ok { "{device.connection_label()}" } else { "Нет связи с сервером" } } }
                                     span { class: if connected { "status-dot connected" } else { "status-dot" } }

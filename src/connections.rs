@@ -2,14 +2,20 @@
 //! stations (push events and raw TTS).
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use std::sync::Mutex;
 use tokio::sync::mpsc;
 
 #[derive(Clone, Debug)]
 pub enum StationCommand {
+    RefreshPlayer,
+    /// Management command whose result is recorded in persistent history.
+    Tracked {
+        feedback: crate::control::CommandFeedback,
+        command: Box<StationCommand>,
+    },
     /// Text goes through the dialog agent; the answer is spoken
     Event { text: String },
     /// Text is spoken directly, bypassing the agent
@@ -32,9 +38,23 @@ type DeviceConnections = HashMap<u64, StationSender>;
 pub struct ConnectionRegistry {
     connections: Arc<Mutex<HashMap<String, DeviceConnections>>>,
     next_id: Arc<AtomicU64>,
+    pub player: crate::player::PlayerRegistry,
+    timezones: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl ConnectionRegistry {
+    pub fn set_timezone(&self, device_id: &str, timezone: Option<&str>) {
+        let mut zones = self.timezones.lock().unwrap();
+        if let Some(zone) = timezone {
+            zones.insert(device_id.to_owned(), zone.to_owned());
+        } else {
+            zones.remove(device_id);
+        }
+    }
+
+    pub fn timezone(&self, device_id: &str) -> Option<String> {
+        self.timezones.lock().unwrap().get(device_id).cloned()
+    }
     /// Whether the server still has an open command channel for this station.
     pub fn is_connected(&self, device_id: &str) -> bool {
         self.connections

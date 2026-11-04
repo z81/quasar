@@ -6,8 +6,8 @@ use prost::Message as _;
 use serde_json::Value;
 
 use crate::directives::struct_to_json;
-use crate::proto::n_alice::n_alice_api::TSemanticFrameRequestData;
 use crate::proto::n_alice::n_alice_api::t_typed_semantic_frame::Type as TypedFrame;
+use crate::proto::n_alice::n_alice_api::TSemanticFrameRequestData;
 use crate::proto::n_alice::t_event::PayloadType;
 use crate::proto::n_alice::{EEventType, TAliceRequestProto};
 
@@ -41,7 +41,9 @@ pub fn classify(request: &TAliceRequestProto) -> TextInputKind {
     };
     let is_server_action = event.r#type == Some(EEventType::ServerAction as i32);
     match &event.payload_type {
-        Some(PayloadType::Payload(payload)) if is_server_action => classify_payload(&struct_to_json(payload)),
+        Some(PayloadType::Payload(payload)) if is_server_action => {
+            classify_payload(&struct_to_json(payload))
+        }
         Some(PayloadType::PayloadRaw(raw))
             if is_server_action && event.name.as_deref() == Some("@@mm_semantic_frame") =>
         {
@@ -50,12 +52,30 @@ pub fn classify(request: &TAliceRequestProto) -> TextInputKind {
         _ if event.r#type == Some(EEventType::TextInput as i32) => {
             TextInputKind::Text(event.text.clone().unwrap_or_default())
         }
-        _ => TextInputKind::Unknown(format!("event type {:?}, name {:?}", event.r#type, event.name)),
+        _ => TextInputKind::Unknown(format!(
+            "event type {:?}, name {:?}",
+            event.r#type, event.name
+        )),
+    }
+}
+
+/// Our push payload is echoed unchanged by the station's server_action.
+pub fn command_id(request: &TAliceRequestProto) -> Option<String> {
+    let event = request.request.as_ref()?.event.as_ref()?;
+    match &event.payload_type {
+        Some(PayloadType::Payload(payload)) => struct_to_json(payload)["quasar_command_id"]
+            .as_str()
+            .map(str::to_owned),
+        _ => None,
     }
 }
 
 fn classify_payload(payload: &Value) -> TextInputKind {
-    let frame = |name: &str| payload.pointer(&format!("/typed_semantic_frame/{name}")).is_some_and(truthy);
+    let frame = |name: &str| {
+        payload
+            .pointer(&format!("/typed_semantic_frame/{name}"))
+            .is_some_and(truthy)
+    };
     let text = |pointer: &str| {
         payload.pointer(pointer).and_then(Value::as_str).filter(|text| !text.is_empty()).map(str::to_string)
     };
@@ -86,9 +106,9 @@ fn classify_payload(payload: &Value) -> TextInputKind {
 fn classify_semantic_frame(raw: &[u8]) -> TextInputKind {
     match TSemanticFrameRequestData::decode(raw) {
         Ok(request) => match request.typed_semantic_frame.and_then(|frame| frame.r#type) {
-            Some(TypedFrame::MusicPlaySemanticFrame(_) | TypedFrame::PlayerContinueSemanticFrame(_)) => {
-                TextInputKind::PlayButton
-            }
+            Some(
+                TypedFrame::MusicPlaySemanticFrame(_) | TypedFrame::PlayerContinueSemanticFrame(_),
+            ) => TextInputKind::PlayButton,
             other => TextInputKind::Unknown(format!("semantic frame {other:?}")),
         },
         Err(error) => TextInputKind::Unknown(format!("undecodable semantic frame: {error}")),

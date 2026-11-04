@@ -1,7 +1,11 @@
+mod access;
 mod api;
 mod composer;
+mod favorites;
 mod history;
 mod icons;
+mod player;
+mod settings;
 mod sidebar;
 mod state;
 mod station;
@@ -24,6 +28,14 @@ fn App() -> Element {
         server_error: use_signal(|| None),
         sending: use_signal(|| false),
         history: use_signal(Vec::new),
+        history_error: use_signal(|| None),
+        favorites: use_signal(Vec::new),
+        persistent: use_signal(|| None),
+        player: use_signal(|| None),
+        player_error: use_signal(|| None),
+        auth: use_signal(Default::default),
+        auth_loaded: use_signal(|| false),
+        auth_error: use_signal(|| None),
         mode: use_signal(Default::default),
         text: use_signal(String::new),
         panel: use_signal(Default::default),
@@ -32,15 +44,48 @@ fn App() -> Element {
     };
     use_future(move || async move {
         loop {
-            api::refresh(state).await;
+            api::refresh_auth(state).await;
+            if state.allowed() {
+                api::refresh(state).await;
+                api::refresh_saved(state).await;
+            }
             TimeoutFuture::new(10_000).await;
+        }
+    });
+    use_future(move || async move {
+        loop {
+            if state.allowed() {
+                api::refresh_history(state).await;
+            }
+            let active = state
+                .history
+                .read()
+                .iter()
+                .any(|entry| matches!(entry.status.as_str(), "queued" | "running"));
+            TimeoutFuture::new(if active { 2_000 } else { 10_000 }).await;
+        }
+    });
+    use_future(move || async move {
+        loop {
+            if state.allowed() {
+                api::refresh_player(state).await;
+            }
+            TimeoutFuture::new(5_000).await;
+        }
+    });
+    use_effect(move || {
+        let _ = (state.selected)();
+        state.player.set(None);
+        if state.allowed() {
+            spawn(api::refresh_player(state));
         }
     });
     let panel = (state.panel)();
     rsx! {
         document::Title { "Quasar — пульт управления" }
         document::Stylesheet { href: asset!("/assets/control.css") }
-        div { class: "app", "data-theme": (state.theme)().name(),
+        div { class: if state.allowed() { "app" } else { "app auth-app" }, "data-theme": (state.theme)().name(),
+            if !state.allowed() { access::LoginGate { state } } else {
             sidebar::Sidebar { state }
             div { class: "workspace",
                 header { class: "topbar",
@@ -51,11 +96,14 @@ fn App() -> Element {
                     div { class: "page-heading",
                         div {
                             div { class: "eyebrow", "ВАША АЛИСА. ВАШИ ПРАВИЛА." }
-                            h1 { match panel { Panel::Control => "Всё под контролем.", Panel::History => "История команд.", Panel::Advanced => "Прямой доступ." } }
+                            h1 { match panel { Panel::Control => "Всё под контролем.", Panel::History => "История команд.", Panel::Advanced => "Прямой доступ.", Panel::Favorites => "Всегда под рукой.", Panel::Settings => "На ваш лад.", Panel::Access => "Только для своих." } }
                             p { match panel {
                                 Panel::Control => "Скажите, что нужно сделать. Остальное — за Алисой.",
-                                Panel::History => "Ваши запросы и результаты отправки в этой сессии.",
+                                Panel::History => "Запросы, ответы Алисы и результаты обработки.",
                                 Panel::Advanced => "Отправляйте колонке команды её собственного протокола.",
+                                Panel::Favorites => "Любимые команды для каждого дня. Сохраните и запускайте одним нажатием.",
+                                Panel::Settings => "Имя, часовой пояс и голосовые настройки выбранной колонки.",
+                                Panel::Access => "Вход в пульт и ключи для ваших интеграций.",
                             } }
                         }
                         button { class: "button secondary refresh-button", disabled: (state.loading)(), onclick: move |_| { state.loading.set(true); spawn(api::refresh(state)); },
@@ -76,18 +124,23 @@ fn App() -> Element {
                                 composer::Composer { state }
                                 station::StationCard { state }
                             }
+                            player::PlayerCard { state }
                             history::History { state, compact: true }
                         },
                         Panel::History => rsx! { history::History { state, compact: false } },
+                        Panel::Favorites => rsx! { favorites::Favorites { state } },
+                        Panel::Settings => rsx! { settings::Settings { state } },
+                        Panel::Access => rsx! { access::Access { state } },
                         Panel::Advanced => rsx! {
                             div { class: "control-grid", composer::Advanced { state } station::StationCard { state } }
                         },
                     }
                     footer { class: "page-footer",
-                        span { "Ответы Алисы звучат на выбранной колонке." }
+                        span { "Команды и ответы — в одном пространстве." }
                         span { "Quasar Control" }
                     }
                 }
+            }
             }
         }
     }

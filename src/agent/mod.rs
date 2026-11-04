@@ -17,7 +17,7 @@ use lru::LruCache;
 use protocol::{DirectiveResult, FunctionCall, StructuredResponse};
 use serde_json::Value;
 use stream::{AnswerScanner, TextChunker};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{mpsc, Mutex};
 
 use crate::anthropic::Anthropic;
 use crate::openrouter::{ChatMessage, ChatStream, OpenRouter};
@@ -189,6 +189,7 @@ impl Agent {
         state_prompt: String,
         executor: &dyn FunctionExecutor,
         outputs: &mpsc::UnboundedSender<AgentOutput>,
+        feedback: Option<&crate::control::CommandFeedback>,
     ) -> Result<()> {
         let _turn = self.turn.lock().await;
         let text = turn.text.trim().to_string();
@@ -225,21 +226,36 @@ impl Agent {
             };
             let response = match received {
                 // the prompt asks for an empty "text" after a has-response result; some models leave out the JSON too
-                Ok(response) if iteration > 0 && response.trim().is_empty() => EMPTY_ANSWER.to_string(),
+                Ok(response) if iteration > 0 && response.trim().is_empty() => {
+                    EMPTY_ANSWER.to_string()
+                }
                 Ok(response) => response,
-                Err(error) => return failed_after_header(answer.part, error),
+                Err(error) => {
+                    if let Some(feedback) = feedback {
+                        feedback
+                            .failed("Не удалось получить полный ответ языковой модели")
+                            .await;
+                    }
+                    return failed_after_header(answer.part, error);
+                }
             };
             tracing::info!("LLM answer: {response}");
 
             let structured = match protocol::parse_llm_response(&response) {
                 Ok(structured) => structured,
                 Err(error) => {
+                    if let Some(feedback) = feedback {
+                        feedback.failed("Модель вернула некорректный ответ").await;
+                    }
                     if answer.part.is_some() {
                         self.state.lock().await.messages.push(ChatMessage::assistant(response));
                     }
                     return failed_after_header(answer.part, error);
                 }
             };
+            if let Some(feedback) = feedback {
+                feedback.answer(&structured.text).await;
+            }
 
             let (finished, results, complete_part) = match answer.part.take() {
                 // the part went out with its header
@@ -325,7 +341,12 @@ impl Agent {
     /// spoken text, the end
     fn log_timing(&self, stream: &ChatStream, text_started_at: Option<Instant>) {
         let timing = stream.timing();
-        let ms = |duration: Option<Duration>| duration.map_or_else(|| "-".to_string(), |duration| duration.as_millis().to_string());
+        let ms = |duration: Option<Duration>| {
+            duration.map_or_else(
+                || "-".to_string(),
+                |duration| duration.as_millis().to_string(),
+            )
+        };
         tracing::info!(
             "LLM {} (reasoning {}): response {} ms, first delta {} ms, first content {} ms, text {} ms, done {} ms",
             self.model,

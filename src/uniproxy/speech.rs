@@ -8,11 +8,11 @@
 //! fails on is spoken by OpenRouter instead (PIPER_FALLBACK).
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -20,8 +20,8 @@ use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
-use super::UniproxyContext;
 use super::outbox::Outbox;
+use super::UniproxyContext;
 use crate::audio::{Encoded, Transcoder};
 use crate::config::TtsFormat;
 use crate::piper::Piper;
@@ -73,14 +73,14 @@ pub async fn speak_text(
     text: &str,
     reference_message_id: &str,
     speech_end: Option<SpeechEnd>,
-) {
+) -> Result<()> {
     if text.is_empty() {
-        return;
+        return Ok(());
     }
     let (chunks, receiver) = mpsc::unbounded_channel();
     let _ = chunks.send(text.to_string());
     drop(chunks);
-    speak(context, outbox, receiver, reference_message_id, speech_end).await;
+    speak(context, outbox, receiver, reference_message_id, speech_end).await
 }
 
 /// Speaks the chunks of a part through one TTS stream, closed once the
@@ -91,12 +91,13 @@ pub async fn speak(
     chunks: mpsc::UnboundedReceiver<String>,
     reference_message_id: &str,
     speech_end: Option<SpeechEnd>,
-) {
+) -> Result<()> {
     let speech = stream_speech(context, outbox, chunks, reference_message_id, speech_end);
     match tokio::time::timeout(SPEECH_LIFETIME, speech).await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => tracing::error!("TTS streaming failed: {error:#}"),
-        Err(_) => tracing::error!("TTS streaming took longer than {SPEECH_LIFETIME:?}"),
+        Ok(result) => result,
+        Err(_) => Err(anyhow!(
+            "TTS streaming took longer than {SPEECH_LIFETIME:?}"
+        )),
     }
 }
 
@@ -372,8 +373,17 @@ impl Synthesis {
     }
 
     fn log(&self, text: &str, rate: u32) {
-        let ms = |duration: Option<Duration>| duration.map_or_else(|| "-".to_string(), |duration| duration.as_millis().to_string());
-        let label = if self.label.is_empty() { String::new() } else { format!(" ({})", self.label) };
+        let ms = |duration: Option<Duration>| {
+            duration.map_or_else(
+                || "-".to_string(),
+                |duration| duration.as_millis().to_string(),
+            )
+        };
+        let label = if self.label.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", self.label)
+        };
         let speech = self.decoded.bytes as f64 / f64::from(rate * 2);
         let first_pcm = if self.decoded_apart { format!(", first PCM {} ms", ms(self.decoded.first)) } else { String::new() };
         tracing::info!(

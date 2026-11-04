@@ -20,15 +20,17 @@ use uuid::Uuid;
 use super::metadata::{BiometrySlot, InputMetadata};
 use super::outbox::{Outbox, ResponseTarget};
 use super::speech::{self, SpeechEnd};
-use super::{UniproxyContext, report};
+use super::{report, UniproxyContext};
 use crate::agent::protocol::{DirectiveResult, FunctionCall};
-use crate::agent::{Agent, AgentOutput, AgentTurn, ERROR_RESPONSE_TEXT, FunctionExecutor, OutputText};
+use crate::agent::{
+    Agent, AgentOutput, AgentTurn, FunctionExecutor, OutputText, ERROR_RESPONSE_TEXT,
+};
 use crate::audio;
 use crate::connections::{ConnectionRegistry, StationCommand};
 use crate::directives;
 use crate::gigastt::{Endpoint, Recognition, Transcript};
 use crate::mcp::{LiveContext, Mcp};
-use crate::prompt::{State, system_state};
+use crate::prompt::{system_state, State};
 use crate::proto::n_alice::n_alice_api::TDirective;
 use crate::remote::RemoteServers;
 use crate::time_zone::Zone;
@@ -45,6 +47,7 @@ const PART_WAIT: Duration = Duration::from_secs(5);
 type Answers = Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<AgentOutput>>>;
 
 struct Dialog {
+    feedback: Option<crate::control::CommandFeedback>,
     /// Server-assigned (TS: a UUID per dialog): answers carry it, and the
     /// station names it in requests that continue the dialog
     id: String,
@@ -61,6 +64,18 @@ struct Dialog {
 pub struct DialogSlot(Arc<Mutex<Option<Dialog>>>);
 
 impl DialogSlot {
+    pub fn set_feedback(&self, id: &str, feedback: Option<crate::control::CommandFeedback>) {
+        if let Some(dialog) = self.lock().as_mut().filter(|dialog| dialog.id == id) {
+            dialog.feedback = feedback;
+        }
+    }
+
+    pub fn feedback(&self, id: &str) -> Option<crate::control::CommandFeedback> {
+        self.lock()
+            .as_ref()
+            .filter(|dialog| dialog.id == id)
+            .and_then(|dialog| dialog.feedback.clone())
+    }
     fn lock(&self) -> MutexGuard<'_, Option<Dialog>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -151,6 +166,7 @@ impl DialogSlot {
 
 fn open(slot: &mut Option<Dialog>, context: &UniproxyContext, zone: &Zone) -> (String, Arc<Agent>) {
     let dialog = Dialog {
+        feedback: None,
         id: Uuid::new_v4().to_string(),
         agent: Arc::new(new_agent(context, zone)),
         awaiting_input: false,
@@ -198,6 +214,7 @@ pub struct Utterance {
 
 /// A request of the station and what answering it needs
 pub struct Request {
+    pub feedback: Option<crate::control::CommandFeedback>,
     pub context: Arc<UniproxyContext>,
     pub outbox: Outbox,
     pub dialog: DialogSlot,
@@ -265,9 +282,46 @@ impl Request {
 
     /// TextInput with text pushed through the API: spoken as is
     pub async fn answer_tts(self, text: String) {
-        match self.outbox.alice_response(&self.target, &text, false, vec![directives::tts_play_placeholder(None)]) {
-            Ok(()) => speech::speak_text(&self.context, &self.outbox, &text, &self.target.reference_message_id, None).await,
-            Err(error) => tracing::warn!("{error:#}"),
+        let _guard = self
+            .feedback
+            .as_ref()
+            .map(crate::control::FeedbackGuard::new);
+        if let Some(feedback) = &self.feedback {
+            feedback.running().await;
+            feedback.answer(&text).await;
+        }
+        match self.outbox.alice_response(
+            &self.target,
+            &text,
+            false,
+            vec![directives::tts_play_placeholder(None)],
+        ) {
+            Ok(()) => {
+                let result = speech::speak_text(
+                    &self.context,
+                    &self.outbox,
+                    &text,
+                    &self.target.reference_message_id,
+                    None,
+                )
+                .await;
+                if let Some(feedback) = &self.feedback {
+                    if result.is_ok() {
+                        feedback.completed().await;
+                    } else {
+                        feedback
+                            .failed("Не удалось синтезировать или отправить речь")
+                            .await;
+                    }
+                }
+                report(result);
+            }
+            Err(error) => {
+                if let Some(feedback) = &self.feedback {
+                    feedback.failed("Не удалось отправить ответ колонке").await;
+                }
+                tracing::warn!("{error:#}");
+            }
         }
     }
 
@@ -299,6 +353,8 @@ impl Request {
         live_context: Option<LiveContext>,
         parts: mpsc::UnboundedSender<AgentOutput>,
     ) {
+        let _guard = self.feedback.as_ref().map(crate::control::FeedbackGuard::new);
+        if let Some(feedback)=&self.feedback { feedback.running().await; }
         let metadata_json = metadata.to_json();
         let session_id = agent.session_id().to_string();
         let state = dialog_state(&self.context, &session_id, metadata, &metadata_json, &self.zone, live_context).await;
@@ -307,6 +363,7 @@ impl Request {
             String::new()
         });
         let executor = RemoteExecutor {
+            feedback: self.feedback.clone(),
             remote: self.context.remote.clone(),
             mcp: self.context.mcp.clone(),
             session_id,
@@ -314,7 +371,21 @@ impl Request {
             device_id: self.device_id.clone(),
             registry: self.registry.clone(),
         };
-        if let Err(error) = agent.run_turn(turn, state_prompt, &executor, &parts).await {
+        if let Err(error) = agent
+            .run_turn(
+                turn,
+                state_prompt,
+                &executor,
+                &parts,
+                self.feedback.as_ref(),
+            )
+            .await
+        {
+            if let Some(feedback) = &self.feedback {
+                feedback
+                    .failed("Ошибка обработки команды языковой моделью")
+                    .await;
+            }
             tracing::error!("agent turn failed: {error:#}");
             // like TS: an apology instead of silence, as the turn's last part
             let _ = parts.send(AgentOutput {
@@ -323,6 +394,8 @@ impl Request {
                 should_listen: false,
                 text: OutputText::Complete(ERROR_RESPONSE_TEXT.to_string()),
             });
+        } else if let Some(feedback) = &self.feedback {
+            feedback.completed().await;
         }
     }
 
@@ -378,21 +451,50 @@ impl Request {
         let should_listen = part.finished && part.should_listen;
         let sent = self.outbox.voice_response(&self.target, shown_text, speaks, should_listen, station_directives);
         if let Err(error) = sent {
+            if let Some(feedback) = &self.feedback {
+                feedback.failed("Ответ не удалось отправить колонке").await;
+            }
             tracing::warn!("answer not delivered: {error:#}");
             return;
+        }
+        if let Some(feedback) = &self.feedback {
+            for directive in &part.directives {
+                feedback
+                    .action(
+                        &directive.name,
+                        "sent",
+                        Some("Директива отправлена; выполнение колонкой не подтверждено"),
+                    )
+                    .await;
+            }
         }
         if part.finished {
             self.dialog.finish_turn(&self.target.dialog_id, part.should_listen);
         }
         let reference_message_id = &self.target.reference_message_id;
-        match part.text {
+        let result = match part.text {
             OutputText::Complete(text) => {
                 speech::speak_text(&self.context, &self.outbox, &text, reference_message_id, self.speech_end).await
             }
             OutputText::Streaming(chunks) => {
-                speech::speak(&self.context, &self.outbox, chunks, reference_message_id, self.speech_end).await
+                speech::speak(
+                    &self.context,
+                    &self.outbox,
+                    chunks,
+                    reference_message_id,
+                    self.speech_end,
+                )
+                .await
+            }
+        };
+        if result.is_err() {
+            if let Some(feedback) = &self.feedback {
+                feedback
+                    .failed("Не удалось синтезировать или отправить речь")
+                    .await;
             }
         }
+        report(result);
     }
 }
 
@@ -485,6 +587,7 @@ async fn dialog_state(
 /// function servers' functions with the turn's session id and metadata,
 /// and the station directives scheduled for later
 struct RemoteExecutor {
+    feedback: Option<crate::control::CommandFeedback>,
     remote: Arc<RemoteServers>,
     mcp: Arc<Mcp>,
     session_id: String,
@@ -496,20 +599,39 @@ struct RemoteExecutor {
 impl RemoteExecutor {
     /// The call's result for the LLM; failures as text, never an error
     fn call_any(&self, call: FunctionCall) -> BoxFuture<'static, String> {
-        let (remote, mcp, session_id, metadata) =
-            (self.remote.clone(), self.mcp.clone(), self.session_id.clone(), self.metadata.clone());
+        let (remote, mcp, session_id, metadata) = (
+            self.remote.clone(),
+            self.mcp.clone(),
+            self.session_id.clone(),
+            self.metadata.clone(),
+        );
+        let feedback = self.feedback.clone();
         Box::pin(async move {
+            let name = call.name.clone();
             // a function server's own function wins over an MCP prefix
-            if !remote.owns(&call.name) && mcp.routes(&call.name) {
-                return mcp.call(&call.name, &call.arguments).await;
-            }
-            match remote.call_by_name(&call.name, &call.arguments, &session_id, &metadata).await {
-                Ok(result) => result,
-                Err(error) => {
-                    tracing::warn!("remote function '{}' failed: {error:#}", call.name);
-                    format!("Error: {error:#}")
+            let result = if !remote.owns(&call.name) && mcp.routes(&call.name) {
+                mcp.call(&call.name, &call.arguments).await
+            } else {
+                match remote
+                    .call_by_name(&call.name, &call.arguments, &session_id, &metadata)
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        tracing::warn!("remote function '{}' failed: {error:#}", call.name);
+                        format!("Error: {error:#}")
+                    }
                 }
+            };
+            if let Some(feedback) = feedback {
+                let status = if result.trim_start().to_lowercase().starts_with("error:") {
+                    "failed"
+                } else {
+                    "completed"
+                };
+                feedback.action(&name, status, Some(&result)).await;
             }
+            result
         })
     }
 }
@@ -522,8 +644,14 @@ impl FunctionExecutor for RemoteExecutor {
         let delay_ms = call.schedule_ms.filter(|milliseconds| *milliseconds > 0);
         let name = call.name.clone();
         let result = self.call_any(call);
+        let feedback = self.feedback.clone();
         tokio::spawn(async move {
             if let Some(delay_ms) = delay_ms {
+                if let Some(feedback) = &feedback {
+                    feedback
+                        .action(&name, "scheduled", Some(&format!("Через {delay_ms} мс")))
+                        .await;
+                }
                 tracing::info!("calling {name} after {delay_ms}ms");
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             }
@@ -539,12 +667,39 @@ impl FunctionExecutor for RemoteExecutor {
     /// Detached like `spawn`; it goes through the connection the station has then
     fn schedule_directive(&self, directive: DirectiveResult, delay_ms: u64) {
         let (device_id, registry) = (self.device_id.clone(), self.registry.clone());
+        let feedback = self.feedback.clone();
         tracing::info!("sending {} after {delay_ms}ms", directive.name);
         tokio::spawn(async move {
+            if let Some(feedback) = &feedback {
+                feedback
+                    .action(
+                        &directive.name,
+                        "scheduled",
+                        Some(&format!("Через {delay_ms} мс")),
+                    )
+                    .await;
+            }
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             if let Some(station_directive) = directives::to_directive(&directive) {
-                let delivered = registry.send(&device_id, StationCommand::Directives { directives: vec![station_directive] });
-                tracing::info!("pushed the scheduled {} to {delivered} connection(s) of {device_id}", directive.name);
+                let delivered = registry.send(
+                    &device_id,
+                    StationCommand::Directives {
+                        directives: vec![station_directive],
+                    },
+                );
+                if let Some(feedback) = &feedback {
+                    feedback
+                        .action(
+                            &directive.name,
+                            if delivered > 0 { "sent" } else { "failed" },
+                            Some("Отложенная директива: результат доставки"),
+                        )
+                        .await;
+                }
+                tracing::info!(
+                    "pushed the scheduled {} to {delivered} connection(s) of {device_id}",
+                    directive.name
+                );
             }
         });
     }

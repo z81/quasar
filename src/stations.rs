@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::sync::RwLock;
 
 use crate::station_config;
@@ -19,6 +19,8 @@ pub struct StationSummary {
     pub private_key_pem: String,
     /// Parsed quasar config: every default filled in
     pub quasar_config: Value,
+    /// Assistant time zone override; None follows the station.
+    pub timezone: Option<String>,
 }
 
 impl StationSummary {
@@ -54,6 +56,7 @@ impl StationSummary {
             "duid": self.duid,
             "name": self.name,
             "quasarConfig": self.quasar_config,
+            "timezone": self.timezone,
         })
     }
 }
@@ -113,6 +116,7 @@ impl StationStore {
                 certificate_pem,
                 private_key_pem,
                 quasar_config: station_config::default_config(),
+                timezone: None,
             }
         });
         Ok(station.clone())
@@ -135,6 +139,7 @@ impl StationStore {
         duid: &str,
         name: Option<&str>,
         quasar_config: Option<&Value>,
+        timezone: Option<&Option<String>>,
     ) -> Option<StationSummary> {
         let mut stations = self.stations.write().await;
         let station = stations.get_mut(duid)?;
@@ -143,6 +148,9 @@ impl StationStore {
         }
         if let Some(quasar_config) = quasar_config {
             station.quasar_config = quasar_config.clone();
+        }
+        if let Some(timezone) = timezone {
+            station.timezone = timezone.clone();
         }
         Some(station.clone())
     }

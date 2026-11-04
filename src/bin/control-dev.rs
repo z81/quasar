@@ -11,7 +11,7 @@ use axum::body::{to_bytes, Body};
 use axum::extract::{Request, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post};
+use axum::routing::{any, get, patch};
 
 #[derive(Clone)]
 struct Proxy {
@@ -59,7 +59,9 @@ async fn main() -> Result<()> {
     let app = control_ui::router()
         .route("/devices", get(forward))
         .route("/devices/{duid}", patch(forward))
-        .route("/devices/{duid}/{action}", post(forward))
+        .route("/devices/{duid}/{action}", get(forward).post(forward))
+        .route("/control/{*path}", any(forward))
+        .route("/auth/{*path}", any(forward))
         .with_state(proxy);
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     println!("Quasar control: http://{}/ui/", listener.local_addr()?);
@@ -80,9 +82,33 @@ async fn forward(State(proxy): State<Proxy>, request: Request) -> Response {
     let mut request = proxy
         .client
         .request(parts.method, format!("{}{uri}", proxy.base));
-    for name in [header::CONTENT_TYPE, header::ACCEPT, header::AUTHORIZATION] {
+    for name in [
+        header::CONTENT_TYPE,
+        header::ACCEPT,
+        header::AUTHORIZATION,
+        header::COOKIE,
+        header::HeaderName::from_static("sec-fetch-site"),
+    ] {
         if let Some(value) = parts.headers.get(&name) {
             request = request.header(name, value);
+        }
+    }
+    if let Some(origin) = parts.headers.get(header::ORIGIN) {
+        let local = parts
+            .headers
+            .get(header::HOST)
+            .and_then(|host| host.to_str().ok())
+            .map(|host| format!("http://{host}"));
+        // Preserve the browser's origin check across this loopback development
+        // proxy. Cross-origin requests are forwarded unchanged and rejected.
+        if local.as_deref() == origin.to_str().ok() {
+            let upstream_origin = reqwest::Url::parse(&proxy.base)
+                .unwrap()
+                .origin()
+                .ascii_serialization();
+            request = request.header(header::ORIGIN, upstream_origin);
+        } else {
+            request = request.header(header::ORIGIN, origin);
         }
     }
     let upstream =
@@ -99,6 +125,9 @@ async fn forward(State(proxy): State<Proxy>, request: Request) -> Response {
         .header(header::CACHE_CONTROL, "no-store");
     if let Some(content_type) = upstream.headers().get(header::CONTENT_TYPE) {
         response = response.header(header::CONTENT_TYPE, content_type);
+    }
+    for cookie in upstream.headers().get_all(header::SET_COOKIE) {
+        response = response.header(header::SET_COOKIE, cookie);
     }
     response
         .body(Body::from_stream(upstream.bytes_stream()))

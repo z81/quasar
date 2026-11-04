@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
@@ -24,8 +24,16 @@ pub struct ApiState {
     pub storage: Arc<Storage>,
 }
 
+impl ApiState {
+    fn device(&self, station: &StationSummary) -> Value {
+        let mut device = station.to_api_device();
+        device["connected"] = json!(self.registry.is_connected(&station.duid));
+        device
+    }
+}
+
 pub fn router(state: Arc<ApiState>) -> Router {
-    Router::new()
+    crate::control_ui::router()
         .route("/devices", get(devices))
         .route("/devices/{duid}", patch(update_device))
         .route("/devices/{duid}/push", post(push_event))
@@ -38,10 +46,12 @@ pub fn router(state: Arc<ApiState>) -> Router {
 }
 
 async fn devices(State(state): State<Arc<ApiState>>) -> Response {
-    match state.storage.list().await {
-        Ok(stations) => Json(stations.iter().map(StationSummary::to_api_device).collect::<Vec<_>>()).into_response(),
+    let mut response = match state.storage.list().await {
+        Ok(stations) => Json(stations.iter().map(|station| state.device(station)).collect::<Vec<_>>()).into_response(),
         Err(error) => internal_error("GET /devices", &error),
-    }
+    };
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 /// Replaces the name and/or the whole quasar config (defaults filled in, as
@@ -68,7 +78,7 @@ async fn update_device(
             let directives = vec![raw_directive::push_update_config()];
             let delivered = state.registry.send(&duid, StationCommand::Directives { directives });
             tracing::info!("updated device {duid}, push_update_config sent to {delivered} connection(s)");
-            Json(station.to_api_device()).into_response()
+            Json(state.device(&station)).into_response()
         }
         // TS throws here, which Elysia answers with 500 and the message
         Ok(None) => (StatusCode::INTERNAL_SERVER_ERROR, "Station does not exist").into_response(),
@@ -114,7 +124,7 @@ async fn push_event(
     };
     let delivered = state.registry.send(&duid, StationCommand::Event { text });
     tracing::info!("pushed an event to {delivered} connection(s) of {duid}");
-    Json(json!({})).into_response()
+    Json(json!({ "delivered": delivered })).into_response()
 }
 
 /// The text is spoken as is (TS pushTts); `duid` may be `all`
@@ -129,7 +139,7 @@ async fn push_raw(
     };
     let delivered = state.registry.send(&duid, StationCommand::Speak { text });
     tracing::info!("pushed a raw event to {delivered} connection(s) of {duid}");
-    Json(json!({})).into_response()
+    Json(json!({ "delivered": delivered })).into_response()
 }
 
 /// The text is answered as if the user said it: spoken answer, functions run; `duid` may be `all`
@@ -144,7 +154,7 @@ async fn push_text(
     };
     let delivered = state.registry.send(&duid, StationCommand::Utterance { text });
     tracing::info!("pushed a typed utterance to {delivered} connection(s) of {duid}");
-    Json(json!({})).into_response()
+    Json(json!({ "delivered": delivered })).into_response()
 }
 
 /// A raw TDirective in protobufjs object form (TS pushRawDirectives); `duid` may be `all`
@@ -165,7 +175,7 @@ async fn push_directive(
     };
     let delivered = state.registry.send(&duid, StationCommand::Directives { directives: vec![directive] });
     tracing::info!("pushed a raw directive to {delivered} connection(s) of {duid}");
-    Json(json!({})).into_response()
+    Json(json!({ "delivered": delivered })).into_response()
 }
 
 /// A request body that is rejected

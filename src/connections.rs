@@ -35,6 +35,15 @@ pub struct ConnectionRegistry {
 }
 
 impl ConnectionRegistry {
+    /// Whether the server still has an open command channel for this station.
+    pub fn is_connected(&self, device_id: &str) -> bool {
+        self.connections
+            .lock()
+            .unwrap()
+            .get(device_id)
+            .is_some_and(|connections| connections.values().any(|sender| !sender.is_closed()))
+    }
+
     /// Returns the connection id to pass to `unregister`
     pub fn register(&self, device_id: &str, sender: StationSender) -> u64 {
         let connection_id = self.next_id.fetch_add(1, Ordering::Relaxed);

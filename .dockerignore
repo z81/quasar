@@ -1,4 +1,6 @@
 target
+web/target
+web/dist
 .git
 .env
 .env.*

@@ -8,6 +8,7 @@ mod api;
 mod audio;
 mod config;
 mod connections;
+mod control_ui;
 mod directives;
 mod gigastt;
 mod mcp;

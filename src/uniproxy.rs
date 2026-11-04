@@ -88,7 +88,7 @@ impl UniproxyContext {
 const MAX_UTTERANCE_BYTES: usize = 8 * 1024 * 1024;
 
 /// What the station listens for; its voice stream starts with them
-const WAKE_WORDS: [&str; 2] = ["алиса", "яндекс"];
+const WAKE_WORDS: [&str; 3] = ["алиса", "яндекс", "ясмина"];
 
 /// A press of the continue button this soon after a pushed audio_play is the
 /// station's own echo of it (about 50 ms later in its logs)

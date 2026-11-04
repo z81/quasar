@@ -50,6 +50,7 @@ pub async fn mutate(
 ) -> Result<Response, String> {
     let request = match method {
         "PATCH" => Request::patch(url),
+        "PUT" => Request::put(url),
         "DELETE" => Request::delete(url),
         _ => Request::post(url),
     };

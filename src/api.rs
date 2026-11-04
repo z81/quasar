@@ -10,7 +10,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, patch, post};
+use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
@@ -24,6 +24,7 @@ pub struct ApiState {
     pub storage: Arc<Storage>,
     pub control: Arc<crate::control::Control>,
     pub remote: Arc<crate::remote::RemoteServers>,
+    pub weather: Arc<crate::weather::WeatherService>,
 }
 
 impl ApiState {
@@ -42,6 +43,9 @@ pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Rout
         .route("/devices/{duid}/push-raw", post(push_raw))
         .route("/devices/{duid}/push-text", post(push_text))
         .route("/devices/{duid}/push-directive", post(push_directive))
+        .route("/devices/{duid}/weather", get(crate::weather_api::forecast))
+        .route("/weather/locations", get(crate::weather_api::locations))
+        .route("/devices/{duid}/weather/location", put(crate::weather_api::set_location))
         .route(
             "/devices/{duid}/player",
             get(player_status).post(player_action),

@@ -11,7 +11,7 @@ use axum::body::{to_bytes, Body};
 use axum::extract::{Request, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, patch};
+use axum::routing::{any, get, patch, put};
 
 #[derive(Clone)]
 struct Proxy {
@@ -60,6 +60,8 @@ async fn main() -> Result<()> {
         .route("/devices", get(forward))
         .route("/devices/{duid}", patch(forward))
         .route("/devices/{duid}/{action}", get(forward).post(forward))
+        .route("/devices/{duid}/weather/location", put(forward))
+        .route("/weather/{*path}", get(forward))
         .route("/control/{*path}", any(forward))
         .route("/auth/{*path}", any(forward))
         .with_state(proxy);

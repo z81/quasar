@@ -58,6 +58,7 @@ pub struct UniproxyContext {
     /// The station's functions and those of the remote function servers
     pub functions: Functions,
     pub remote: Arc<crate::remote::RemoteServers>,
+    pub weather: Arc<crate::weather::WeatherService>,
     /// MCP servers: their tools as functions, their live context in the state
     pub mcp: Arc<Mcp>,
     pub cache: ResponseCache,

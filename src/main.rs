@@ -27,6 +27,9 @@ mod storage;
 mod time_zone;
 mod uniproxy;
 mod updates;
+mod weather;
+mod weather_api;
+mod weather_tool;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -114,6 +117,7 @@ async fn main() -> Result<()> {
             .iter()
             .map(|(name, definition)| (name.clone(), definition.clone()))
             .collect();
+    functions.insert("get_weather".to_string(), weather_tool::definition());
     for (name, definition) in remote.functions().await {
         if functions.contains_key(&name) {
             tracing::warn!("duplicate function '{name}' from a remote server, keeping the builtin one");
@@ -123,6 +127,7 @@ async fn main() -> Result<()> {
     }
 
     let storage = Arc::new(storage::Storage::connect(&config.postgres_url).await);
+    let weather = Arc::new(weather::WeatherService::new(storage.clone())?);
     let updates = Arc::new(UpdatesConfig::load(
         config.allow_updates,
         &config.updates_config_path,
@@ -148,6 +153,7 @@ async fn main() -> Result<()> {
         llm,
         remote,
         mcp,
+        weather: weather.clone(),
         gigastt: gigastt::Gigastt::from_config(&config),
         piper: piper::Piper::from_config(&config),
         config,
@@ -191,6 +197,7 @@ async fn main() -> Result<()> {
             storage,
             control,
             remote: context.remote.clone(),
+            weather,
         }),
         auth,
     );

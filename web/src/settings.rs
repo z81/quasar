@@ -8,7 +8,12 @@ use crate::state::{ControlState, Device};
 #[component]
 pub fn Settings(state: ControlState) -> Element {
     match state.device() {
-        Some(device) => rsx! { DeviceSettings { key: "{device.duid}", state, device } },
+        Some(device) => rsx! {
+            div { class: "station-settings-stack",
+                DeviceSettings { key: "station-{device.duid}", state, device: device.clone() }
+                crate::weather::WeatherSettings { key: "weather-{device.duid}", state, duid: device.duid }
+            }
+        },
         None => {
             rsx! { div { class: "card history-empty", Icon { name: "speaker", size: 28 } h3 { "Выберите колонку" } p { "Настройки появятся после её подключения к серверу." } } }
         }

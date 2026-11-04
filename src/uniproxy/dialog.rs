@@ -365,6 +365,7 @@ impl Request {
         let executor = RemoteExecutor {
             feedback: self.feedback.clone(),
             remote: self.context.remote.clone(),
+            weather: self.context.weather.clone(),
             mcp: self.context.mcp.clone(),
             session_id,
             metadata: metadata_json,
@@ -589,6 +590,7 @@ async fn dialog_state(
 struct RemoteExecutor {
     feedback: Option<crate::control::CommandFeedback>,
     remote: Arc<RemoteServers>,
+    weather: Arc<crate::weather::WeatherService>,
     mcp: Arc<Mcp>,
     session_id: String,
     metadata: Value,
@@ -606,10 +608,14 @@ impl RemoteExecutor {
             self.metadata.clone(),
         );
         let feedback = self.feedback.clone();
+        let weather = self.weather.clone();
+        let device_id = self.device_id.clone();
         Box::pin(async move {
             let name = call.name.clone();
             // a function server's own function wins over an MCP prefix
-            let result = if !remote.owns(&call.name) && mcp.routes(&call.name) {
+            let result = if call.name == "get_weather" {
+                crate::weather_tool::call(&weather, &device_id, call.arguments.as_ref()).await
+            } else if !remote.owns(&call.name) && mcp.routes(&call.name) {
                 mcp.call(&call.name, &call.arguments).await
             } else {
                 match remote

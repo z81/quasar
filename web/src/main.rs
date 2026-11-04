@@ -9,6 +9,7 @@ mod settings;
 mod sidebar;
 mod state;
 mod station;
+mod weather;
 
 use dioxus::prelude::*;
 use gloo_timers::future::TimeoutFuture;
@@ -33,6 +34,10 @@ fn App() -> Element {
         persistent: use_signal(|| None),
         player: use_signal(|| None),
         player_error: use_signal(|| None),
+        weather: use_signal(|| None),
+        weather_error: use_signal(|| None),
+        weather_loading: use_signal(|| false),
+        weather_request: use_signal(|| 0),
         auth: use_signal(Default::default),
         auth_loaded: use_signal(|| false),
         auth_error: use_signal(|| None),
@@ -80,6 +85,22 @@ fn App() -> Element {
             spawn(api::refresh_player(state));
         }
     });
+    use_future(move || async move {
+        loop {
+            if state.allowed() {
+                weather::refresh(state).await;
+            }
+            TimeoutFuture::new(60_000).await;
+        }
+    });
+    use_effect(move || {
+        let _ = (state.selected)();
+        state.weather.set(None);
+        state.weather_error.set(None);
+        if state.allowed() {
+            spawn(weather::refresh(state));
+        }
+    });
     let panel = (state.panel)();
     rsx! {
         document::Title { "Quasar — пульт управления" }
@@ -102,11 +123,11 @@ fn App() -> Element {
                                 Panel::History => "Запросы, ответы Алисы и результаты обработки.",
                                 Panel::Advanced => "Отправляйте колонке команды её собственного протокола.",
                                 Panel::Favorites => "Любимые команды для каждого дня. Сохраните и запускайте одним нажатием.",
-                                Panel::Settings => "Имя, часовой пояс и голосовые настройки выбранной колонки.",
+                                Panel::Settings => "Имя, погода и голосовые настройки выбранной колонки.",
                                 Panel::Access => "Вход в пульт и ключи для ваших интеграций.",
                             } }
                         }
-                        button { class: "button secondary refresh-button", disabled: (state.loading)(), onclick: move |_| { state.loading.set(true); spawn(api::refresh(state)); },
+                        button { class: "button secondary refresh-button", disabled: (state.loading)(), onclick: move |_| { state.loading.set(true); spawn(api::refresh(state)); spawn(weather::refresh(state)); },
                             Icon { name: "refresh", size: 16 } "Обновить"
                         }
                     }
@@ -124,6 +145,7 @@ fn App() -> Element {
                                 composer::Composer { state }
                                 station::StationCard { state }
                             }
+                            weather::WeatherCard { state }
                             player::PlayerCard { state }
                             history::History { state, compact: true }
                         },

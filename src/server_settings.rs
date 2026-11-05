@@ -46,6 +46,13 @@ pub struct Patch {
     pub mcp: Option<mcp::Patch>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevealMcpKey {
+    pub revision: u64,
+    pub prefix: String,
+}
+
 #[derive(Serialize)]
 pub struct Field {
     #[serde(flatten)]
@@ -170,6 +177,24 @@ impl ServerSettings {
         let (_, document) = read(&self.storage).await?;
         self.apply_external(&document, &mut applied).await?;
         self.view(&document)
+    }
+
+    /// Reveal only an attached server's current key, on an explicit owner request.
+    /// Reading a key does not persist settings or activate a runtime snapshot.
+    pub async fn reveal_mcp_key(&self, request: RevealMcpKey) -> Result<Option<String>> {
+        let _applied = self.applied_revision.lock().await;
+        let (_, document) = read(&self.storage).await?;
+        if request.revision != document.revision {
+            return Err(SettingsError::Conflict);
+        }
+        config::mcp_servers(&effective(&self.environment, &document))
+            .map_err(|_| SettingsError::Unavailable)?
+            .into_iter()
+            .find(|server| server.prefix == request.prefix)
+            .map(|server| server.token)
+            .ok_or_else(|| {
+                SettingsError::Invalid("MCP: сервер не найден; обновите настройки".into())
+            })
     }
 
     pub async fn patch(&self, patch: Patch) -> Result<SettingsView> {

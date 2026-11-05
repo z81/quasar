@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{Editor, Setting};
 use crate::icons::Icon;
+use crate::state::ControlState;
+
+mod token;
 
 pub(super) fn is_key(key: &str) -> bool {
     matches!(
@@ -128,6 +131,8 @@ pub(super) fn McpEditor(
     settings: McpSettings,
     fields: Vec<Setting>,
     mut editor: Editor,
+    state: ControlState,
+    revision: u64,
     disabled: bool,
 ) -> Element {
     let draft = (editor.mcp)();
@@ -167,10 +172,7 @@ pub(super) fn McpEditor(
                         let original = settings.servers.iter().find(|server| Some(&server.prefix) == row.original_prefix.as_ref());
                         let token_set = if reset { settings.baseline_servers.iter().find(|server| server.prefix == row.prefix).is_some_and(|server| server.token_set) }
                             else { original.is_some_and(|server| server.token_set) };
-                        let token_value = row.token.clone().unwrap_or_default();
                         let token_changed = row.token.is_some();
-                        let token_cleared = row.token.as_ref().is_some_and(|token| token.is_empty());
-                        let token_label = if token_cleared { "Ключ будет удалён" } else if token_changed { "Новый ключ" } else if token_set { "Ключ сохранён" } else { "Без ключа" };
                         rsx! {
                             div { key: "{id}", class: "mcp-row",
                                 div { class: "mcp-fields",
@@ -182,11 +184,7 @@ pub(super) fn McpEditor(
                                         input { id: "mcp-url-{id}", r#type: "url", value: "{row.url}", placeholder: "https://example.com/mcp", disabled: locked, spellcheck: false, autocomplete: "off",
                                             oninput: move |event| update(editor, |rows| { if let Some(row) = rows.iter_mut().find(|row| row.id == id) { row.url = event.value(); } }) }
                                     }
-                                    label { class: "form-field server-setting-input mcp-token", r#for: "mcp-token-{id}",
-                                        span { "Ключ доступа" small { class: if token_changed { "mcp-token-changed" } else { "" }, "{token_label}" } }
-                                        input { id: "mcp-token-{id}", r#type: "password", value: token_value, placeholder: if token_set && !token_cleared { "Новый ключ для замены" } else { "Необязательно" }, disabled: locked, spellcheck: false, autocomplete: "new-password",
-                                            oninput: move |event| update(editor, |rows| { if let Some(row) = rows.iter_mut().find(|row| row.id == id) { let value = event.value(); row.token = (!value.is_empty()).then_some(value); } }) }
-                                    }
+                                    token::McpToken { key: "{id}-{revision}-{reset}", id, original_prefix: row.original_prefix.clone(), token: row.token.clone(), token_set, state, editor, revision, disabled: locked }
                                 }
                                 div { class: "mcp-row-footer",
                                     if let Some(error) = error { small { class: "failure", role: "status", "{error}" } }
@@ -218,7 +216,7 @@ pub(super) fn McpEditor(
                         summary { aria_label: "Как настроить MCP-сервер", "?" }
                         div { class: "server-setting-help-body",
                             p { "Префикс отличает инструменты сервера: например, home. В адрес вставьте полный HTTP(S) URL; добавлять #префикс не нужно." }
-                            p { "Сохранённые ключи скрыты. Пустое поле сохраняет ключ, в том числе при смене адреса или префикса. Для удаления ключа нажмите «Убрать ключ»." }
+                            p { "Сохранённый ключ скрыт звёздочками; «Показать» открывает его для просмотра. Пустое поле сохраняет ключ, в том числе при смене адреса или префикса. Для удаления ключа нажмите «Убрать ключ»." }
                             p { "Удаление сервера убирает и его ключ. Изменения применяются общей кнопкой сохранения." }
                         }
                     }

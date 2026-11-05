@@ -313,7 +313,7 @@ pub fn ServerSettings(state: ControlState) -> Element {
                         div { class: "server-settings-grid",
                             if selected == "integrations" {
                                 if let Some(mcp) = response.mcp.as_ref() {
-                                    mcp::McpEditor { settings: mcp.clone(), fields: fields.clone(), editor, disabled: !editable }
+                                    mcp::McpEditor { settings: mcp.clone(), fields: fields.clone(), editor, state, revision: response.revision, disabled: !editable }
                                 }
                             }
                             for setting in fields.iter().filter(|field| field.group == selected && (response.mcp.is_none() || !mcp::is_key(&field.key))) {

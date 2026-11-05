@@ -124,7 +124,7 @@ fn App() -> Element {
                     div { class: "page-heading",
                         div {
                             div { class: "eyebrow", "ВАША АЛИСА. ВАШИ ПРАВИЛА." }
-                            h1 { match panel { Panel::Control => "Всё под контролем.", Panel::History => "История команд.", Panel::Advanced => "Прямой доступ.", Panel::Favorites => "Всегда под рукой.", Panel::Schedules => "Будильники и напоминания.", Panel::Timers => "Время пошло.", Panel::Settings => "На ваш лад.", Panel::Access => "Только для своих.", Panel::DeviceAccess => "Терминал и файлы." } }
+                            h1 { match panel { Panel::Control => "Всё под контролем.", Panel::History => "История команд.", Panel::Advanced => "Прямой доступ.", Panel::Favorites => "Всегда под рукой.", Panel::Schedules => "Будильники и напоминания.", Panel::Timers => "Время пошло.", Panel::Settings => "На ваш лад.", Panel::Access => "Только для своих.", Panel::DeviceAccess => "Терминал и файлы.", Panel::MidiDisplay => "Своя Миди." } }
                             p { match panel {
                                 Panel::Control => "Скажите, что нужно сделать. Остальное — за Алисой.",
                                 Panel::History => "Запросы, ответы Алисы и результаты обработки.",
@@ -134,7 +134,8 @@ fn App() -> Element {
                                 Panel::Timers => "Для чая, готовки и короткой паузы. Колонка напомнит сигналом.",
                                 Panel::Settings => "Модели, речь и интеграции сервера. Имя и голосовые настройки колонок.",
                                 Panel::Access => "Вход в пульт и ключи для ваших интеграций.",
-                                Panel::DeviceAccess => "Подключение по ADB, файлы и сегментный дисплей выбранной колонки.",
+                                Panel::DeviceAccess => "Терминал и файлы выбранной колонки через ADB.",
+                                Panel::MidiDisplay => "Свои надписи, рисунки и анимации на дисплее Яндекс Станции Миди.",
                             } }
                         }
                         button { class: "button secondary refresh-button", disabled: (state.loading)(), onclick: move |_| { state.loading.set(true); spawn(api::refresh(state)); spawn(weather::refresh(state)); },
@@ -166,6 +167,7 @@ fn App() -> Element {
                         Panel::Settings => rsx! { settings::Settings { state } },
                         Panel::Access => rsx! { access::Access { state } },
                         Panel::DeviceAccess => rsx! { device_access::DeviceAccessPage { state } },
+                        Panel::MidiDisplay => rsx! { device_access::DeviceAccessPage { state, mode: device_access::AccessMode::Display } },
                         Panel::Advanced => rsx! {
                             div { class: "control-grid", composer::Advanced { state } station::StationCard { state } }
                         },

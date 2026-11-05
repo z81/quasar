@@ -93,6 +93,7 @@ pub enum Panel {
     Timers,
     Settings,
     DeviceAccess,
+    MidiDisplay,
     Access,
 }
 
@@ -107,6 +108,7 @@ impl Panel {
             Self::Timers => "Таймеры",
             Self::Settings => "Настройки",
             Self::DeviceAccess => "Терминал и файлы",
+            Self::MidiDisplay => "Своя Миди",
             Self::Access => "Доступ",
         }
     }

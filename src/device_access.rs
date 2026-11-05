@@ -1,9 +1,9 @@
-//! User-initiated device sessions. Terminal and file access use separate TCP
-//! connections; credentials are entered interactively and never retained.
+//! User-initiated device sessions. Terminal and file access use separate ADB
+//! shell connections to the rooted station.
 
+mod adb;
 mod display;
 mod shell;
-pub(crate) mod telnet;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,7 +19,6 @@ use base64::Engine;
 use futures_util::SinkExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::net::TcpStream;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::{timeout, Instant};
 
@@ -57,7 +56,7 @@ struct Target {
 }
 
 fn default_port() -> u16 {
-    23
+    5555
 }
 
 impl Target {
@@ -84,10 +83,7 @@ enum ClientMessage {
     Input {
         data: String,
     },
-    Resize {
-        cols: u16,
-        rows: u16,
-    },
+    Resize {},
     Shell,
     List {
         path: String,
@@ -259,21 +255,33 @@ async fn session(
     file_mode: bool,
     _permit: OwnedSemaphorePermit,
 ) {
-    let stream = match timeout(
-        Duration::from_secs(5),
-        TcpStream::connect((target.host.as_str(), target.port)),
+    let Some(result) = while_connected(
+        &mut socket,
+        timeout(
+            Duration::from_secs(10),
+            adb::Connection::connect(&target.host, target.port),
+        ),
     )
     .await
-    {
-        Ok(Ok(stream)) => stream,
-        _ => {
-            let _ = report(&mut socket, "Не удалось подключиться по Telnet. Проверьте адрес, порт и доступность колонки из сети сервера.", false).await;
+    else {
+        return;
+    };
+    let mut connection = match result {
+        Ok(Ok(connection)) => connection,
+        result => {
+            let message = match result {
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "ADB connection failed");
+                    format!("Не удалось подключиться по ADB: {error}")
+                }
+                Err(_) => "Колонка не ответила на подключение ADB за 10 секунд. Проверьте адрес, порт и сеть.".to_owned(),
+                Ok(Ok(_)) => unreachable!(),
+            };
+            let _ = report(&mut socket, &message, false).await;
             let _ = timeout(Duration::from_secs(2), socket.close()).await;
             return;
         }
     };
-    let _ = stream.set_nodelay(true);
-    let mut connection = telnet::Connection::new(stream);
     if send(&mut socket, json!({"type":"connected"}))
         .await
         .is_err()
@@ -331,9 +339,9 @@ async fn session(
                     ClientMessage::Input { data } if !shell_ready && data.len() <= 16384 => {
                         if connection.input(data.as_bytes()).await.is_err() { break; }
                     }
-                    ClientMessage::Resize { cols, rows } if !shell_ready => {
-                        if connection.resize(cols, rows).await.is_err() { break; }
-                    }
+                    // The station's legacy ADB shell has no resize message.
+                    // Never inject stty commands into the user's active input.
+                    ClientMessage::Resize {} if !shell_ready => {}
                     ClientMessage::Shell if file_mode && !shell_ready => {
                         let Some(result) = while_connected(&mut socket, shell::probe(&mut connection)).await else { break };
                         match result {
@@ -374,7 +382,7 @@ async fn session(
         }
     }
     // Dropping Connection closes the TCP socket and cancels reads. No detached
-    // worker, terminal transcript, login or password survives this function.
+    // worker or terminal transcript survives this function.
     let _ = send(&mut socket, json!({"type":"closed"})).await;
     let _ = timeout(Duration::from_secs(2), socket.close()).await;
 }

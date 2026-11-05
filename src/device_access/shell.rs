@@ -8,7 +8,7 @@ use base64::Engine;
 use serde_json::{json, Value};
 use tokio::time::timeout;
 
-use super::{telnet::Connection, ClientMessage};
+use super::{adb::Connection, ClientMessage};
 
 pub(super) const MAX_FILE_BYTES: usize = 256 * 1024;
 pub(super) const MAX_ENTRIES: usize = 500;

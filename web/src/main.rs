@@ -134,7 +134,7 @@ fn App() -> Element {
                                 Panel::Timers => "Для чая, готовки и короткой паузы. Колонка напомнит сигналом.",
                                 Panel::Settings => "Модели, речь и интеграции сервера. Имя и голосовые настройки колонок.",
                                 Panel::Access => "Вход в пульт и ключи для ваших интеграций.",
-                                Panel::DeviceAccess => "Подключение по Telnet, файлы и сегментный дисплей выбранной колонки.",
+                                Panel::DeviceAccess => "Подключение по ADB, файлы и сегментный дисплей выбранной колонки.",
                             } }
                         }
                         button { class: "button secondary refresh-button", disabled: (state.loading)(), onclick: move |_| { state.loading.set(true); spawn(api::refresh(state)); spawn(weather::refresh(state)); },

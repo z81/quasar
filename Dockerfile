@@ -29,7 +29,7 @@ COPY . .
 RUN touch src/main.rs && cargo build --release --bin alice-server
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates tzdata \
+RUN apt-get update && apt-get install -y --no-install-recommends adb ffmpeg ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/alice-server /usr/local/bin/alice-server
 COPY --from=ui-builder /app/web/dist/public /app/web/dist/public

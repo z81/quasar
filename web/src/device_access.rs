@@ -35,7 +35,7 @@ pub fn DeviceAccessPage(state: ControlState) -> Element {
 pub fn DeviceAccess(mut state: ControlState, duid: String, ip_address: Option<String>) -> Element {
     let mut host_override = use_signal(|| None::<String>);
     let host = host_override().or(ip_address).unwrap_or_default();
-    let mut port = use_signal(|| "23".to_owned());
+    let mut port = use_signal(|| "5555".to_owned());
     let mut files_tab = use_signal(|| false);
     rsx! {
         document::Stylesheet { href: asset!("/assets/device-access.css") }
@@ -55,7 +55,7 @@ pub fn DeviceAccess(mut state: ControlState, duid: String, ip_address: Option<St
                     label { class: "form-field", span { "Адрес колонки" } input { value: "{host}", placeholder: "192.168.1.100", autocomplete: "off", spellcheck: "false", oninput: move |event| host_override.set(Some(event.value())) } }
                     label { class: "form-field device-port", span { "Порт" } input { r#type: "text", inputmode: "numeric", value: "{port}", oninput: move |event| port.set(event.value()) } }
                 }
-                p { class: "device-access-help", "Укажите адрес и порт Telnet. Подключение идёт с сервера Quasar. Если открылась командная строка, можно работать. Переключение вкладки закрывает соединение." }
+                p { class: "device-access-help", "На колонке должен быть включён сетевой ADB. Подключение идёт с сервера Quasar, стандартный порт — 5555. Переключение вкладки закрывает соединение." }
                 {rsx! { Session { key: "{duid}:{files_tab()}", state, duid, host: host.clone(), port: port(), files: files_tab() } }}
             }
         }
@@ -114,7 +114,7 @@ fn Session(state: ControlState, duid: String, host: String, port: String, files:
             }
             if let Some(message) = error() { p { class: "form-feedback failure", role: "alert", "{message}" } }
             div { class: if shell_ready() { "device-terminal-shell hidden" } else { "device-terminal-shell" },
-                div { id: element, class: "device-terminal", aria_label: "Интерактивный терминал Telnet",
+                div { id: element, class: "device-terminal", aria_label: "Интерактивный терминал ADB",
                     onmounted: move |_| {
                         let config = json!({"element":element,"duid":duid,"files":files,"theme":(state.theme)().name(),"xterm":asset!("/assets/vendor/xterm-6.0.0.js").to_string(),"fit":asset!("/assets/vendor/xterm-addon-fit-0.11.0.js").to_string(),"module":asset!("/assets/device-terminal.js").to_string()});
                         let mut eval = document::eval(r#"
@@ -152,8 +152,8 @@ fn Session(state: ControlState, duid: String, host: String, port: String, files:
             }
             if files && connected() && !shell_ready() {
                 div { class: "device-shell-confirm",
-                    p { "Если уже видна командная строка, открывайте файлы — дополнительный вход не нужен." }
-                    button { class: "button secondary", disabled: shell_busy(), onclick: move |_| { shell_busy.set(true); error.set(None); send(bridge,json!({"type":"shell"})); }, if shell_busy() { "Проверяем оболочку…" } else { "Оболочка готова — открыть файлы" } }
+                    p { "Откройте файлы через подключённую оболочку ADB." }
+                    button { class: "button secondary", disabled: shell_busy(), onclick: move |_| { shell_busy.set(true); error.set(None); send(bridge,json!({"type":"shell"})); }, if shell_busy() { "Проверяем оболочку…" } else { "Открыть файлы" } }
                 }
             }
             if shell_ready() { files::FileBrowser { bridge, data: file_state } crate::midi_display::MidiDisplay { bridge, status: display_status, busy: file_state.busy } }

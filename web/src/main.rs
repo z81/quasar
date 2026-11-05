@@ -9,6 +9,7 @@ mod history;
 mod icons;
 mod midi_display;
 mod player;
+mod ring_light;
 mod schedules;
 mod server_settings;
 mod settings;
@@ -135,7 +136,7 @@ fn App() -> Element {
                                 Panel::Settings => "Модели, речь и интеграции сервера. Имя и голосовые настройки колонок.",
                                 Panel::Access => "Вход в пульт и ключи для ваших интеграций.",
                                 Panel::DeviceAccess => "Терминал и файлы выбранной колонки через ADB.",
-                                Panel::MidiDisplay => "Свои надписи, рисунки и анимации на дисплее Яндекс Станции Миди.",
+                                Panel::MidiDisplay => "Свои надписи, рисунки и анимации дисплея и верхней подсветки Миди.",
                             } }
                         }
                         button { class: "button secondary refresh-button", disabled: (state.loading)(), onclick: move |_| { state.loading.set(true); spawn(api::refresh(state)); spawn(weather::refresh(state)); },

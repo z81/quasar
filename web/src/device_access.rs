@@ -56,7 +56,7 @@ pub fn DeviceAccess(
         document::Stylesheet { href: asset!("/assets/device-access.css") }
         document::Stylesheet { href: asset!("/assets/vendor/xterm-6.0.0.css") }
         section { class: if selected_mode() == AccessMode::Files { "card device-access device-access-files" } else { "card device-access" }, aria_label: "Доступ к колонке",
-            div { class: "device-access-heading", span { class: "card-kicker", "ДОСТУП К КОЛОНКЕ" } h2 { if mode == AccessMode::Display { "Подключение к дисплею" } else { "Терминал и файлы" } } }
+            div { class: "device-access-heading", span { class: "card-kicker", "ДОСТУП К КОЛОНКЕ" } h2 { if mode == AccessMode::Display { "Подключение к Миди" } else { "Терминал и файлы" } } }
             if !state.allowed() {
                 p { class: "device-access-help", "Войдите в пульт Quasar, чтобы подключиться к колонке." }
                 button { class: "button secondary", onclick: move |_| state.panel.set(Panel::Access), Icon { name:"lock", size:15 } "Открыть настройки доступа" }
@@ -182,7 +182,7 @@ fn Session(
                                         connecting.set(false); shell_ready.set(true); error.set(None);
                                         if mode == AccessMode::Files { file_state.busy.set(true); send(bridge,json!({"type":"list","path":"/"})); }
                                     },
-                                    name if name.starts_with("display") => display_status.set(Some(event)),
+                                    name if name.starts_with("display") || name.starts_with("ring_") => display_status.set(Some(event)),
                                     "written" => { file_state.receive(&event); file_state.busy.set(true); send(bridge,json!({"type":"list","path":file_state.current_path()})); },
                                     _ => file_state.receive(&event),
                                 }
@@ -194,7 +194,10 @@ fn Session(
             if shell_ready() {
                 match mode {
                     AccessMode::Files => rsx! { files::FileBrowser { bridge, data: file_state } },
-                    AccessMode::Display => rsx! { crate::midi_display::MidiDisplay { bridge, status: display_status, busy: display_busy } },
+                    AccessMode::Display => rsx! {
+                        crate::ring_light::RingLight { bridge, status: display_status, busy: display_busy }
+                        crate::midi_display::MidiDisplay { bridge, status: display_status, busy: display_busy }
+                    },
                     AccessMode::Terminal => rsx! {},
                 }
             }

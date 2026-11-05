@@ -1,0 +1,38 @@
+.ring-editor { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+.ring-editor h3 { margin-bottom: 6px; color: var(--text); font-size: 15px; font-weight: 600; }
+.ring-help { color: var(--secondary); font-size: 11px; line-height: 1.7; }
+.ring-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 24px; align-items: center; margin: 16px 0; }
+.ring-preview { margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
+.ring-preview svg { display: block; width: 100%; height: auto; }
+.ring-preview figcaption { margin-top: 4px; text-align: center; color: var(--muted); font-size: 10px; }
+.ring-face, .ring-center { fill: var(--surface); stroke: var(--line); stroke-width: 1px; }
+.ring-center-mark { fill: var(--muted); }
+.ring-led-base { fill: var(--line); }
+.ring-led { opacity: var(--ring-level); }
+.ring-preview-wave .ring-led { animation: ring-wave 2.4s linear infinite; }
+.ring-preview-pulse .ring-led { animation: ring-pulse 2s ease-in-out infinite; }
+.ring-preview-rainbow .ring-led { animation: ring-rainbow 4s linear infinite; }
+.ring-preview.paused .ring-led { animation-play-state: paused; }
+.ring-controls { min-width: 0; }
+.ring-effects { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; margin-bottom: 16px; border-radius: 8px; background: var(--surface-soft); }
+.ring-effect { min-height: 36px; padding: 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--secondary); font-size: 11px; }
+.ring-effect:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+.ring-effect.selected { background: var(--surface); border-color: var(--line); color: var(--text); font-weight: 600; }
+.ring-controls .form-field { margin: 0; }
+.ring-controls .ring-color { margin-bottom: 12px; }
+.ring-color > .ring-color-value { display: flex; align-items: center; gap: 10px; color: var(--secondary); font-size: 12px; font-weight: 400; }
+.ring-color-value input[type="color"] { width: 52px; height: 42px; padding: 4px; cursor: pointer; }
+.ring-color-value input:disabled { opacity: .42; cursor: not-allowed; }
+.ring-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.ring-show { width: 100%; }
+.ring-editor > .form-feedback { margin: 8px 0; }
+@keyframes ring-wave { 0%, 100% { opacity: var(--ring-level); } 25%, 75% { opacity: 0; } }
+@keyframes ring-pulse { 0%, 100% { opacity: calc(var(--ring-level) * .15); } 50% { opacity: var(--ring-level); } }
+@keyframes ring-rainbow { to { filter: hue-rotate(360deg); } }
+@media (max-width: 600px) {
+  .ring-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .ring-preview { width: 208px; max-width: 100%; justify-self: center; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ring-preview .ring-led { animation: none !important; }
+}

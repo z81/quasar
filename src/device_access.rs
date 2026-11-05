@@ -3,6 +3,7 @@
 
 mod adb;
 mod display;
+mod ring;
 mod shell;
 
 use std::sync::Arc;
@@ -107,6 +108,12 @@ enum ClientMessage {
     },
     DisplayFrame {
         segments: Vec<String>,
+        brightness: u8,
+        duration_ms: u64,
+    },
+    RingAnimation {
+        animation: String,
+        color: String,
         brightness: u8,
         duration_ms: u64,
     },
@@ -355,15 +362,18 @@ async fn session(
                             }
                         }
                     }
-                    command @ (ClientMessage::List { .. } | ClientMessage::Read { .. } | ClientMessage::Write { .. } | ClientMessage::DisplayText { .. } | ClientMessage::DisplayAnimation { .. } | ClientMessage::DisplayFrame { .. }) if shell_ready => {
+                    command @ (ClientMessage::List { .. } | ClientMessage::Read { .. } | ClientMessage::Write { .. } | ClientMessage::DisplayText { .. } | ClientMessage::DisplayAnimation { .. } | ClientMessage::DisplayFrame { .. } | ClientMessage::RingAnimation { .. }) if shell_ready => {
                         // Revocation is also checked immediately before each file operation.
                         if crate::auth::require_device_access(&state.auth, &headers).await.is_err() { break; }
                         let display = command.is_display();
+                        let ring = matches!(command, ClientMessage::RingAnimation { .. });
                         let Some(result) = while_connected(&mut socket, shell::handle(&mut connection, command)).await else { break };
                         match result {
                             Ok(message) => if send(&mut socket, message).await.is_err() { break; },
                             Err(shell::Error::Request(message)) => {
-                                let response = if display {
+                                let response = if ring {
+                                    json!({"type":"ring_error","message":message,"recoverable":true})
+                                } else if display {
                                     json!({"type":"display_error","message":message,"recoverable":true})
                                 } else {
                                     json!({"type":"error","message":message,"recoverable":true})

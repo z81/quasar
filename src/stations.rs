@@ -2,6 +2,7 @@
 //! store in `storage.rs` reuses both).
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -55,9 +56,23 @@ impl StationSummary {
         json!({
             "duid": self.duid,
             "name": self.name,
+            "ipAddress": self.ip_address(),
             "quasarConfig": self.quasar_config,
             "timezone": self.timezone,
         })
+    }
+
+    /// Prefer the station's reported LAN IPv4 over IPv6. A socket peer can be
+    /// a reverse proxy; link-local IPv6 needs an interface scope we don't have.
+    fn ip_address(&self) -> Option<IpAddr> {
+        self.network_info.as_ref()?.get("ip_addresses")?.as_array()?
+            .iter()
+            .filter_map(|value| value.as_str()?.parse::<IpAddr>().ok())
+            .filter(|address| match address {
+                IpAddr::V4(ip) => !ip.is_unspecified() && !ip.is_loopback() && !ip.is_multicast() && !ip.is_broadcast(),
+                IpAddr::V6(ip) => !ip.is_unspecified() && !ip.is_loopback() && !ip.is_multicast() && !ip.is_unicast_link_local(),
+            })
+            .min_by_key(|address| address.is_ipv6())
     }
 }
 

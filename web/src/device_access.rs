@@ -26,14 +26,15 @@ pub fn DeviceAccessPage(state: ControlState) -> Element {
             }
         }
         for device in device {
-            DeviceAccess { key: "{device.duid}", state, duid: device.duid }
+            DeviceAccess { key: "{device.duid}", state, duid: device.duid, ip_address: device.ip_address }
         }
     }
 }
 
 #[component]
-pub fn DeviceAccess(mut state: ControlState, duid: String) -> Element {
-    let mut host = use_signal(String::new);
+pub fn DeviceAccess(mut state: ControlState, duid: String, ip_address: Option<String>) -> Element {
+    let mut host_override = use_signal(|| None::<String>);
+    let host = host_override().or(ip_address).unwrap_or_default();
     let mut port = use_signal(|| "23".to_owned());
     let mut files_tab = use_signal(|| false);
     rsx! {
@@ -51,11 +52,11 @@ pub fn DeviceAccess(mut state: ControlState, duid: String) -> Element {
                     }
                 }
                 div { class: "device-address",
-                    label { class: "form-field", span { "Адрес колонки" } input { value: "{host}", placeholder: "192.168.1.100", autocomplete: "off", spellcheck: "false", oninput: move |event| host.set(event.value()) } }
+                    label { class: "form-field", span { "Адрес колонки" } input { value: "{host}", placeholder: "192.168.1.100", autocomplete: "off", spellcheck: "false", oninput: move |event| host_override.set(Some(event.value())) } }
                     label { class: "form-field device-port", span { "Порт" } input { r#type: "text", inputmode: "numeric", value: "{port}", oninput: move |event| port.set(event.value()) } }
                 }
                 p { class: "device-access-help", "Укажите адрес и порт Telnet. Подключение идёт с сервера Quasar. Если открылась командная строка, можно работать. Переключение вкладки закрывает соединение." }
-                {rsx! { Session { key: "{duid}:{files_tab()}", state, duid, host: host(), port: port(), files: files_tab() } }}
+                {rsx! { Session { key: "{duid}:{files_tab()}", state, duid, host: host.clone(), port: port(), files: files_tab() } }}
             }
         }
     }

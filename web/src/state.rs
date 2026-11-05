@@ -8,6 +8,8 @@ pub struct Device {
     pub name: String,
     #[serde(default)]
     pub connected: Option<bool>,
+    #[serde(default, rename = "ipAddress")]
+    pub ip_address: Option<String>,
     #[serde(default, rename = "quasarConfig")]
     pub quasar_config: Value,
     #[serde(default)]

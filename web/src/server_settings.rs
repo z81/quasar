@@ -1,5 +1,6 @@
 mod field;
 mod mcp;
+mod secret;
 
 use std::collections::BTreeMap;
 
@@ -317,7 +318,7 @@ pub fn ServerSettings(state: ControlState) -> Element {
                                 }
                             }
                             for setting in fields.iter().filter(|field| field.group == selected && (response.mcp.is_none() || !mcp::is_key(&field.key))) {
-                                field::SettingField { key: "{setting.key}", setting: setting.clone(), editor, disabled: !editable }
+                                field::SettingField { key: "{setting.key}", setting: setting.clone(), editor, state, revision: response.revision, disabled: !editable }
                             }
                         }
                     }

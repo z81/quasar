@@ -1,10 +1,19 @@
 use dioxus::prelude::*;
 
-use super::{Editor, Setting};
-use crate::icons::Icon;
+use super::{
+    secret::{RevealTarget, SecretInput},
+    Editor, Setting,
+};
+use crate::{icons::Icon, state::ControlState};
 
 #[component]
-pub(super) fn SettingField(setting: Setting, mut editor: Editor, disabled: bool) -> Element {
+pub(super) fn SettingField(
+    setting: Setting,
+    mut editor: Editor,
+    state: ControlState,
+    revision: u64,
+    disabled: bool,
+) -> Element {
     let changes = (editor.changes)();
     let draft = changes.get(&setting.key);
     let reset = matches!(draft, Some(None));
@@ -41,12 +50,6 @@ pub(super) fn SettingField(setting: Setting, mut editor: Editor, disabled: bool)
     let reset_setting = setting.clone();
     let undo_key = setting.key.clone();
     let clear_key = setting.key.clone();
-    let secret_placeholder = if is_set {
-        "Введите новый ключ"
-    } else {
-        "Не задан"
-    };
-    let input_type = if setting.secret { "password" } else { "text" };
     let inputmode = if setting.kind == "integer" {
         "numeric"
     } else if setting.kind == "number" {
@@ -70,7 +73,11 @@ pub(super) fn SettingField(setting: Setting, mut editor: Editor, disabled: bool)
                 span { class: if reset { "setting-source reset" } else if changed || setting.source == "override" { "setting-source override" } else { "setting-source" }, "{source}" }
             }
             div { class: if invalid { "form-field server-setting-input invalid" } else { "form-field server-setting-input" },
-                if setting.kind == "select" || setting.kind == "boolean" {
+                if setting.secret {
+                    SecretInput { key: "{setting.key}-{revision}", id: "setting-{setting.key}", label: setting.label.clone(), target: Some(RevealTarget::Setting { key: setting.key.clone(), baseline: reset }), draft: draft.cloned().flatten(), is_set, state, editor, revision, disabled,
+                        onchange: move |value| editor.change(&input_setting, value)
+                    }
+                } else if setting.kind == "select" || setting.kind == "boolean" {
                     select { id: "setting-{setting.key}", value: "{choice}", disabled, onchange: move |event| editor.change(&input_setting, event.value()),
                         if setting.kind == "boolean" {
                             option { value: "true", selected: choice == "true", "Включено" } option { value: "false", selected: choice == "false", "Выключено" }
@@ -82,13 +89,13 @@ pub(super) fn SettingField(setting: Setting, mut editor: Editor, disabled: bool)
                 } else if setting.kind == "textarea" && !setting.secret {
                     textarea { id: "setting-{setting.key}", value: "{value}", disabled, spellcheck: false, oninput: move |event| editor.change(&input_setting, event.value()) }
                 } else {
-                    input { id: "setting-{setting.key}", r#type: input_type, inputmode, value: "{value}", disabled, spellcheck: false, autocomplete: if setting.secret { "new-password" } else { "off" }, placeholder: if setting.secret { secret_placeholder } else { "Не задано" }, oninput: move |event| editor.change(&input_setting, event.value()) }
+                    input { id: "setting-{setting.key}", r#type: "text", inputmode, value: "{value}", disabled, spellcheck: false, autocomplete: "off", placeholder: "Не задано", oninput: move |event| editor.change(&input_setting, event.value()) }
                 }
                 if invalid { small { class: "failure", "Введите корректное число в допустимом диапазоне." } }
                 if setting.secret {
                     small { if reset { if is_set { "Вернётся ключ из env" } else { "Ключ будет сброшен" } }
                         else if changed { if is_set { "Будет сохранён новый ключ" } else { "Ключ будет очищен" } }
-                        else if is_set { "Ключ задан и скрыт" }
+                        else if is_set { "Ключ задан" }
                         else { "Ключ не задан" }
                     }
                 }

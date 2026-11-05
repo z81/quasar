@@ -53,6 +53,15 @@ pub struct RevealMcpKey {
     pub prefix: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevealKey {
+    pub revision: u64,
+    pub key: String,
+    #[serde(default)]
+    pub baseline: bool,
+}
+
 #[derive(Serialize)]
 pub struct Field {
     #[serde(flatten)]
@@ -177,6 +186,32 @@ impl ServerSettings {
         let (_, document) = read(&self.storage).await?;
         self.apply_external(&document, &mut applied).await?;
         self.view(&document)
+    }
+
+    /// Only registered secret settings may be revealed, never arbitrary env values.
+    pub async fn reveal_key(&self, request: RevealKey) -> Result<Option<String>> {
+        let _applied = self.applied_revision.lock().await;
+        let (_, document) = read(&self.storage).await?;
+        if request.revision != document.revision {
+            return Err(SettingsError::Conflict);
+        }
+        if !config::definitions()
+            .iter()
+            .any(|field| field.key == request.key && field.secret)
+        {
+            return Err(SettingsError::Invalid(
+                "Показ доступен только для ключей из настроек сервера".into(),
+            ));
+        }
+        let values = if request.baseline {
+            baseline(&self.environment)
+        } else {
+            effective(&self.environment, &document)
+        };
+        Ok(values
+            .get(&request.key)
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty()))
     }
 
     /// Reveal only an attached server's current key, on an explicit owner request.

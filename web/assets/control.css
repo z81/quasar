@@ -389,14 +389,14 @@ select { font: inherit; color: var(--text); background: var(--surface); }
 .mcp-fields .form-field > span small, .mcp-token > label small { margin: 0; font-size: 9px; font-weight: 400; }
 .mcp-token > label small.mcp-token-changed { color: var(--accent-text); }
 .mcp-fields input { background: var(--surface); }
-.mcp-secret-input { position: relative; min-width: 0; }
-.mcp-secret-input input { padding-right: 76px; }
-.mcp-secret-input input::placeholder { opacity: 1; }
-.mcp-secret-toggle { position: absolute; top: 1px; right: 1px; bottom: 1px; display: grid; place-items: center; min-width: 68px; padding: 0 8px; border: 0; border-left: 1px solid var(--line); border-radius: 0 7px 7px 0; background: var(--surface); color: var(--secondary); font-size: 10px; }
-.mcp-secret-toggle:hover:not(:disabled) { color: var(--accent-text); background: var(--accent-soft); }
-.mcp-secret-toggle:focus-visible { outline-offset: -3px; }
-.mcp-secret-toggle .spinner { width: 14px; height: 14px; }
-.mcp-token .failure { color: var(--error); font-size: 10px; overflow-wrap: anywhere; }
+.setting-secret-input { position: relative; min-width: 0; }
+.setting-secret-input input { padding-right: 76px; }
+.setting-secret-input input::placeholder { opacity: 1; }
+.setting-secret-toggle { position: absolute; top: 1px; right: 1px; bottom: 1px; display: grid; place-items: center; min-width: 68px; padding: 0 8px; border: 0; border-left: 1px solid var(--line); border-radius: 0 7px 7px 0; background: var(--surface); color: var(--secondary); font-size: 10px; }
+.setting-secret-toggle:hover:not(:disabled) { color: var(--accent-text); background: var(--accent-soft); }
+.setting-secret-toggle:focus-visible { outline-offset: -3px; }
+.setting-secret-toggle .spinner { width: 14px; height: 14px; }
+.setting-secret-error { color: var(--error); font-size: 10px; overflow-wrap: anywhere; }
 .mcp-row-footer { margin-top: 8px; }
 .mcp-row-footer .failure, .mcp-hint.failure { color: var(--error); font-size: 10px; }
 .mcp-row-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-left: auto; }

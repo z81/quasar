@@ -4,6 +4,8 @@ use crate::api;
 use crate::icons::Icon;
 use crate::state::ControlState;
 
+mod illustration;
+
 #[component]
 pub fn StationCard(state: ControlState) -> Element {
     let device = state.device();
@@ -23,14 +25,7 @@ pub fn StationCard(state: ControlState) -> Element {
             }
             div { class: if connected { "station-scene" } else { "station-scene disconnected" }, role: "img", aria_label: "Иллюстрация Яндекс Станции Миди",
                 div { class: "orbit orbit-one" } div { class: "orbit orbit-two" }
-                div { class: "speaker-shadow" }
-                div { class: "speaker-body",
-                    div { class: "speaker-grille" }
-                    div { class: "speaker-top",
-                        div { class: "speaker-ring" }
-                        div { class: "speaker-top-controls", span { "−" } span { class: "speaker-center" } span { "+" } }
-                    }
-                }
+                illustration::Midi {}
                 span { class: "scene-dot dot-one" } span { class: "scene-dot dot-two" }
             }
             div { class: "station-title",

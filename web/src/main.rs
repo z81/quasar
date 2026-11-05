@@ -1,9 +1,13 @@
 mod access;
 mod api;
 mod composer;
+mod device_access;
+mod display_settings;
+mod display_studio;
 mod favorites;
 mod history;
 mod icons;
+mod midi_display;
 mod player;
 mod schedules;
 mod server_settings;

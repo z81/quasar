@@ -375,6 +375,9 @@ impl Connection {
                     Some(ClientEvent::LogSpotter(_)) => report(self.outbox.log_ack(&header.message_id)),
                     Some(ClientEvent::MatchedUser(request)) => self.handle_matched_user(&request),
                     Some(ClientEvent::CapabilityUpdateState(event)) if self.registry.is_current(&self.device_id, self.connection_id) => {
+                        if let Some(capability) = crate::display::capability_update(&event) {
+                            self.registry.report_display_capability(&self.device_id, self.connection_id, &event.endpoint_id, capability);
+                        }
                         if let Some(state) = crate::alarm_protocol::capability_state(&event) {
                             if let Some(supported) = state.supported {
                                 self.registry.report_alarm_support(&self.device_id, supported);

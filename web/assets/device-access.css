@@ -1,0 +1,51 @@
+.device-access { max-width: 820px; min-width: 0; padding: 20px; }
+.device-access button { -webkit-appearance: none; appearance: none; }
+.device-access-heading h2 { margin: 6px 0 16px; color: var(--text); font-size: 17px; font-weight: 600; letter-spacing: -.3px; }
+.device-access-tabs { display: flex; gap: 4px; padding: 4px; margin-bottom: 16px; width: fit-content; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 9px; }
+.device-access-tabs button { padding: 8px 16px; border: 0; border-radius: 6px; background: transparent; color: var(--secondary); font-size: 12px; }
+.device-access-tabs button.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px #00000012; }
+.device-address { display: flex; gap: 12px; }
+.device-address .form-field { flex: 1; margin: 0; min-width: 0; }
+.device-address .device-port { max-width: 100px; }
+.device-access-help { margin: 12px 0; color: var(--secondary); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.device-session-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 16px 0 12px; }
+.device-session-state { font-size: 11px; color: var(--muted); }
+.device-session-state.connected { color: var(--green); }
+.device-terminal-shell { padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #f6f7f3; overflow: hidden; }
+[data-theme="dark"] .device-terminal-shell { background: #171916; }
+.device-terminal-shell.hidden { display: none; }
+.device-terminal { width: 100%; height: 340px; min-width: 0; }
+.device-terminal .xterm { height: 100%; }
+.device-terminal .xterm .xterm-viewport { background: transparent; }
+.device-shell-confirm { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
+.device-shell-confirm p { color: var(--secondary); font-size: 12px; line-height: 1.5; margin: 0 0 12px; }
+.device-file-location { display: flex; gap: 8px; margin-bottom: 12px; }
+.device-file-location input { flex: 1; width: 0; min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); padding: 10px 12px; font-size: 12px; }
+.device-file-list { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.device-file-list > p { padding: 0 12px; }
+.device-file-entry { width: 100%; min-height: 40px; display: flex; align-items: center; gap: 10px; text-align: left; padding: 10px 12px; border: 0; border-bottom: 1px solid var(--line); background: var(--surface); color: var(--text); }
+.device-file-entry:last-child { border-bottom: 0; }
+.device-file-entry:hover:not(:disabled) { background: var(--surface-hover); }
+.device-file-kind { flex: 0 0 12px; color: var(--muted); }
+.device-file-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.device-file-entry small { flex-shrink: 0; color: var(--secondary); font-size: 10px; }
+.device-file-upload { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 14px 0; font-size: 11px; color: var(--secondary); overflow-wrap: anywhere; }
+.device-file-upload small { width: 100%; }
+.device-file-editor { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px; }
+.device-file-editor-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; font-size: 11px; }
+.device-file-editor-heading strong { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
+.device-file-editor-heading span { color: var(--muted); white-space: nowrap; }
+.device-file-text { width: 100%; height: 260px; padding: 12px; resize: vertical; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface-soft); font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 4; }
+.device-file-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.device-access input:focus-visible, .device-access textarea:focus-visible, .device-access button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 480px) {
+  .device-access { padding: 16px; }
+  .device-address { gap: 8px; }
+  .device-address .device-port { max-width: 75px; }
+  .device-address input, .device-file-location input, .device-file-text { font-size: 16px; }
+  .device-terminal-shell { padding: 8px; }
+  .device-terminal { height: 280px; }
+  .device-session-toolbar { gap: 10px; }
+  .device-file-location { gap: 6px; }
+  .device-file-location .button { padding: 10px; }
+}

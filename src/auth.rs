@@ -495,7 +495,7 @@ async fn revoke_token(
     no_store(StatusCode::NO_CONTENT.into_response())
 }
 
-async fn require_owner(manager: &AuthManager, headers: &HeaderMap) -> Result<(), Response> {
+pub(crate) async fn require_owner(manager: &AuthManager, headers: &HeaderMap) -> Result<(), Response> {
     match manager.access(headers).await {
         Ok(Some(Access::Owner)) => Ok(()),
         Ok(_) => Err(error(
@@ -504,6 +504,23 @@ async fn require_owner(manager: &AuthManager, headers: &HeaderMap) -> Result<(),
         )),
         Err(()) => Err(storage_unavailable()),
     }
+}
+
+/// Remote device access always requires a configured owner login and a browser
+/// Origin, including the GET used to upgrade a WebSocket. Integration tokens
+/// and the initial open setup mode must never grant a remote shell.
+pub(crate) async fn require_device_access(
+    manager: &AuthManager,
+    headers: &HeaderMap,
+) -> Result<(), Response> {
+    require_owner(manager, headers).await?;
+    if !same_origin(headers, true) {
+        return Err(error(
+            StatusCode::FORBIDDEN,
+            "Подключение к колонке доступно только с этой страницы Quasar",
+        ));
+    }
+    Ok(())
 }
 
 fn signed_in(manager: &AuthManager, headers: &HeaderMap) -> Response {

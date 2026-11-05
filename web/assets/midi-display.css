@@ -1,0 +1,28 @@
+.midi-editor { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+.midi-editor h3 { color: var(--text); font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+.midi-editor-help { color: var(--secondary); font-size: 11px; line-height: 1.7; }
+.midi-modes { margin-top: 14px; }
+.midi-preview { max-width: 420px; padding: 16px; margin: 14px 0; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-soft); }
+.midi-preview svg { display: block; width: 100%; height: auto; overflow: visible; }
+.midi-segment { fill: var(--line); stroke: transparent; stroke-width: 2px; }
+.midi-segment.lit { fill: var(--text); opacity: var(--midi-preview-level, 1); }
+.midi-segment[role="button"] { cursor: pointer; }
+.midi-segment[role="button"]:hover, .midi-segment:focus-visible { stroke: var(--accent); outline: none; }
+.midi-editor .form-field { margin-bottom: 12px; }
+.midi-frame-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 14px; }
+.midi-extra { margin: 12px 0; color: var(--secondary); font-size: 11px; }
+.midi-extra summary { cursor: pointer; }
+.midi-extra p { font-size: 10px; margin-top: 8px; }
+.midi-extra > div { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.midi-extra button { min-width: 38px; padding: 6px; background: var(--surface); color: var(--secondary); border: 1px solid var(--line); border-radius: 6px; font-size: 10px; }
+.midi-extra button.selected { background: var(--accent-soft); border-color: var(--focus); color: var(--accent-text); }
+.midi-editor-options { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin: 16px 0 10px; }
+.midi-editor-options .form-field { width: 120px; margin: 0; }
+.midi-editor > .form-feedback { margin: 8px 0; }
+@media (max-width: 480px) {
+  .midi-preview { padding: 12px; }
+  .midi-editor-options .form-field { width: calc(50% - 6px); }
+  .midi-editor-options .button { width: 100%; }
+  .midi-modes { width: 100%; }
+  .midi-modes .mode-tab { flex: 1; padding: 6px 10px; }
+}

@@ -3,6 +3,7 @@
 //! invalid ones get 400 or 422 with what is wrong.
 
 mod raw_directive;
+mod display;
 
 use std::sync::Arc;
 
@@ -45,6 +46,7 @@ pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Rout
         .route("/devices/{duid}/push-raw", post(push_raw))
         .route("/devices/{duid}/push-text", post(push_text))
         .route("/devices/{duid}/push-directive", post(push_directive))
+        .route("/devices/{duid}/display", get(display::status).post(display::animate))
         .route("/devices/{duid}/weather", get(crate::weather_api::forecast))
         .route("/weather/locations", get(crate::weather_api::locations))
         .route("/devices/{duid}/weather/location", put(crate::weather_api::set_location))
@@ -61,6 +63,7 @@ pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Rout
         )
         .fallback(|| async { (StatusCode::NOT_FOUND, "NOT_FOUND") })
         .with_state(state.clone())
+        .merge(crate::device_access::router(state.clone(), auth.clone()))
         .merge(crate::control::router(state.control.clone()))
         .layer(axum::middleware::from_fn_with_state(
             auth.clone(),

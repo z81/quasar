@@ -1,0 +1,24 @@
+.display-settings { padding: 20px; }
+.display-settings h2 { margin: 10px 0 6px; font-size: 17px; }
+.display-settings .settings-intro { margin-bottom: 16px; }
+.display-settings .toggle-field { gap: 16px; padding: 12px 0; }
+.display-settings .display-auto { border-top: 0; padding-top: 0; }
+.display-brightness { border-top: 1px solid var(--line); padding: 14px 0 16px; }
+.display-brightness-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; color: var(--secondary); font-size: 11px; }
+.display-brightness-heading .text-button { font-size: 10px; }
+.display-brightness-controls { display: flex; align-items: center; gap: 16px; margin: 10px 0 6px; }
+.display-brightness-controls > input { flex: 1; min-width: 0; width: 100%; accent-color: var(--accent); cursor: pointer; }
+.display-brightness-controls > input:disabled { cursor: default; opacity: .5; }
+.display-settings .display-brightness-number { display: flex; align-items: center; flex: 0 0 94px; gap: 6px; margin: 0; }
+.display-brightness-number input { min-height: 36px; padding: 8px 10px; }
+.display-brightness-number input[aria-invalid="true"] { border-color: var(--error); }
+.display-settings .form-help.failure { color: var(--error); }
+.display-options { gap: 16px; }
+.display-options .form-field { margin-bottom: 12px; }
+.display-feedback { margin-top: 12px; }
+@media (max-width: 480px) {
+  .display-settings { padding: 16px; }
+  .display-settings h2 { font-size: 17px; }
+  .display-brightness-number input { font-size: 16px; }
+  .display-settings .settings-actions { gap: 14px; }
+}

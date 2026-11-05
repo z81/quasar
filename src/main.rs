@@ -13,6 +13,8 @@ mod connections;
 mod control;
 mod control_ui;
 mod directives;
+mod display;
+mod device_access;
 mod gigastt;
 mod logging;
 mod mcp;

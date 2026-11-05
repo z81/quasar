@@ -42,6 +42,7 @@ pub struct ConnectionRegistry {
     timezones: Arc<Mutex<HashMap<String, String>>>,
     reported_timezones: Arc<Mutex<HashMap<String, String>>>,
     alarm_support: Arc<Mutex<HashMap<String, bool>>>,
+    display_capabilities: Arc<Mutex<HashMap<u64, crate::display::DisplayCapability>>>,
 }
 
 impl ConnectionRegistry {
@@ -74,6 +75,37 @@ impl ConnectionRegistry {
 
     pub fn alarm_support(&self, device_id: &str) -> Option<bool> {
         self.alarm_support.lock().unwrap().get(device_id).copied()
+    }
+
+    pub fn report_display_capability(
+        &self,
+        device_id: &str,
+        connection_id: u64,
+        endpoint_id: &str,
+        update: crate::proto::n_alice::TAnimationCapability,
+    ) {
+        let connections = self.connections.lock().unwrap();
+        let current = connections.get(device_id)
+            .and_then(|targets| targets.iter().filter(|(_, sender)| !sender.is_closed()).map(|(id, _)| *id).max());
+        if current == Some(connection_id) {
+            self.display_capabilities.lock().unwrap().entry(connection_id)
+                .or_default().update(endpoint_id, update);
+        }
+    }
+
+    pub fn display_capability(&self, device_id: &str) -> Option<(u64, crate::display::DisplayCapability)> {
+        let connections = self.connections.lock().unwrap();
+        let connection_id = connections.get(device_id)?
+            .iter().filter(|(_, sender)| !sender.is_closed()).map(|(id, _)| *id).max()?;
+        self.display_capabilities.lock().unwrap().get(&connection_id).cloned()
+            .map(|capability| (connection_id, capability))
+    }
+
+    pub fn send_to_current(&self, device_id: &str, connection_id: u64, command: StationCommand) -> bool {
+        let connections = self.connections.lock().unwrap();
+        connections.get(device_id)
+            .and_then(|targets| targets.iter().filter(|(_, sender)| !sender.is_closed()).max_by_key(|(id, _)| *id))
+            .is_some_and(|(id, sender)| *id == connection_id && sender.send(command).is_ok())
     }
 
     pub fn is_current(&self, duid: &str, connection_id: u64) -> bool {
@@ -120,6 +152,7 @@ impl ConnectionRegistry {
                 connections.remove(device_id);
             }
         }
+        self.display_capabilities.lock().unwrap().remove(&connection_id);
     }
 
     /// Sends the command to every connection of one device or of all devices;

@@ -23,6 +23,9 @@ pub fn Settings(state: ControlState) -> Element {
             for device in device {
                 div { class: "station-settings-stack", key: "{device.duid}",
                     DeviceSettings { state, device: device.clone() }
+                    crate::display_settings::DisplaySettings { state, device: device.clone() }
+                    crate::display_studio::DisplayStudio { state, duid: device.duid.clone() }
+                    crate::device_access::DeviceAccess { state, duid: device.duid.clone() }
                     crate::weather::WeatherSettings { state, duid: device.duid }
                 }
             }

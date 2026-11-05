@@ -3,6 +3,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "protos/alice/protos/api/alicekit/protocol/client/client_message.proto".to_string(),
         "protos/alice/protos/api/alicekit/protocol/server/server_message.proto".to_string(),
         "protos/alice/protos/endpoint/capabilities/alarm/capability.proto".to_string(),
+        "protos/alice/protos/endpoint/capabilities/animation/capability.proto".to_string(),
     ];
 
     let file_descriptors = protox::compile(file_names, ["protos/".to_string()])?;

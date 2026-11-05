@@ -67,9 +67,24 @@ pub struct UniproxyContext {
     pub gigastt: Option<Gigastt>,
     /// speech synthesis by Piper (TTS_PROVIDER=piper); None: OpenRouter
     pub piper: Option<crate::piper::Piper>,
+    pub updates: Arc<crate::updates::UpdatesConfig>,
 }
 
 impl UniproxyContext {
+    pub fn can_speak(&self) -> bool {
+        match self.config.tts_provider {
+            crate::config::TtsProvider::Piper => self.piper.is_some(),
+            crate::config::TtsProvider::OpenRouter => !self.config.openrouter_api_key.is_empty(),
+        }
+    }
+
+    pub fn processor_ready(&self) -> bool {
+        self.config.anthropic.as_ref().map_or_else(
+            || !self.config.openrouter_api_key.is_empty(),
+            |config| !config.api_key.is_empty(),
+        )
+    }
+
     /// The functions a new dialog gets: the station's, the function
     /// servers', and the tools the MCP servers list now
     pub fn functions_now(&self) -> Functions {
@@ -98,7 +113,7 @@ const AUDIO_PLAY_ECHO: Duration = Duration::from_secs(2);
 
 pub async fn handle_socket(
     socket: WebSocket,
-    context: Arc<UniproxyContext>,
+    runtime: Arc<crate::runtime::Runtime>,
     device_id: String,
     registry: ConnectionRegistry,
 ) {
@@ -106,7 +121,7 @@ pub async fn handle_socket(
     let (outbox, mut writer) = outbox::spawn_writer(sink);
     let (command_sender, mut commands) = mpsc::unbounded_channel::<StationCommand>();
     let connection_id = registry.register(&device_id, command_sender);
-    let mut connection = Connection::new(context, outbox, device_id.clone(), registry.clone(), connection_id);
+    let mut connection = Connection::new(runtime, outbox, device_id.clone(), registry.clone(), connection_id);
 
     loop {
         tokio::select! {
@@ -158,6 +173,7 @@ async fn next_endpoint(voice_input: &mut Option<VoiceInput>) -> Endpoint {
 
 /// A VoiceInput being recorded: the audio of its stream until the end of the utterance
 struct VoiceInput {
+    context: Arc<UniproxyContext>,
     stream_id: i64,
     started_at: Instant,
     target: ResponseTarget,
@@ -201,6 +217,7 @@ impl VoiceInput {
 }
 
 struct Connection {
+    runtime: Arc<crate::runtime::Runtime>,
     context: Arc<UniproxyContext>,
     outbox: Outbox,
     dialog: DialogSlot,
@@ -231,7 +248,8 @@ struct Connection {
 }
 
 impl Connection {
-    fn new(context: Arc<UniproxyContext>, outbox: Outbox, device_id: String, registry: ConnectionRegistry, connection_id: u64) -> Self {
+    fn new(runtime: Arc<crate::runtime::Runtime>, outbox: Outbox, device_id: String, registry: ConnectionRegistry, connection_id: u64) -> Self {
+        let context = runtime.snapshot();
         let (alarm_events, mut observations) = mpsc::unbounded_channel();
         let schedules = context.schedules.clone();
         let alarm_device = device_id.clone();
@@ -242,6 +260,7 @@ impl Connection {
             }
         });
         Self {
+            runtime,
             context,
             outbox,
             dialog: DialogSlot::default(),
@@ -381,6 +400,7 @@ impl Connection {
     }
 
     fn handle_voice_input(&mut self, header: TEventHeader, mut request: TAliceRequestProto) {
+        self.context = self.runtime.snapshot();
         self.registry.player.observe(&self.device_id, &request);
         if self.interrupt_turns() {
             tracing::info!("the dialog turn in flight was interrupted by a new voice input");
@@ -393,6 +413,7 @@ impl Connection {
 
         self.biometry = BiometrySlot::default();
         self.voice_input = Some(VoiceInput {
+            context: self.context.clone(),
             stream_id,
             started_at: Instant::now(),
             target: ResponseTarget {
@@ -462,6 +483,7 @@ impl Connection {
                 input.ogg.len()
             );
             let mut request = self.request(input.target, input.zone);
+            request.context = input.context;
             request.live_context = input.live_context;
             let utterance = Utterance {
                 ogg: input.ogg,
@@ -504,6 +526,7 @@ impl Connection {
         report(self.outbox.asr_result(&endpoint.text, &input.target.reference_message_id));
         self.ended_stream = Some(EndedStream { stream_id, ended_at: Instant::now(), late_audio_bytes: 0 });
         let mut request = self.request(input.target, input.zone);
+        request.context = input.context;
         request.live_context = input.live_context;
         let utterance = Utterance {
             ogg: input.ogg,
@@ -544,6 +567,7 @@ impl Connection {
     }
 
     fn handle_text_input(&mut self, header: TEventHeader, mut request: TAliceRequestProto) {
+        self.context = self.runtime.snapshot();
         self.registry.player.observe(&self.device_id, &request);
         let feedback =
             text_input::command_id(&request).and_then(|id| self.pending_commands.remove(&id));
@@ -609,7 +633,10 @@ impl Connection {
             }
             TextInputKind::ContinueStage2 { dialog_id } => {
                 // the next part of that dialog's answer; a part of an older dialog is never delivered
-                let request = self.request(target(self.dialog.response_dialog_id(dialog_id.as_deref())), zone);
+                let mut request = self.request(target(self.dialog.response_dialog_id(dialog_id.as_deref())), zone);
+                if let Some(context) = self.dialog.context(&request.target.dialog_id) {
+                    request.context = context;
+                }
                 self.spawn_turn(request.answer_continue());
             }
             TextInputKind::Text(text) => {

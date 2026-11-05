@@ -20,7 +20,6 @@ use crate::storage::Storage;
 pub struct QuasarState {
     pub storage: Arc<Storage>,
     pub glagol_jwt_key: Vec<u8>,
-    pub updates: Arc<crate::updates::UpdatesConfig>,
 }
 
 #[derive(Deserialize)]
@@ -59,7 +58,7 @@ async fn register(
     State(state): State<crate::AppState>,
     Query(parameters): Query<DeviceParameters>,
 ) -> Json<Value> {
-    let has_critical_update = state.quasar.updates.has_critical_update(
+    let has_critical_update = state.runtime.snapshot().updates.has_critical_update(
         parameters.platform.as_deref().unwrap_or_default(),
         parameters.firmware_version.as_deref().unwrap_or_default(),
     );
@@ -72,7 +71,7 @@ async fn check_updates(
 ) -> Json<Value> {
     let platform = parameters.platform.unwrap_or_default();
     let version = parameters.version.unwrap_or_default();
-    Json(state.quasar.updates.response_for(&platform, &version))
+    Json(state.runtime.snapshot().updates.response_for(&platform, &version))
 }
 
 async fn update_device_state(

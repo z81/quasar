@@ -72,6 +72,7 @@ const MAX_PAGES: usize = 50;
 pub struct Mcp {
     servers: Vec<Arc<Server>>,
     live_context: bool,
+    tasks: std::sync::Mutex<Vec<JoinHandle<()>>>,
 }
 
 /// One state entry: key, (description, value)
@@ -84,14 +85,22 @@ impl Mcp {
             .build()
             .expect("HTTP client for MCP servers");
         let servers = servers.iter().map(|config| Arc::new(Server::new(config, http.clone()))).collect();
-        Arc::new(Self { servers, live_context })
+        Arc::new(Self { servers, live_context, tasks: std::sync::Mutex::new(Vec::new()) })
     }
 
     /// Connects every server in the background: a hanging one never delays startup
     pub fn start(&self) {
+        let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
+        if !tasks.is_empty() { return; }
         for server in &self.servers {
             tracing::info!("MCP server {}: connecting in the background", server.name());
-            tokio::spawn(server.clone().maintain());
+            tasks.push(tokio::spawn(server.clone().maintain()));
+        }
+    }
+
+    pub fn stop(&self) {
+        for task in self.tasks.lock().unwrap_or_else(PoisonError::into_inner).drain(..) {
+            task.abort();
         }
     }
 
@@ -145,6 +154,10 @@ impl Mcp {
             futures_util::future::join_all(fetches).await.into_iter().flatten().collect()
         })))
     }
+}
+
+impl Drop for Mcp {
+    fn drop(&mut self) { self.stop(); }
 }
 
 /// The live context being fetched for a turn; dropping it stops the fetch

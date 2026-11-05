@@ -336,6 +336,78 @@ select { font: inherit; color: var(--text); background: var(--surface); }
 .auth-card .button { width: 100%; }
 .auth-footer { color: var(--muted); font-size: 10px; text-align: center; }
 .station-settings-stack { display: grid; gap: 20px; max-width: 820px; }
+.settings-tabs { display: flex; width: fit-content; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); margin-bottom: 26px; }
+.settings-tab { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 18px; min-height: 40px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--secondary); font-size: 12px; }
+.settings-tab:hover:not(.active) { color: var(--text); background: var(--surface-hover); }
+.settings-tab.active { color: var(--text); background: var(--surface); border-color: var(--line); }
+.server-settings { min-width: 0; }
+.server-settings-intro { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-bottom: 22px; }
+.server-settings-intro > div { max-width: 640px; }
+.server-settings-intro .card-kicker { display: inline-flex; align-items: center; gap: 8px; }
+.server-settings-intro .card-kicker svg { color: var(--accent-text); }
+.server-settings-intro p { margin-top: 10px; color: var(--secondary); font-size: 12px; line-height: 1.8; }
+.server-settings-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); align-items: start; gap: 22px; }
+.server-settings-groups { display: grid; gap: 5px; }
+.server-settings-group { display: flex; align-items: center; justify-content: space-between; text-align: left; gap: 8px; min-width: 0; padding: 12px; min-height: 42px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--secondary); font-size: 12px; }
+.server-settings-group:hover:not(.active) { color: var(--text); background: var(--surface-hover); }
+.server-settings-group.active { color: var(--accent-text); background: var(--accent-soft); }
+.setting-change-count { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 5px; background: var(--surface); color: var(--accent-text); font-size: 10px; font-variant-numeric: tabular-nums; }
+.server-settings-fields { padding: 28px; min-width: 0; }
+.server-settings-group-heading { padding-bottom: 24px; }
+.server-settings-group-heading h2 { font-size: 20px; line-height: 1.4; letter-spacing: -.4px; }
+.server-settings-group-heading p { font-size: 11px; line-height: 1.8; color: var(--muted); margin-top: 9px; max-width: 600px; }
+.server-setting-row { padding: 24px 0; border-top: 1px solid var(--line); min-width: 0; }
+.server-setting-row:last-child { padding-bottom: 0; }
+.server-setting-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.server-setting-heading label { color: var(--text); font-size: 13px; font-weight: 550; }
+.setting-source { display: inline-block; border: 1px solid var(--line); background: var(--surface-soft); color: var(--muted); border-radius: 5px; padding: 4px 6px; font-size: 9px; line-height: 1.2; }
+.setting-source.override { border-color: transparent; color: var(--accent-text); background: var(--accent-soft); }
+.setting-source.reset { color: var(--secondary); border-style: dashed; }
+.server-setting-description { color: var(--muted); font-size: 11px; line-height: 1.7; margin: 9px 0 12px; overflow-wrap: anywhere; }
+.server-setting-input { margin-bottom: 11px; }
+.server-setting-input input, .server-setting-input textarea { font-variant-numeric: tabular-nums; }
+.server-setting-input textarea { min-height: 88px; }
+.server-setting-input.invalid input { border-color: var(--error); }
+.server-setting-input .failure { color: var(--error); }
+.server-setting-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 18px; }
+.server-setting-footer code { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; overflow-wrap: anywhere; }
+.server-setting-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.server-setting-actions .text-button { font-size: 10px; }
+.server-settings-savebar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 18px 22px; margin-top: 22px; }
+.server-settings-savebar > div:first-child { display: grid; gap: 7px; }
+.server-settings-savebar strong { font-size: 12px; font-weight: 550; }
+.server-settings-savebar small { color: var(--muted); font-size: 10px; line-height: 1.6; }
+.server-settings-savebar small.failure { color: var(--error); }
+.server-settings-save-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; }
+.server-settings-bootstrap { margin-top: 22px; color: var(--muted); font-size: 11px; line-height: 1.8; }
+.server-settings-bootstrap summary { cursor: pointer; color: var(--secondary); }
+.server-settings-bootstrap p { margin-top: 8px; overflow-wrap: anywhere; }
+.server-settings-loading { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 48px 20px; color: var(--secondary); font-size: 12px; }
+.server-settings-notice { align-items: flex-start; }
+.server-settings-notice > svg { flex-shrink: 0; margin-top: 2px; }
+.server-settings-notice p + p { margin-top: 6px; }
+.server-settings-notice .text-button { color: inherit; margin-top: 8px; }
+.server-settings-feedback { margin-bottom: 20px; }
+.server-settings-readiness { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px; background: var(--accent-soft); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 22px; color: var(--accent-text); }
+.server-settings-readiness > svg { flex-shrink: 0; }
+.server-settings-readiness strong { font-size: 12px; }
+.server-settings-readiness ul { padding-left: 18px; margin-top: 8px; font-size: 11px; line-height: 1.9; }
+@media (max-width: 1180px) {
+  .server-settings-layout { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .server-settings-groups { display: flex; flex-wrap: wrap; gap: 5px; }
+  .server-settings-group { padding: 10px 12px; }
+}
+@media (max-width: 760px) {
+  .settings-tabs { width: 100%; }
+  .settings-tab { flex: 1; padding: 10px 12px; }
+  .server-settings-fields { padding: 20px; }
+  .server-settings-group-heading h2 { font-size: 18px; }
+  .server-settings-groups { gap: 4px; }
+  .server-settings-group { font-size: 11px; padding: 8px 10px; min-height: 36px; }
+  .server-settings-savebar { padding: 18px; }
+  .server-settings-save-actions { width: 100%; }
+  .server-settings-save-actions .button { width: 100%; justify-content: center; }
+}
 .weather-card { padding: 22px 24px 16px; margin-top: 20px; }
 .weather-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .weather-heading > div { min-width: 0; }

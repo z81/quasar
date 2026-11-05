@@ -23,7 +23,8 @@ pub struct ApiState {
     pub registry: ConnectionRegistry,
     pub storage: Arc<Storage>,
     pub control: Arc<crate::control::Control>,
-    pub remote: Arc<crate::remote::RemoteServers>,
+    pub runtime: Arc<crate::runtime::Runtime>,
+    pub settings: Arc<crate::server_settings::ServerSettings>,
     pub weather: Arc<crate::weather::WeatherService>,
     pub schedules: Arc<crate::schedules::Scheduler>,
 }
@@ -49,6 +50,7 @@ pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Rout
         .route("/devices/{duid}/weather/location", put(crate::weather_api::set_location))
         .merge(crate::schedule_api::router())
         .merge(crate::timer_api::router())
+        .merge(crate::server_settings_api::router(auth.clone()))
         .route(
             "/devices/{duid}/player",
             get(player_status).post(player_action),
@@ -323,7 +325,7 @@ async fn player_status(
     State(state): State<Arc<ApiState>>,
     Path(duid): Path<String>,
 ) -> Json<crate::player::PlayerStatus> {
-    Json(crate::player::status(&state.registry, &state.remote, &duid).await)
+    Json(crate::player::status(&state.registry, &state.runtime.snapshot().remote, &duid).await)
 }
 
 async fn player_action(
@@ -336,7 +338,7 @@ async fn player_action(
         Err(response) => return response,
     };
     feedback.running().await;
-    match crate::player::action(&state.registry, &state.remote, &duid, &body).await {
+    match crate::player::action(&state.registry, &state.runtime.snapshot().remote, &duid, &body).await {
         Ok(receipt) => {
             feedback.delivered(receipt.delivered).await;
             feedback

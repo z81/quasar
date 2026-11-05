@@ -66,10 +66,10 @@ impl PromptGenerator {
         Ok(template.replace("{{stateText}}", &state_text))
     }
 
-    /// Fails early when a template is missing, like TS does at startup
+    /// Validate the same UTF-8 read used for a dialog before applying new paths.
     pub fn check_templates(&self) -> Result<()> {
         for path in [&self.prompt_path, &self.state_prompt_path] {
-            std::fs::metadata(path).with_context(|| format!("prompt template {path} is not readable"))?;
+            std::fs::read_to_string(path).with_context(|| format!("prompt template {path} is not readable"))?;
         }
         Ok(())
     }

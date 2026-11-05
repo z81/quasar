@@ -68,6 +68,7 @@ async fn main() -> Result<()> {
         .route("/weather/{*path}", get(forward))
         .route("/control/{*path}", any(forward))
         .route("/auth/{*path}", any(forward))
+        .route("/settings/{*path}", any(forward))
         .with_state(proxy);
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     println!("Quasar control: http://{}/ui/", listener.local_addr()?);

@@ -202,6 +202,21 @@ async fn status(State(manager): State<Arc<AuthManager>>, headers: HeaderMap) -> 
     no_store(Json(json!({"available":available, "configured": configured, "authenticated": authenticated})).into_response())
 }
 
+/// Provider credentials and global configuration belong to the owner. Preserve
+/// the existing open setup mode, but do not grant integration tokens this scope.
+pub async fn require_settings_access(
+    State(manager): State<Arc<AuthManager>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    match manager.access(request.headers()).await {
+        Ok(Some(Access::Owner | Access::Open)) => next.run(request).await,
+        Ok(Some(Access::Token)) => error(StatusCode::FORBIDDEN, "Настройки сервера доступны только владельцу Quasar"),
+        Ok(None) => error(StatusCode::UNAUTHORIZED, "Войдите как владелец Quasar"),
+        Err(()) => storage_unavailable(),
+    }
+}
+
 #[derive(Deserialize)]
 struct PasswordBody {
     password: String,

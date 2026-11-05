@@ -14,6 +14,7 @@ mod control;
 mod control_ui;
 mod directives;
 mod gigastt;
+mod logging;
 mod mcp;
 mod openrouter;
 mod piper;
@@ -22,6 +23,9 @@ mod prompt;
 mod proto;
 mod quasar_router;
 mod remote;
+mod runtime;
+mod server_settings;
+mod server_settings_api;
 mod schedule_api;
 mod schedule_delivery;
 mod schedule_tool;
@@ -38,7 +42,6 @@ mod weather;
 mod weather_api;
 mod weather_tool;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -47,19 +50,14 @@ use axum::extract::{FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::routing::get;
 
-use crate::agent::FunctionDefinition;
 use crate::api::ApiState;
 use crate::connections::ConnectionRegistry;
-use crate::prompt::{builtin_directive_functions, PromptGenerator};
 use crate::quasar_router::QuasarState;
-use crate::remote::RemoteServers;
-use crate::uniproxy::UniproxyContext;
-use crate::updates::UpdatesConfig;
 
 /// Single axum state for the whole main server
 #[derive(Clone)]
 pub struct AppState {
-    pub context: Arc<UniproxyContext>,
+    pub runtime: Arc<runtime::Runtime>,
     pub quasar: Arc<QuasarState>,
     pub registry: ConnectionRegistry,
 }
@@ -85,62 +83,13 @@ impl<S: Send + Sync> FromRequestParts<S> for DeviceId {
 async fn main() -> Result<()> {
     dotenvy::from_filename(".env.local").ok();
     dotenvy::dotenv().ok();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    logging::init();
 
-    let config = config::Config::from_env();
-    let openrouter = openrouter::OpenRouter::new(
-        &config.openrouter_base_url,
-        &config.openrouter_api_key,
-        config.openrouter_timeout_ms,
-        config.processor_reasoning.as_deref(),
-    )?;
-    let llm = match &config.anthropic {
-        Some(anthropic) => agent::Llm::Anthropic(anthropic::Anthropic::new(
-            &anthropic.base_url,
-            &anthropic.api_key,
-            anthropic.timeout_ms,
-            anthropic.effort.as_deref(),
-        )?),
-        None => agent::Llm::OpenRouter(openrouter.clone()),
-    };
-
-    let remote = Arc::new(RemoteServers::new(
-        csv_urls("PROCESSOR_FUNCTION_SERVER_URLS"),
-        csv_urls("PROCESSOR_STATE_SERVER_URLS"),
-    ));
-
-    // MCP servers connect in the background: a hanging one must not block startup (as in TS)
-    let mcp = mcp::Mcp::new(&config.mcp_servers, config.mcp_live_context);
-    mcp.start();
-
-    // function catalog: station directives + remote servers
-    let mut functions: HashMap<String, FunctionDefinition> =
-        builtin_directive_functions()
-            .iter()
-            .map(|(name, definition)| (name.clone(), definition.clone()))
-            .collect();
-    functions.insert("get_weather".to_string(), weather_tool::definition());
-    functions.extend(schedule_tool::definitions());
-    functions.extend(timer_tool::definitions());
-    for (name, definition) in remote.functions().await {
-        if functions.contains_key(&name) {
-            tracing::warn!("duplicate function '{name}' from a remote server, keeping the builtin one");
-            continue;
-        }
-        functions.insert(name, definition);
-    }
-
-    let storage = Arc::new(storage::Storage::connect(&config.postgres_url).await);
+    let bootstrap = config::BootstrapConfig::from_env()?;
+    let storage = Arc::new(storage::Storage::connect(&bootstrap.postgres_url).await);
+    let environment = config::Environment::capture();
+    let (config, settings_revision) = server_settings::initial_config(&storage, &environment).await?;
     let weather = Arc::new(weather::WeatherService::new(storage.clone())?);
-    let updates = Arc::new(UpdatesConfig::load(
-        config.allow_updates,
-        &config.updates_config_path,
-    )?);
     let registry = ConnectionRegistry::default();
     for station in storage.list().await? {
         registry.set_timezone(&station.duid, station.timezone.as_deref());
@@ -152,38 +101,18 @@ async fn main() -> Result<()> {
         control: control.clone(),
     })).await?;
 
-    let prompt_generator = PromptGenerator::new(
-        &config.processor_prompt_path,
-        &config.processor_state_prompt_path,
+    let runtime = runtime::Runtime::new(config, weather.clone(), schedules.clone()).await?;
+    let settings = server_settings::ServerSettings::new(
+        storage.clone(), environment, runtime.clone(), bootstrap.port, bootstrap.api_port, settings_revision,
     );
-    prompt_generator.check_templates()?;
-
-    let context = Arc::new(UniproxyContext {
-        prompt_generator,
-        functions: Arc::new(functions),
-        cache: agent::new_response_cache(config.processor_cache_size as usize),
-        openrouter,
-        llm,
-        remote,
-        mcp,
-        weather: weather.clone(),
-        schedules: schedules.clone(),
-        gigastt: gigastt::Gigastt::from_config(&config),
-        piper: piper::Piper::from_config(&config),
-        config,
-    });
-
     let quasar_state = Arc::new(QuasarState {
         storage: storage.clone(),
-        glagol_jwt_key: context.config.glagol_jwt_key.clone(),
-        updates,
+        glagol_jwt_key: bootstrap.glagol_jwt_key,
     });
-
-    let port = context.config.port;
-    let api_port = context.config.api_port;
-
+    let port = bootstrap.port;
+    let api_port = bootstrap.api_port;
     let app_state = AppState {
-        context: context.clone(),
+        runtime: runtime.clone(),
         quasar: quasar_state,
         registry: registry.clone(),
     };
@@ -194,7 +123,7 @@ async fn main() -> Result<()> {
                 |State(state): State<AppState>, device: DeviceId, upgrade: WebSocketUpgrade| async move {
                     tracing::info!("uni.ws connection for device {}", device.0);
                     upgrade.on_upgrade(move |socket| {
-                        uniproxy::handle_socket(socket, state.context, device.0, state.registry)
+                        uniproxy::handle_socket(socket, state.runtime, device.0, state.registry)
                     })
                 },
             ),
@@ -210,7 +139,8 @@ async fn main() -> Result<()> {
             registry: registry.clone(),
             storage,
             control,
-            remote: context.remote.clone(),
+            runtime,
+            settings,
             weather,
             schedules: schedules.clone(),
         }),
@@ -252,13 +182,4 @@ async fn shutdown_signal() {
         () = ctrl_c => {}
         () = terminate => {}
     }
-}
-
-fn csv_urls(name: &str) -> Vec<String> {
-    std::env::var(name)
-        .unwrap_or_default()
-        .split(',')
-        .filter(|url| !url.is_empty())
-        .map(ToString::to_string)
-        .collect()
 }

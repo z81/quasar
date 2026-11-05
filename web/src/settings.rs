@@ -7,15 +7,25 @@ use crate::state::{ControlState, Device};
 
 #[component]
 pub fn Settings(state: ControlState) -> Element {
-    match state.device() {
-        Some(device) => rsx! {
-            div { class: "station-settings-stack",
-                DeviceSettings { key: "station-{device.duid}", state, device: device.clone() }
-                crate::weather::WeatherSettings { key: "weather-{device.duid}", state, duid: device.duid }
+    let mut server = use_signal(|| true);
+    let device = state.device();
+    rsx! {
+        div { class: "settings-tabs", role: "tablist", aria_label: "Область настроек",
+            button { class: if server() { "settings-tab active" } else { "settings-tab" }, role: "tab", aria_selected: server(), onclick: move |_| server.set(true), Icon { name: "settings", size: 16 } "Сервер" }
+            button { class: if !server() { "settings-tab active" } else { "settings-tab" }, role: "tab", aria_selected: !server(), onclick: move |_| server.set(false), Icon { name: "speaker", size: 16 } "Колонка" }
+        }
+        if server() {
+            crate::server_settings::ServerSettings { state }
+        } else if device.is_none() {
+            div { class: "card history-empty", Icon { name: "speaker", size: 28 } h3 { "Выберите колонку" } p { "Настройки появятся после её подключения к серверу." } }
+        } else {
+            // The keyed list also resets station-scoped form drafts on selection.
+            for device in device {
+                div { class: "station-settings-stack", key: "{device.duid}",
+                    DeviceSettings { state, device: device.clone() }
+                    crate::weather::WeatherSettings { state, duid: device.duid }
+                }
             }
-        },
-        None => {
-            rsx! { div { class: "card history-empty", Icon { name: "speaker", size: 28 } h3 { "Выберите колонку" } p { "Настройки появятся после её подключения к серверу." } } }
         }
     }
 }

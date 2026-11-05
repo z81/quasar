@@ -47,6 +47,7 @@ const PART_WAIT: Duration = Duration::from_secs(5);
 type Answers = Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<AgentOutput>>>;
 
 struct Dialog {
+    context: Arc<UniproxyContext>,
     feedback: Option<crate::control::CommandFeedback>,
     /// Server-assigned (TS: a UUID per dialog): answers carry it, and the
     /// station names it in requests that continue the dialog
@@ -64,6 +65,9 @@ struct Dialog {
 pub struct DialogSlot(Arc<Mutex<Option<Dialog>>>);
 
 impl DialogSlot {
+    pub fn context(&self, id: &str) -> Option<Arc<UniproxyContext>> {
+        self.lock().as_ref().filter(|dialog| dialog.id == id).map(|dialog| dialog.context.clone())
+    }
     pub fn set_feedback(&self, id: &str, feedback: Option<crate::control::CommandFeedback>) {
         if let Some(dialog) = self.lock().as_mut().filter(|dialog| dialog.id == id) {
             dialog.feedback = feedback;
@@ -85,14 +89,14 @@ impl DialogSlot {
     /// otherwise a new one (TS interrupts the old dialog)
     pub fn for_voice_input(
         &self,
-        context: &UniproxyContext,
+        context: &Arc<UniproxyContext>,
         station_dialog_id: Option<&str>,
         zone: &Zone,
     ) -> (String, Arc<Agent>) {
         let mut slot = self.lock();
         if let Some(dialog) = slot.as_mut() {
             let names_other = station_dialog_id.is_some_and(|id| !id.is_empty() && id != dialog.id);
-            if dialog.awaiting_input && !names_other {
+            if dialog.awaiting_input && !names_other && Arc::ptr_eq(&dialog.context, context) {
                 dialog.awaiting_input = false;
                 return (dialog.id.clone(), dialog.agent.clone());
             }
@@ -103,8 +107,11 @@ impl DialogSlot {
     /// The dialog of an external event: like TS, the event joins the current
     /// agent session, under a new dialog id unless the request names the
     /// current one
-    pub fn for_event(&self, context: &UniproxyContext, station_dialog_id: Option<&str>, zone: &Zone) -> (String, Arc<Agent>) {
+    pub fn for_event(&self, context: &Arc<UniproxyContext>, station_dialog_id: Option<&str>, zone: &Zone) -> (String, Arc<Agent>) {
         let mut slot = self.lock();
+        if slot.as_ref().is_some_and(|dialog| !Arc::ptr_eq(&dialog.context, context)) {
+            return open(&mut slot, context, zone);
+        }
         match slot.as_mut() {
             Some(dialog) => {
                 if station_dialog_id != Some(dialog.id.as_str()) {
@@ -164,8 +171,9 @@ impl DialogSlot {
     }
 }
 
-fn open(slot: &mut Option<Dialog>, context: &UniproxyContext, zone: &Zone) -> (String, Arc<Agent>) {
+fn open(slot: &mut Option<Dialog>, context: &Arc<UniproxyContext>, zone: &Zone) -> (String, Arc<Agent>) {
     let dialog = Dialog {
+        context: context.clone(),
         feedback: None,
         id: Uuid::new_v4().to_string(),
         agent: Arc::new(new_agent(context, zone)),
@@ -234,6 +242,10 @@ pub struct Request {
 impl Request {
     /// VoiceInput: transcribe, report the recognition, answer through the agent
     pub async fn answer_voice(mut self, agent: Arc<Agent>, utterance: Utterance) {
+        if self.context.gigastt.is_none() && self.context.config.openrouter_api_key.is_empty() {
+            self.answer_tts("Сначала настройте распознавание речи в пульте Quasar.".to_owned()).await;
+            return;
+        }
         let Utterance { ogg, biometry, recognition, ended_at, endpoint } = utterance;
         let ended_by_gigastt = endpoint.is_some();
         let Transcript { text, speech_ended_at } = transcribe(&self.context, recognition, &ogg, ended_at, endpoint).await;
@@ -289,6 +301,13 @@ impl Request {
         if let Some(feedback) = &self.feedback {
             feedback.running().await;
             feedback.answer(&text).await;
+        }
+        if !self.context.can_speak() {
+            report(self.outbox.alice_response(&self.target, &text, false, Vec::new()));
+            if let Some(feedback) = &self.feedback {
+                feedback.failed("Синтез речи не настроен. Откройте настройки сервера Quasar.").await;
+            }
+            return;
         }
         match self.outbox.alice_response(
             &self.target,
@@ -372,6 +391,16 @@ impl Request {
                 Err(error) => tracing::warn!("cannot stop active alarm: {error}"),
             }
         }
+        if !self.context.processor_ready() {
+            if let Some(feedback) = &self.feedback {
+                feedback.failed("Языковая модель не настроена. Откройте настройки сервера Quasar.").await;
+            }
+            let _ = parts.send(AgentOutput {
+                directives: Vec::new(), finished: true, should_listen: false,
+                text: OutputText::Complete("Сначала настройте языковую модель в пульте Quasar.".to_owned()),
+            });
+            return;
+        }
         let metadata_json = metadata.to_json();
         let session_id = agent.session_id().to_string();
         let state = dialog_state(&self.context, &session_id, metadata, &metadata_json, &self.zone, live_context).await;
@@ -454,6 +483,7 @@ impl Request {
             OutputText::Complete(text) => (text.as_str(), !text.is_empty()),
             OutputText::Streaming(_) => ("", true),
         };
+        let speaks = speaks && self.context.can_speak();
         if part.finished {
             if speaks {
                 station_directives.push(directives::tts_play_placeholder(None));
@@ -555,7 +585,7 @@ async fn transcribe(
 
 /// Transcribes the whole buffered utterance with OpenRouter; failures count as "nothing heard"
 async fn transcribe_buffered(context: &UniproxyContext, ogg: &[u8]) -> String {
-    if ogg.is_empty() {
+    if ogg.is_empty() || context.config.openrouter_api_key.is_empty() {
         return String::new();
     }
     let wav = match audio::ogg_to_wav(ogg).await {

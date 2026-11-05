@@ -92,6 +92,7 @@ pub async fn speak(
     reference_message_id: &str,
     speech_end: Option<SpeechEnd>,
 ) -> Result<()> {
+    anyhow::ensure!(context.can_speak(), "Синтез речи не настроен в настройках сервера Quasar");
     let speech = stream_speech(context, outbox, chunks, reference_message_id, speech_end);
     match tokio::time::timeout(SPEECH_LIFETIME, speech).await {
         Ok(result) => result,
@@ -255,6 +256,7 @@ async fn synthesize_openrouter(
     started: Instant,
 ) -> Result<Synthesis> {
     let config = &context.config;
+    anyhow::ensure!(!config.openrouter_api_key.is_empty(), "Резервный синтез речи OpenRouter не настроен");
     let rate = pcm_rate(context);
     let encoded = match config.tts_format {
         TtsFormat::Mp3 => Some(Encoded::Mp3),

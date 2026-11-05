@@ -6,6 +6,7 @@ mod history;
 mod icons;
 mod player;
 mod schedules;
+mod server_settings;
 mod settings;
 mod sidebar;
 mod state;
@@ -127,7 +128,7 @@ fn App() -> Element {
                                 Panel::Favorites => "Любимые команды для каждого дня. Сохраните и запускайте одним нажатием.",
                                 Panel::Schedules => "Планы на утро, важные дела и время для себя.",
                                 Panel::Timers => "Для чая, готовки и короткой паузы. Колонка напомнит сигналом.",
-                                Panel::Settings => "Имя, погода и голосовые настройки выбранной колонки.",
+                                Panel::Settings => "Модели, речь и интеграции сервера. Имя и голосовые настройки колонок.",
                                 Panel::Access => "Вход в пульт и ключи для ваших интеграций.",
                             } }
                         }

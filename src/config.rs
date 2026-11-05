@@ -1,7 +1,104 @@
-//! Server configuration from environment variables (same names as the
-//! TypeScript version), loaded from `.env.local` then `.env`.
+//! Typed operational settings, independent of their environment/database source.
 
+mod catalog;
+mod parse;
+
+use std::collections::BTreeMap;
 use std::env;
+
+use anyhow::{ensure, Context, Result};
+
+pub use catalog::{defaults, definitions, SettingDefinition};
+
+pub type Values = BTreeMap<String, String>;
+
+/// The immutable process settings needed before the database can be opened.
+#[derive(Clone)]
+pub struct BootstrapConfig {
+    pub port: u16,
+    pub api_port: u16,
+    pub postgres_url: String,
+    pub glagol_jwt_key: Vec<u8>,
+}
+
+impl BootstrapConfig {
+    pub fn from_env() -> Result<Self> {
+        let port = bootstrap_port("PORT", "31115")?;
+        let api_port = bootstrap_port("API_PORT", "31116")?;
+        ensure!(port != api_port, "PORT и API_PORT должны различаться");
+        let postgres_url = env::var("POSTGRES_URL")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "postgres://quasar:quasar@localhost/quasar".to_string());
+        // Use the database driver's parser, including its supported keyword and
+        // Unix-socket formats. Its error is replaced so credentials stay private.
+        postgres_url
+            .parse::<tokio_postgres::Config>()
+            .map_err(|_| anyhow::anyhow!("POSTGRES_URL: некорректные параметры PostgreSQL"))?;
+        let glagol_jwt_key = env::var("GLAGOL_JWT_KEY")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string())
+            .into_bytes();
+        Ok(Self {
+            port,
+            api_port,
+            postgres_url,
+            glagol_jwt_key,
+        })
+    }
+}
+
+fn bootstrap_port(key: &str, default: &str) -> Result<u16> {
+    let value = env::var(key)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default.to_string());
+    let port = value
+        .parse::<u16>()
+        .with_context(|| format!("{key}: нужен порт от 1 до 65535"))?;
+    ensure!(port > 0, "{key}: нужен порт от 1 до 65535");
+    Ok(port)
+}
+
+/// Capture only supported operational env names once. Secrets are never Debug.
+#[derive(Clone, Default)]
+pub struct Environment {
+    pub values: Values,
+    /// Canonical setting key -> the actual environment variable supplying it.
+    pub sources: BTreeMap<String, String>,
+}
+
+impl Environment {
+    pub fn capture() -> Self {
+        let mut captured = Self::default();
+        for definition in definitions() {
+            if let Ok(value) = env::var(&definition.key) {
+                captured
+                    .sources
+                    .insert(definition.key.clone(), definition.key.clone());
+                captured.values.insert(definition.key, value);
+            }
+        }
+        const CANONICAL: &str = "PROCESSOR_PROMPT_STATE_TEMPLATE_PATH";
+        const LEGACY: &str = "PROCESSOR_STATE_TEMPLATE_PATH";
+        if !captured
+            .values
+            .get(CANONICAL)
+            .is_some_and(|value| !value.is_empty())
+        {
+            if let Ok(value) = env::var(LEGACY) {
+                if !value.is_empty() {
+                    captured.values.insert(CANONICAL.to_string(), value);
+                    captured
+                        .sources
+                        .insert(CANONICAL.to_string(), LEGACY.to_string());
+                }
+            }
+        }
+        captured
+    }
+}
 
 /// Who turns the station's speech into text
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,9 +143,6 @@ pub enum TtsFormat {
     Mp3,
 }
 
-/// The reasoning efforts of OPENROUTER_PROCESSOR_REASONING
-const REASONING_EFFORTS: [&str; 5] = ["none", "minimal", "low", "medium", "high"];
-
 /// PROCESSOR_PROVIDER=anthropic: the dialog goes to Anthropic's Messages API
 #[derive(Clone)]
 pub struct AnthropicConfig {
@@ -59,9 +153,6 @@ pub struct AnthropicConfig {
     /// None: not sent, the model's default
     pub effort: Option<String>,
 }
-
-/// The efforts of ANTHROPIC_PROCESSOR_EFFORT
-const ANTHROPIC_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// Who decides that the user stopped speaking
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,11 +167,7 @@ pub enum EndOfSpeech {
 #[derive(Clone)]
 pub struct Config {
     pub allow_updates: bool,
-    pub api_port: u16,
-    pub port: u16,
-    pub postgres_url: String,
     pub updates_config_path: Option<String>,
-    pub glagol_jwt_key: Vec<u8>,
     pub openrouter_api_key: String,
     pub openrouter_base_url: String,
     pub openrouter_timeout_ms: u64,
@@ -120,6 +207,10 @@ pub struct Config {
     pub mcp_servers: Vec<McpServerConfig>,
     /// fetch a `GetLiveContext` tool's result for every turn's state
     pub mcp_live_context: bool,
+    pub function_server_urls: Vec<String>,
+    pub state_server_urls: Vec<String>,
+    pub timezone: Option<String>,
+    pub log_filter: String,
 }
 
 /// One MCP server: `<url>#<prefix>` of PROCESSOR_MCP_SERVER_URLS, as in TS, and
@@ -133,203 +224,38 @@ pub struct McpServerConfig {
     pub token: Option<String>,
 }
 
-/// PROCESSOR_MCP_SERVER_URLS with the tokens of PROCESSOR_MCP_SERVER_TOKENS;
-/// malformed entries are skipped with a warning that never shows a token
-fn mcp_servers() -> Vec<McpServerConfig> {
-    let mut tokens = std::collections::HashMap::new();
-    for (index, entry) in env::var("PROCESSOR_MCP_SERVER_TOKENS").unwrap_or_default().split(',').enumerate() {
-        match entry.trim().split_once(':') {
-            Some((prefix, token)) if !prefix.trim().is_empty() && !token.trim().is_empty() => {
-                tokens.insert(prefix.trim().to_string(), token.trim().to_string());
-            }
-            _ if entry.trim().is_empty() => {}
-            _ => tracing::warn!("PROCESSOR_MCP_SERVER_TOKENS entry {} is not <prefix>:<token>, ignored", index + 1),
-        }
-    }
-    let mut servers: Vec<McpServerConfig> = Vec::new();
-    for entry in env::var("PROCESSOR_MCP_SERVER_URLS").unwrap_or_default().split(',').map(str::trim) {
-        // as TS: <mcp-endpoint-url>#<function-name-prefix>
-        match entry.split_once('#').map(|(url, prefix)| (url.trim(), prefix.trim())) {
-            // one prefix names one server's functions
-            Some((_, prefix)) if servers.iter().any(|server| server.prefix == prefix) => {
-                tracing::warn!("PROCESSOR_MCP_SERVER_URLS entry '{entry}' repeats the prefix '{prefix}', ignored")
-            }
-            Some((url, prefix)) if !url.is_empty() && !prefix.is_empty() => servers.push(McpServerConfig {
-                url: url.to_string(),
-                prefix: prefix.to_string(),
-                token: tokens.remove(prefix),
-            }),
-            _ if entry.is_empty() => {}
-            _ => tracing::warn!("PROCESSOR_MCP_SERVER_URLS entry '{entry}' is not <url>#<prefix>, ignored"),
-        }
-    }
-    for prefix in tokens.keys() {
-        tracing::warn!("PROCESSOR_MCP_SERVER_TOKENS has a token for '{prefix}', which no MCP server uses");
-    }
-    servers
-}
-
-fn var_or(name: &str, default: &str) -> String {
-    env::var(name).ok().filter(|value| !value.is_empty()).unwrap_or_else(|| default.to_string())
-}
-
-fn opt_var(name: &str) -> Option<String> {
-    env::var(name).ok().filter(|value| !value.is_empty())
-}
-
-/// STT_END_OF_SPEECH: `server` by default with gigastt, which alone can tell
-/// the end of speech while the station records
-fn end_of_speech(stt_provider: SttProvider) -> EndOfSpeech {
-    match (opt_var("STT_END_OF_SPEECH").map(|value| value.trim().to_ascii_lowercase()).as_deref(), stt_provider) {
-        (None | Some("server"), SttProvider::GigaAm) => EndOfSpeech::Server,
-        (None | Some("station"), _) => EndOfSpeech::Station,
-        (Some("server"), SttProvider::OpenRouter) => {
-            tracing::warn!("STT_END_OF_SPEECH=server needs STT_PROVIDER=gigaam: the station ends utterances");
-            EndOfSpeech::Station
-        }
-        (Some(other), _) => panic!("STT_END_OF_SPEECH must be server or station, not '{other}'"),
-    }
-}
-
-/// PIPER_*: read only with TTS_PROVIDER=piper; an invalid value stops the server at start
-fn piper_config(tts_speed: f32) -> PiperConfig {
-    let url = opt_var("PIPER_URL").map(|url| url.trim().trim_end_matches('/').to_string());
-    let url = url.expect("PIPER_URL is required with TTS_PROVIDER=piper, e.g. http://piper:5000");
-    match reqwest::Url::parse(&url) {
-        Ok(parsed) if matches!(parsed.scheme(), "http" | "https") => {}
-        _ => panic!("PIPER_URL must be an http(s) address, not '{url}'"),
-    }
-    let text = |name: &str| opt_var(name).map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
-    let length_scale = match text("PIPER_LENGTH_SCALE") {
-        Some(value) => match value.parse::<f32>() {
-            Ok(scale) if scale.is_finite() && scale > 0.0 => Some(scale),
-            _ => panic!("PIPER_LENGTH_SCALE must be a positive number, not '{value}'"),
-        },
-        // the speed set for OpenRouter, as Piper's phoneme length
-        None if tts_speed.is_finite() && tts_speed > 0.0 && (tts_speed - 1.0).abs() > f32::EPSILON => Some(1.0 / tts_speed),
-        None => None,
-    };
-    PiperConfig {
-        url,
-        voice: text("PIPER_VOICE"),
-        speaker: text("PIPER_SPEAKER"),
-        speaker_id: text("PIPER_SPEAKER_ID").map(|value| {
-            value.parse().unwrap_or_else(|_| panic!("PIPER_SPEAKER_ID must be a whole number, not '{value}'"))
-        }),
-        length_scale,
-        fallback: match var_or("PIPER_FALLBACK", "openrouter").trim().to_ascii_lowercase().as_str() {
-            "openrouter" => true,
-            "none" => false,
-            other => panic!("PIPER_FALLBACK must be openrouter or none, not '{other}'"),
-        },
-    }
-}
-
-/// ANTHROPIC_*: read only with PROCESSOR_PROVIDER=anthropic; an invalid value stops the server at start
-fn anthropic_config() -> AnthropicConfig {
-    // unset: low, as the first words of a spoken answer matter more than deep
-    // thought; an explicitly empty value leaves the model's default
-    let effort = match env::var("ANTHROPIC_PROCESSOR_EFFORT") {
-        Ok(value) if value.trim().is_empty() => None,
-        Ok(value) => Some(value.trim().to_ascii_lowercase()),
-        Err(_) => Some("low".to_string()),
-    };
-    if let Some(effort) = effort.as_deref().filter(|effort| !ANTHROPIC_EFFORTS.contains(effort)) {
-        panic!("ANTHROPIC_PROCESSOR_EFFORT must be one of {}, not '{effort}'", ANTHROPIC_EFFORTS.join("|"));
-    }
-    AnthropicConfig {
-        api_key: opt_var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY is required with PROCESSOR_PROVIDER=anthropic"),
-        base_url: var_or("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-        timeout_ms: var_or("ANTHROPIC_TIMEOUT_MS", "10000").parse().expect("ANTHROPIC_TIMEOUT_MS must be a number"),
-        effort,
-    }
-}
-
 impl Config {
-    pub fn from_env() -> Self {
-        let anthropic = match var_or("PROCESSOR_PROVIDER", "openrouter").trim().to_ascii_lowercase().as_str() {
-            "openrouter" => None,
-            "anthropic" => Some(anthropic_config()),
-            other => panic!("PROCESSOR_PROVIDER must be openrouter or anthropic, not '{other}'"),
-        };
-        let tts_speed: f32 = var_or("OPENROUTER_TTS_SPEED", "1").parse().expect("OPENROUTER_TTS_SPEED must be a number");
-        let tts_provider = match var_or("TTS_PROVIDER", "openrouter").trim().to_ascii_lowercase().as_str() {
-            "openrouter" => TtsProvider::OpenRouter,
-            "piper" => TtsProvider::Piper,
-            other => panic!("TTS_PROVIDER must be openrouter or piper, not '{other}'"),
-        };
-        let stt_provider = match var_or("STT_PROVIDER", "openrouter").trim().to_ascii_lowercase().as_str() {
-            "openrouter" => SttProvider::OpenRouter,
-            "gigaam" => SttProvider::GigaAm,
-            other => panic!("STT_PROVIDER must be openrouter or gigaam, not '{other}'"),
-        };
-        Self {
-            allow_updates: var_or("ALLOW_UPDATES", "false").trim().eq_ignore_ascii_case("true"),
-            port: var_or("PORT", "31115").parse().expect("PORT must be a number"),
-            postgres_url: var_or("POSTGRES_URL", "postgres://quasar:quasar@localhost/quasar"),
-            updates_config_path: opt_var("UPDATES_CONFIG_PATH"),
-            api_port: var_or("API_PORT", "31116").parse().expect("API_PORT must be a number"),
-            // like TS: a random key per start unless one is configured
-            glagol_jwt_key: opt_var("GLAGOL_JWT_KEY")
-                .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string())
-                .into_bytes(),
-            openrouter_api_key: opt_var("OPENROUTER_API_KEY").expect(
-                "OPENROUTER_API_KEY is required: STT and TTS go through OpenRouter, at least as the fallback of gigastt and Piper",
-            ),
-            openrouter_base_url: var_or("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-            openrouter_timeout_ms: var_or("OPENROUTER_TIMEOUT_MS", "10000").parse().expect("OPENROUTER_TIMEOUT_MS must be a number"),
-            stt_model: var_or("OPENROUTER_STT_MODEL", "openai/whisper-large-v3"),
-            // an explicitly empty value lets the model detect the language, as in TS
-            stt_language: match env::var("OPENROUTER_STT_LANGUAGE") {
-                Ok(value) if value.is_empty() => None,
-                Ok(value) => Some(value),
-                Err(_) => Some("ru".to_string()),
-            },
-            stt_provider,
-            gigastt_url: opt_var("GIGASTT_URL"),
-            end_of_speech: end_of_speech(stt_provider),
-            gigastt_min_silence_ms: match var_or("GIGASTT_MIN_SILENCE_MS", "800").trim().parse() {
-                Ok(0) | Err(_) => panic!("GIGASTT_MIN_SILENCE_MS must be a positive number of milliseconds"),
-                Ok(milliseconds) => milliseconds,
-            },
-            tts_model: var_or("OPENROUTER_TTS_MODEL", "google/gemini-3.8-flash-lite-tts"),
-            tts_voice: var_or("OPENROUTER_TTS_VOICE", "Kore"),
-            tts_instructions: opt_var("OPENROUTER_TTS_INSTRUCTIONS"),
-            tts_pcm_sample_rate: var_or("OPENROUTER_TTS_PCM_SAMPLE_RATE", "24000").parse().expect("OPENROUTER_TTS_PCM_SAMPLE_RATE must be a number"),
-            tts_format: match var_or("OPENROUTER_TTS_FORMAT", "pcm").trim().to_ascii_lowercase().as_str() {
-                "pcm" => TtsFormat::Pcm,
-                "mp3" => TtsFormat::Mp3,
-                other => panic!("OPENROUTER_TTS_FORMAT must be pcm or mp3, not '{other}'"),
-            },
-            tts_speed,
-            tts_provider,
-            piper: (tts_provider == TtsProvider::Piper).then(|| piper_config(tts_speed)),
-            tts_streaming: var_or("OPENROUTER_TTS_STREAMING", "true").trim().eq_ignore_ascii_case("true"),
-            processor_model: match anthropic {
-                Some(_) => var_or("ANTHROPIC_PROCESSOR_MODEL", "claude-opus-5-5"),
-                None => var_or("OPENROUTER_PROCESSOR_MODEL", "google/gemini-3.8-flash"),
-            },
-            anthropic,
-            processor_reasoning: opt_var("OPENROUTER_PROCESSOR_REASONING")
-                .map(|effort| effort.trim().to_ascii_lowercase())
-                .filter(|effort| !effort.is_empty())
-                .inspect(|effort| {
-                    if !REASONING_EFFORTS.contains(&effort.as_str()) {
-                        panic!("OPENROUTER_PROCESSOR_REASONING must be one of {}, not '{effort}'", REASONING_EFFORTS.join("|"));
-                    }
-                }),
-            processor_prompt_path: var_or("PROCESSOR_PROMPT_TEMPLATE_PATH", "prompt.handlebars"),
-            // TS name first; the earlier Rust-only name keeps working
-            processor_state_prompt_path: opt_var("PROCESSOR_PROMPT_STATE_TEMPLATE_PATH")
-                .or_else(|| opt_var("PROCESSOR_STATE_TEMPLATE_PATH"))
-                .unwrap_or_else(|| "prompt-state.handlebars".to_string()),
-            // 0: no response cache at all
-            processor_cache_size: var_or("PROCESSOR_CACHE_SIZE", "1000")
-                .trim()
-                .parse()
-                .unwrap_or_else(|_| panic!("PROCESSOR_CACHE_SIZE must be a number of answers (0 turns the cache off)")),
-            mcp_servers: mcp_servers(),
-            mcp_live_context: !var_or("PROCESSOR_MCP_LIVE_CONTEXT", "true").trim().eq_ignore_ascii_case("false"),
-        }
+    /// Parse a complete snapshot without reading or changing process env.
+    pub fn from_values(values: &Values) -> Result<Self> {
+        parse::config(values)
     }
+}
+
+/// Missing primary-provider credentials are reported to the UI, not a startup panic.
+/// An absent optional fallback credential does not disable a healthy local provider.
+pub fn readiness_issues(config: &Config) -> Vec<String> {
+    let mut issues = Vec::new();
+    if config.openrouter_api_key.is_empty()
+        && (config.anthropic.is_none()
+            || config.stt_provider == SttProvider::OpenRouter
+            || config.tts_provider == TtsProvider::OpenRouter)
+    {
+        issues.push(
+            "Задайте OPENROUTER_API_KEY для выбранного провайдера модели или речи".to_string(),
+        );
+    }
+    if config
+        .anthropic
+        .as_ref()
+        .is_some_and(|provider| provider.api_key.is_empty())
+    {
+        issues.push("Задайте ANTHROPIC_API_KEY для выбранной модели".to_string());
+    }
+    if config.stt_provider == SttProvider::GigaAm && config.gigastt_url.is_none() {
+        issues.push("Задайте GIGASTT_URL для распознавания речи".to_string());
+    }
+    if config.tts_provider == TtsProvider::Piper && config.piper.is_none() {
+        issues.push("Задайте PIPER_URL для синтеза речи".to_string());
+    }
+    issues
 }

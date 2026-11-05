@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 use std::fmt::Display;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Mutex, OnceLock, PoisonError, RwLock};
 
 use chrono::{DateTime, Datelike, Local, TimeZone, Utc, Weekday};
 use chrono_tz::Tz;
@@ -25,7 +25,7 @@ impl Zone {
     /// The station's zone if it names a known one, else `TZ`, else the server's local zone
     pub fn of_station(name: Option<&str>) -> Self {
         name.and_then(|name| parse(name, "the station's time zone"))
-            .or_else(environment)
+            .or_else(default_zone)
             .map_or(Self::Local, Self::Named)
     }
 
@@ -39,13 +39,20 @@ impl Zone {
     }
 }
 
-/// `TZ`, read once; a leading colon is POSIX for "a zone file name"
-fn environment() -> Option<Tz> {
-    static ZONE: OnceLock<Option<Tz>> = OnceLock::new();
-    *ZONE.get_or_init(|| {
-        let name = std::env::var("TZ").ok()?;
-        parse(name.strip_prefix(':').unwrap_or(&name), "TZ")
-    })
+fn default_slot() -> &'static RwLock<Option<Tz>> {
+    static ZONE: OnceLock<RwLock<Option<Tz>>> = OnceLock::new();
+    ZONE.get_or_init(|| RwLock::new(None))
+}
+
+/// The validated server setting, initially supplied by TZ. No process-wide
+/// environment mutation is needed when a saved override changes.
+pub fn set_default(name: Option<&str>) {
+    let zone = name.and_then(|name| name.strip_prefix(':').unwrap_or(name).parse().ok());
+    *default_slot().write().unwrap_or_else(PoisonError::into_inner) = zone;
+}
+
+fn default_zone() -> Option<Tz> {
+    *default_slot().read().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// An IANA name; an unknown or empty one is warned about once per distinct value

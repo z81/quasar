@@ -377,6 +377,34 @@ select { font: inherit; color: var(--text); background: var(--surface); }
 .server-setting-help summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .server-setting-help-body { position: absolute; left: 0; right: 0; top: calc(100% - 6px); z-index: 2; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--secondary); box-shadow: 0 6px 18px var(--line); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .server-setting-help-body p + p { margin-top: 6px; }
+.mcp-heading, .mcp-footer, .mcp-row-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; }
+.mcp-heading h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.mcp-count { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.mcp-heading > .text-button { font-size: 11px; }
+.mcp-rows { display: grid; gap: 10px; margin: 12px 0; }
+.mcp-row { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); }
+.mcp-fields { display: grid; grid-template-columns: 110px minmax(0, 1.3fr) minmax(0, 1fr); gap: 12px; }
+.mcp-fields .form-field { min-width: 0; margin: 0; }
+.mcp-fields .form-field > span { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 6px; color: var(--secondary); font-size: 10px; min-height: 16px; margin-bottom: 6px; }
+.mcp-fields .form-field > span small { margin: 0; font-size: 9px; font-weight: 400; }
+.mcp-fields .form-field > span small.mcp-token-changed { color: var(--accent-text); }
+.mcp-fields input { background: var(--surface); }
+.mcp-row-footer { margin-top: 8px; }
+.mcp-row-footer .failure, .mcp-hint.failure { color: var(--error); font-size: 10px; }
+.mcp-row-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-left: auto; }
+.mcp-row-actions .text-button { font-size: 10px; }
+.mcp-remove { color: var(--secondary); }
+.mcp-remove:hover:not(:disabled) { color: var(--error); }
+.mcp-sources { display: flex; flex-wrap: wrap; gap: 6px; }
+.mcp-empty, .mcp-hint { color: var(--muted); font-size: 11px; line-height: 1.6; margin: 12px 0; }
+@media (max-width: 700px) {
+  .mcp-fields { grid-template-columns: 110px minmax(0, 1fr); }
+  .mcp-token { grid-column: 1 / -1; }
+}
+@media (max-width: 480px) {
+  .mcp-fields { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .mcp-fields .form-field input { font-size: 16px; }
+}
 @media (max-width: 900px) { .server-settings-grid { grid-template-columns: minmax(0, 1fr); } }
 .server-settings-savebar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 12px 16px; margin-top: 14px; }
 .server-settings-savebar > div:first-child { display: grid; gap: 4px; }

@@ -201,7 +201,7 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
         processor_prompt_path: values.required("PROCESSOR_PROMPT_TEMPLATE_PATH")?,
         processor_state_prompt_path: values.required("PROCESSOR_PROMPT_STATE_TEMPLATE_PATH")?,
         processor_cache_size: values.integer("PROCESSOR_CACHE_SIZE")?,
-        mcp_servers: mcp_servers(&values)?,
+        mcp_servers: mcp_servers(&values.0)?,
         mcp_live_context: values.boolean("PROCESSOR_MCP_LIVE_CONTEXT"),
         function_server_urls: urls(
             "PROCESSOR_FUNCTION_SERVER_URLS",
@@ -307,9 +307,9 @@ fn prefix(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
-fn mcp_servers(values: &Parsed) -> Result<Vec<McpServerConfig>> {
+pub(crate) fn mcp_tokens(value: &str) -> Result<BTreeMap<String, String>> {
     let mut tokens = BTreeMap::new();
-    for entry in entries(&values.text("PROCESSOR_MCP_SERVER_TOKENS")) {
+    for entry in entries(value) {
         let Some((name, token)) = entry.split_once(':') else {
             bail!("PROCESSOR_MCP_SERVER_TOKENS: нужны записи префикс:токен");
         };
@@ -326,8 +326,23 @@ fn mcp_servers(values: &Parsed) -> Result<Vec<McpServerConfig>> {
         );
         tokens.insert(name.to_string(), token.to_string());
     }
+    Ok(tokens)
+}
+
+pub(crate) fn mcp_servers(values: &Values) -> Result<Vec<McpServerConfig>> {
+    let mut tokens = mcp_tokens(
+        values
+            .get("PROCESSOR_MCP_SERVER_TOKENS")
+            .map(String::as_str)
+            .unwrap_or_default(),
+    )?;
     let mut result: Vec<McpServerConfig> = Vec::new();
-    for entry in entries(&values.text("PROCESSOR_MCP_SERVER_URLS")) {
+    for entry in entries(
+        values
+            .get("PROCESSOR_MCP_SERVER_URLS")
+            .map(String::as_str)
+            .unwrap_or_default(),
+    ) {
         ensure!(
             result.len() < 32,
             "PROCESSOR_MCP_SERVER_URLS: допускается не больше 32 серверов"

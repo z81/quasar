@@ -9,6 +9,7 @@ use std::env;
 use anyhow::{ensure, Context, Result};
 
 pub use catalog::{defaults, definitions, SettingDefinition};
+pub(crate) use parse::{mcp_servers, mcp_tokens};
 
 pub type Values = BTreeMap<String, String>;
 

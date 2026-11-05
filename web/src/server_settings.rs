@@ -1,4 +1,5 @@
 mod field;
+mod mcp;
 
 use std::collections::BTreeMap;
 
@@ -79,6 +80,8 @@ struct SettingsResponse {
     issues: Vec<String>,
     fields: Vec<Setting>,
     bootstrap: Bootstrap,
+    #[serde(default)]
+    mcp: Option<mcp::McpSettings>,
 }
 
 #[derive(Clone, Deserialize, PartialEq)]
@@ -97,6 +100,7 @@ struct Editor {
     error: Signal<Option<String>>,
     feedback: Signal<Option<String>>,
     conflict: Signal<bool>,
+    mcp: Signal<Option<mcp::Draft>>,
 }
 
 impl Editor {
@@ -163,9 +167,11 @@ fn save(state: ControlState, mut editor: Editor) {
         return;
     };
     let changes = editor.changes.peek().clone();
-    if changes.is_empty()
+    let mcp = editor.mcp.peek().clone();
+    if (changes.is_empty() && mcp.is_none())
         || !response.persistent
         || response.fields.iter().any(|field| field.invalid(&changes))
+        || mcp.as_ref().is_some_and(mcp::Draft::invalid)
     {
         return;
     }
@@ -173,7 +179,10 @@ fn save(state: ControlState, mut editor: Editor) {
     editor.error.set(None);
     editor.feedback.set(None);
     dioxus::core::spawn_forever(async move {
-        let body = json!({"revision":response.revision,"changes":changes});
+        let mut body = json!({"revision":response.revision,"changes":changes});
+        if let Some(mcp) = mcp {
+            body["mcp"] = json!(mcp);
+        }
         let result = match api::mutate(state, "PATCH", ENDPOINT, Some(&body)).await {
             Ok(response) => response.json::<SettingsResponse>().await.map_err(|_| {
                 "Сервер вернул непонятный ответ. Обновите настройки перед повтором.".to_string()
@@ -192,6 +201,7 @@ fn save(state: ControlState, mut editor: Editor) {
                 };
                 editor.response.set(Some(response));
                 editor.changes.set(Changes::new());
+                editor.mcp.set(None);
                 editor.feedback.set(Some(message.into()));
                 editor.conflict.set(false);
             }
@@ -226,6 +236,7 @@ pub fn ServerSettings(state: ControlState) -> Element {
         error: use_signal(|| None),
         feedback: use_signal(|| None),
         conflict: use_signal(|| false),
+        mcp: use_signal(|| None),
     };
     let mut group = use_signal(String::new);
     use_future(move || load(state, editor));
@@ -251,7 +262,10 @@ pub fn ServerSettings(state: ControlState) -> Element {
     } else {
         groups.first().cloned().unwrap_or_default()
     };
-    let invalid = fields.iter().any(|field| field.invalid(&changes));
+    let mcp_draft = (editor.mcp)();
+    let change_count = changes.len() + usize::from(mcp_draft.is_some());
+    let invalid = fields.iter().any(|field| field.invalid(&changes))
+        || mcp_draft.as_ref().is_some_and(mcp::Draft::invalid);
     let editable = response
         .as_ref()
         .is_some_and(|response| response.persistent)
@@ -286,7 +300,8 @@ pub fn ServerSettings(state: ControlState) -> Element {
                         for name in groups {
                             {
                                 let selected_group = name.clone();
-                                let count = fields.iter().filter(|field| field.group == name && changes.contains_key(&field.key)).count();
+                                let count = fields.iter().filter(|field| field.group == name && changes.contains_key(&field.key)).count()
+                                    + usize::from(name == "integrations" && mcp_draft.is_some());
                                 rsx! { button { class: if selected == name { "server-settings-group active" } else { "server-settings-group" }, aria_current: if selected == name { "page" } else { "false" }, onclick: move |_| group.set(selected_group.clone()),
                                     span { "{group_label(&name)}" } if count > 0 { span { class: "setting-change-count", "{count}" } }
                                 } }
@@ -296,20 +311,25 @@ pub fn ServerSettings(state: ControlState) -> Element {
                     div { class: "card server-settings-fields",
                         div { class: "server-settings-group-heading", h2 { "{group_label(&selected)}" } }
                         div { class: "server-settings-grid",
-                            for setting in fields.iter().filter(|field| field.group == selected) {
+                            if selected == "integrations" {
+                                if let Some(mcp) = response.mcp.as_ref() {
+                                    mcp::McpEditor { settings: mcp.clone(), fields: fields.clone(), editor, disabled: !editable }
+                                }
+                            }
+                            for setting in fields.iter().filter(|field| field.group == selected && (response.mcp.is_none() || !mcp::is_key(&field.key))) {
                                 field::SettingField { key: "{setting.key}", setting: setting.clone(), editor, disabled: !editable }
                             }
                         }
                     }
                 }
                 div { class: "server-settings-savebar",
-                    div { strong { if changes.is_empty() { "Все изменения сохранены" } else { "Несохранённых изменений: {changes.len()}" } }
-                        if invalid { small { class: "failure", "Проверьте числовые значения в отмеченных полях." } }
+                    div { strong { if change_count == 0 { "Все изменения сохранены" } else { "Несохранённых изменений: {change_count}" } }
+                        if invalid { small { class: "failure", "Проверьте значения в отмеченных полях." } }
                         else { small { "Значения в env сохраняются. Переопределение можно сбросить отдельно у каждой строки." } }
                     }
                     div { class: "server-settings-save-actions",
-                        button { class: "text-button", disabled: busy || changes.is_empty(), onclick: move |_| { editor.changes.set(Changes::new()); editor.feedback.set(None); }, "Отменить изменения" }
-                        button { class: "button primary", disabled: !editable || changes.is_empty() || invalid || (editor.conflict)(), onclick: move |_| save(state, editor),
+                        button { class: "text-button", disabled: busy || change_count == 0, onclick: move |_| { editor.changes.set(Changes::new()); editor.mcp.set(None); editor.feedback.set(None); }, "Отменить изменения" }
+                        button { class: "button primary", disabled: !editable || change_count == 0 || invalid || (editor.conflict)(), onclick: move |_| save(state, editor),
                             if (editor.saving)() { span { class: "spinner" } "Применяем…" } else { Icon { name: "check", size: 16 } "Сохранить и применить" }
                         }
                     }

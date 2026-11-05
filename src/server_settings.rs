@@ -1,5 +1,7 @@
 //! Durable operational overrides. The process environment remains the baseline.
 
+mod mcp;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,7 +41,9 @@ type Result<T> = std::result::Result<T, SettingsError>;
 #[serde(deny_unknown_fields)]
 pub struct Patch {
     pub revision: u64,
+    #[serde(default)]
     pub changes: BTreeMap<String, Option<String>>,
+    pub mcp: Option<mcp::Patch>,
 }
 
 #[derive(Serialize)]
@@ -69,6 +73,7 @@ pub struct SettingsView {
     ready: bool,
     issues: Vec<String>,
     fields: Vec<Field>,
+    mcp: mcp::View,
     bootstrap: Bootstrap,
 }
 
@@ -164,7 +169,7 @@ impl ServerSettings {
         let mut applied = self.applied_revision.lock().await;
         let (_, document) = read(&self.storage).await?;
         self.apply_external(&document, &mut applied).await?;
-        Ok(self.view(&document))
+        self.view(&document)
     }
 
     pub async fn patch(&self, patch: Patch) -> Result<SettingsView> {
@@ -175,6 +180,15 @@ impl ServerSettings {
         let (expected, mut document) = read(&self.storage).await?;
         if patch.revision != document.revision {
             return Err(SettingsError::Conflict);
+        }
+        if let Some(mcp) = patch.mcp {
+            if patch.changes.contains_key(mcp::URLS) || patch.changes.contains_key(mcp::TOKENS) {
+                return Err(SettingsError::Invalid(
+                    "MCP: используйте либо редактор серверов, либо отдельные значения настроек"
+                        .into(),
+                ));
+            }
+            mcp::apply(mcp, &effective(&self.environment, &document), &mut document)?;
         }
         let definitions = config::definitions();
         for (key, value) in patch.changes {
@@ -200,7 +214,7 @@ impl ServerSettings {
         let updated = serde_json::to_value(&document).map_err(|_| SettingsError::Unavailable)?;
         if updated == expected {
             self.apply_external(&document, &mut applied).await?;
-            return Ok(self.view(&document));
+            return self.view(&document);
         }
         let config = Config::from_values(&effective(&self.environment, &document))
             .map_err(|error| SettingsError::Invalid(error.to_string()))?;
@@ -225,10 +239,10 @@ impl ServerSettings {
         }
         self.runtime.activate(prepared);
         *applied = document.revision;
-        Ok(self.view(&document))
+        self.view(&document)
     }
 
-    fn view(&self, document: &Document) -> SettingsView {
+    fn view(&self, document: &Document) -> Result<SettingsView> {
         let baseline = baseline(&self.environment);
         let values = effective(&self.environment, document);
         let fields = config::definitions()
@@ -257,18 +271,19 @@ impl ServerSettings {
             })
             .collect();
         let issues = config::readiness_issues(&self.runtime.snapshot().config);
-        SettingsView {
+        Ok(SettingsView {
             revision: document.revision,
             persistent: self.storage.is_persistent(),
             ready: issues.is_empty(),
             issues,
             fields,
+            mcp: mcp::view(&values, &baseline)?,
             bootstrap: Bootstrap {
                 port: self.port,
                 api_port: self.api_port,
                 env_only: ["PORT", "API_PORT", "POSTGRES_URL", "GLAGOL_JWT_KEY"],
             },
-        }
+        })
     }
 }
 

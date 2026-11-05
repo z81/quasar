@@ -16,6 +16,22 @@ pub(super) fn send(bridge: Signal<Option<document::Eval>>, message: Value) {
 }
 
 #[component]
+pub fn DeviceAccessPage(state: ControlState) -> Element {
+    let device = state.device();
+    rsx! {
+        if device.is_none() {
+            div { class: "card history-empty", Icon { name: "speaker", size: 28 }
+                h3 { "Выберите колонку" }
+                p { "Терминал и файлы появятся после выбора колонки в меню." }
+            }
+        }
+        for device in device {
+            DeviceAccess { key: "{device.duid}", state, duid: device.duid }
+        }
+    }
+}
+
+#[component]
 pub fn DeviceAccess(mut state: ControlState, duid: String) -> Element {
     let mut host = use_signal(String::new);
     let mut port = use_signal(|| "23".to_owned());

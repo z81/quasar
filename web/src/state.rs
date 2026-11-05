@@ -90,6 +90,7 @@ pub enum Panel {
     Schedules,
     Timers,
     Settings,
+    DeviceAccess,
     Access,
 }
 
@@ -103,6 +104,7 @@ impl Panel {
             Self::Schedules => "Будильники",
             Self::Timers => "Таймеры",
             Self::Settings => "Настройки",
+            Self::DeviceAccess => "Терминал и файлы",
             Self::Access => "Доступ",
         }
     }

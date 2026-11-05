@@ -21,6 +21,7 @@ pub fn Icon(name: &'static str, #[props(default = 20)] size: u32) -> Element {
         "edit" => "m15 4 5 5 M4 15 15 4a3.5 3.5 0 0 1 5 5L9 20H4v-5Z",
         "globe" => "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z M3 12h18 M12 3c5 5 5 13 0 18-5-5-5-13 0-18Z",
         "code" => "m8 5-7 7 7 7 M16 5l7 7-7 7 M14 3l-4 18",
+        "terminal" => "m4 6 6 6-6 6 M13 18h7",
         "speaker" => "M8 3h8a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3Z M12 6h.01 M15 14a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z",
         "arrow" => "M5 12h14 M13 6l6 6-6 6",
         "refresh" => "M20 7v5h-5 M4 17v-5h5 M6 6a8 8 0 0 1 13 2 M18 18A8 8 0 0 1 5 16",

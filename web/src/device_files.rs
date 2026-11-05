@@ -4,6 +4,12 @@ use serde_json::{json, Value};
 
 use super::send;
 
+const CONFIG_SHORTCUTS: [(&str, &str); 3] = [
+    ("Quasar", "/system/vendor/quasar/quasar.cfg"),
+    ("Запуск сервисов", "/system/vendor/quasar/launch.json"),
+    ("DNS", "/etc/resolv.conf"),
+];
+
 #[derive(Clone, Deserialize, PartialEq)]
 struct Entry {
     name: String,
@@ -126,6 +132,17 @@ pub(super) fn FileBrowser(bridge: Signal<Option<document::Eval>>, mut data: File
         div { class: "device-files",
             div { class: "device-files-layout",
                 div { class: "device-file-browser",
+                    nav { class: "device-file-shortcuts", aria_label: "Важные конфиги",
+                        h3 { "Важные конфиги" }
+                        div { class: "device-file-shortcut-list",
+                            for (label, path) in CONFIG_SHORTCUTS {
+                                button { key: "{path}", class: if (data.file)().as_deref() == Some(path) { "device-file-entry selected" } else { "device-file-entry" }, aria_current: if (data.file)().as_deref() == Some(path) { "true" } else { "false" }, disabled: busy || dirty,
+                                    onclick: move |_| { data.busy.set(true); data.notice.set(None); send(bridge,json!({"type":"read","path":path})); },
+                                    span { class: "device-file-shortcut-copy", strong { "{label}" } small { "{path}" } }
+                                }
+                            }
+                        }
+                    }
                     form { class: "device-file-location", onsubmit: move |event| { event.prevent_default(); if busy || dirty {return;} data.busy.set(true); send(bridge,json!({"type":"list","path":location()})); },
                         button { class: "button secondary", r#type: "button", disabled: busy || dirty || (data.path)()=="/", onclick: move |_| { data.busy.set(true); send(bridge,json!({"type":"list","path":parent(&(data.path)())})); }, "↑" }
                         input { aria_label: "Путь к каталогу", value:"{location}", disabled: busy || dirty, spellcheck:"false", oninput: move |event| location.set(event.value()) }

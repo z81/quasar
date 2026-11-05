@@ -495,7 +495,7 @@ async fn revoke_token(
     no_store(StatusCode::NO_CONTENT.into_response())
 }
 
-pub(crate) async fn require_owner(manager: &AuthManager, headers: &HeaderMap) -> Result<(), Response> {
+async fn require_owner(manager: &AuthManager, headers: &HeaderMap) -> Result<(), Response> {
     match manager.access(headers).await {
         Ok(Some(Access::Owner)) => Ok(()),
         Ok(_) => Err(error(
@@ -506,14 +506,29 @@ pub(crate) async fn require_owner(manager: &AuthManager, headers: &HeaderMap) ->
     }
 }
 
-/// Remote device access always requires a configured owner login and a browser
-/// Origin, including the GET used to upgrade a WebSocket. Integration tokens
-/// and the initial open setup mode must never grant a remote shell.
+/// Device sessions follow the optional Quasar password: open access until it is
+/// configured, then owner login only. Integration tokens never grant a shell.
+pub(crate) async fn require_device_session(
+    manager: &AuthManager,
+    headers: &HeaderMap,
+) -> Result<(), Response> {
+    match manager.access(headers).await {
+        Ok(Some(Access::Open | Access::Owner)) => Ok(()),
+        Ok(Some(Access::Token)) => Err(error(
+            StatusCode::FORBIDDEN,
+            "Подключение к колонке недоступно через API-токен",
+        )),
+        Ok(None) => Err(error(StatusCode::UNAUTHORIZED, "Войдите как владелец Quasar")),
+        Err(()) => Err(storage_unavailable()),
+    }
+}
+
+/// WebSocket upgrades require a same-origin browser in both access modes.
 pub(crate) async fn require_device_access(
     manager: &AuthManager,
     headers: &HeaderMap,
 ) -> Result<(), Response> {
-    require_owner(manager, headers).await?;
+    require_device_session(manager, headers).await?;
     if !same_origin(headers, true) {
         return Err(error(
             StatusCode::FORBIDDEN,

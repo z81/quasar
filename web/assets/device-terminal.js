@@ -100,7 +100,7 @@ export async function createTerminal(config, report) {
             } else { emit(value); }
           } catch (_) { emit({ type: 'error', message: 'Не удалось прочитать ответ терминала.' }); }
         };
-        socket.onerror = () => emit({ type: 'error', message: 'Соединение не установлено. Проверьте адрес, порт и вход владельца в пульт.' });
+        socket.onerror = () => emit({ type: 'error', message: 'Соединение не установлено. Проверьте адрес, порт и доступность колонки из сети сервера.' });
         socket.onclose = () => { connected = false; emit({ type: 'closed' }); };
         return;
       }

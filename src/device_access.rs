@@ -1,4 +1,4 @@
-//! Owner-initiated device sessions. Terminal and file access use separate TCP
+//! User-initiated device sessions. Terminal and file access use separate TCP
 //! connections; credentials are entered interactively and never retained.
 
 mod display;
@@ -134,7 +134,7 @@ async fn authorize(
     if require_origin {
         crate::auth::require_device_access(&state.auth, headers).await?;
     } else {
-        crate::auth::require_owner(&state.auth, headers).await?;
+        crate::auth::require_device_session(&state.auth, headers).await?;
     }
     match state.api.storage.list().await {
         Ok(stations) if stations.iter().any(|station| station.duid == duid) => Ok(()),
@@ -293,7 +293,7 @@ async fn session(
                     break;
                 }
                 if crate::auth::require_device_access(&state.auth, &headers).await.is_err() {
-                    let _ = report(&mut socket, "Сессия владельца завершена. Войдите снова.", false).await;
+                    let _ = report(&mut socket, "Доступ к подключению завершён. Обновите страницу Quasar.", false).await;
                     break;
                 }
             }
@@ -342,7 +342,7 @@ async fn session(
                                 if send(&mut socket, json!({"type":"shell_ready"})).await.is_err() { break; }
                             }
                             Err(_) => {
-                                let _ = report(&mut socket, "Не удалось подтвердить POSIX-оболочку с base64. Выполните вход и подключитесь снова.", false).await;
+                                let _ = report(&mut socket, "Не удалось подтвердить POSIX-оболочку с base64. Убедитесь, что открыта командная строка, и подключитесь снова.", false).await;
                                 break;
                             }
                         }

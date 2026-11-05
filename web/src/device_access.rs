@@ -20,15 +20,13 @@ pub fn DeviceAccess(mut state: ControlState, duid: String) -> Element {
     let mut host = use_signal(String::new);
     let mut port = use_signal(|| "23".to_owned());
     let mut files_tab = use_signal(|| false);
-    let auth = (state.auth)();
-    let owner = auth.configured && auth.authenticated;
     rsx! {
         document::Stylesheet { href: asset!("/assets/device-access.css") }
         document::Stylesheet { href: asset!("/assets/vendor/xterm-6.0.0.css") }
         section { class: "card device-access", aria_label: "Доступ к колонке",
             div { class: "device-access-heading", span { class: "card-kicker", "ДОСТУП К КОЛОНКЕ" } h2 { "Терминал и файлы" } }
-            if !owner {
-                p { class: "device-access-help", "Настройте пароль в разделе «Доступ» и войдите владельцем, чтобы открыть терминал и файлы." }
+            if !state.allowed() {
+                p { class: "device-access-help", "Войдите в пульт Quasar, чтобы открыть терминал и файлы." }
                 button { class: "button secondary", onclick: move |_| state.panel.set(Panel::Access), Icon { name:"lock", size:15 } "Открыть настройки доступа" }
             } else {
                 div { class: "device-access-tabs", role: "tablist", aria_label: "Режим доступа",
@@ -40,7 +38,7 @@ pub fn DeviceAccess(mut state: ControlState, duid: String) -> Element {
                     label { class: "form-field", span { "Адрес колонки" } input { value: "{host}", placeholder: "192.168.1.100", autocomplete: "off", spellcheck: "false", oninput: move |event| host.set(event.value()) } }
                     label { class: "form-field device-port", span { "Порт" } input { r#type: "text", inputmode: "numeric", value: "{port}", oninput: move |event| port.set(event.value()) } }
                 }
-                p { class: "device-access-help", "Telnet должен быть включён на колонке и доступен серверу Quasar. Логин и пароль вводятся в терминале. Переключение вкладки закрывает соединение." }
+                p { class: "device-access-help", "Укажите адрес и порт Telnet. Подключение идёт с сервера Quasar. Если открылась командная строка, можно работать. Переключение вкладки закрывает соединение." }
                 {rsx! { Session { key: "{duid}:{files_tab()}", state, duid, host: host(), port: port(), files: files_tab() } }}
             }
         }
@@ -137,7 +135,7 @@ fn Session(state: ControlState, duid: String, host: String, port: String, files:
             }
             if files && connected() && !shell_ready() {
                 div { class: "device-shell-confirm",
-                    p { "Войдите в оболочку колонки. Когда появится приглашение командной строки, откройте файлы." }
+                    p { "Если уже видна командная строка, открывайте файлы — дополнительный вход не нужен." }
                     button { class: "button secondary", disabled: shell_busy(), onclick: move |_| { shell_busy.set(true); error.set(None); send(bridge,json!({"type":"shell"})); }, if shell_busy() { "Проверяем оболочку…" } else { "Оболочка готова — открыть файлы" } }
                 }
             }

@@ -1,5 +1,5 @@
 //! Bounded overlays for Midi's segmented clock, executed only inside an
-//! owner-confirmed shell session. The layout and frame ownership rule follow
+//! user-confirmed shell session. The layout and frame ownership rule follow
 //! the documented Cucumber implementation in nyakokitsu/luna, gateway.rs.
 //!
 //! This is not a bitmap screen. Text is an approximation on four seven-segment

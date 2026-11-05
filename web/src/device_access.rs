@@ -95,7 +95,6 @@ fn Session(
     let mut connecting = use_signal(|| false);
     let mut connected = use_signal(|| false);
     let mut shell_ready = use_signal(|| false);
-    let mut shell_busy = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
     let mut target = use_signal(String::new);
     let mut display_status = use_signal(|| None::<Value>);
@@ -120,6 +119,8 @@ fn Session(
         }
     });
     let valid_address = !host.trim().is_empty() && port.parse::<u16>().is_ok_and(|port| port > 0);
+    let automatic_connection = (mode == AccessMode::Files && valid_address)
+        .then(|| (host.trim().to_owned(), port.clone()));
     rsx! {
         div { class: "device-session", role: if mode == AccessMode::Display { "group" } else { "tabpanel" },
             div { class: "device-session-toolbar",
@@ -134,13 +135,13 @@ fn Session(
                 span { class: if connected() { "device-session-state connected" } else { "device-session-state" }, role: "status",
                     if connecting() { "Подключаемся…" } else if connected() { "Подключено к {target}" } else { "Нет соединения" }
                 }
-                if mode != AccessMode::Display && connected() && !shell_ready() {
+                if mode == AccessMode::Terminal && connected() {
                     button { class: "text-button", onclick: move |_| send(bridge,json!({"type":"input","data":"\u{3}"})), "Ctrl+C" }
                     button { class: "text-button", onclick: move |_| send(bridge,json!({"type":"clear"})), "Очистить" }
                 }
             }
             if let Some(message) = error() { p { class: "form-feedback failure", role: "alert", "{message}" } }
-            div { class: if mode == AccessMode::Display || shell_ready() { "device-terminal-shell hidden" } else { "device-terminal-shell" },
+            div { class: if mode == AccessMode::Terminal { "device-terminal-shell" } else { "device-terminal-shell hidden" },
                 div { id: element, class: "device-terminal", aria_label: "Интерактивный терминал ADB",
                     onmounted: move |_| {
                         let config = json!({"element":element,"duid":duid,"files":mode != AccessMode::Terminal,"theme":(state.theme)().name(),"xterm":asset!("/assets/vendor/xterm-6.0.0.js").to_string(),"fit":asset!("/assets/vendor/xterm-addon-fit-0.11.0.js").to_string(),"module":asset!("/assets/device-terminal.js").to_string()});
@@ -160,18 +161,25 @@ fn Session(
                             finally { terminal?.dispose(); }
                         "#);
                         let _ = eval.send(config); bridge.set(Some(eval));
+                        let automatic_connection = automatic_connection.clone();
                         spawn(async move {
                             while let Ok(event) = eval.recv::<Value>().await {
                                 match event["type"].as_str().unwrap_or_default() {
-                                    "ready" => initialized.set(true),
-                                    "connected" => {
-                                        connecting.set(mode == AccessMode::Display); connected.set(true); error.set(None);
-                                        if mode == AccessMode::Display { shell_busy.set(true); send(bridge,json!({"type":"shell"})); }
+                                    "ready" => {
+                                        initialized.set(true);
+                                        if let Some((host, port)) = &automatic_connection {
+                                            connecting.set(true); target.set(format!("{host}:{port}"));
+                                            send(bridge,json!({"type":"connect","host":host,"port":port}));
+                                        }
                                     },
-                                    "closed" => { connecting.set(false); connected.set(false); shell_ready.set(false); shell_busy.set(false); display_busy.set(false); file_state.busy.set(false); },
-                                    "error" => { connecting.set(false); shell_busy.set(false); display_busy.set(false); file_state.busy.set(false); error.set(Some(event["message"].as_str().unwrap_or("Ошибка соединения").to_owned())); display_status.set(Some(event)); },
+                                    "connected" => {
+                                        connecting.set(mode != AccessMode::Terminal); connected.set(true); error.set(None);
+                                        if mode != AccessMode::Terminal { send(bridge,json!({"type":"shell"})); }
+                                    },
+                                    "closed" => { connecting.set(false); connected.set(false); shell_ready.set(false); display_busy.set(false); file_state.busy.set(false); },
+                                    "error" => { connecting.set(false); display_busy.set(false); file_state.busy.set(false); error.set(Some(event["message"].as_str().unwrap_or("Ошибка соединения").to_owned())); display_status.set(Some(event)); },
                                     "shell_ready" => {
-                                        connecting.set(false); shell_ready.set(true); shell_busy.set(false); error.set(None);
+                                        connecting.set(false); shell_ready.set(true); error.set(None);
                                         if mode == AccessMode::Files { file_state.busy.set(true); send(bridge,json!({"type":"list","path":"/"})); }
                                     },
                                     name if name.starts_with("display") => display_status.set(Some(event)),
@@ -181,12 +189,6 @@ fn Session(
                             }
                         });
                     }
-                }
-            }
-            if mode == AccessMode::Files && connected() && !shell_ready() {
-                div { class: "device-shell-confirm",
-                    p { "Откройте файлы через подключённую оболочку ADB." }
-                    button { class: "button secondary", disabled: shell_busy(), onclick: move |_| { shell_busy.set(true); error.set(None); send(bridge,json!({"type":"shell"})); }, if shell_busy() { "Проверяем оболочку…" } else { "Открыть файлы" } }
                 }
             }
             if shell_ready() {

@@ -54,13 +54,21 @@ pub(super) fn SettingField(setting: Setting, mut editor: Editor, disabled: bool)
     } else {
         "text"
     };
+    let row_class = format!(
+        "server-setting-row{}{}",
+        if changed { " changed" } else { "" },
+        if setting.kind == "textarea" {
+            " wide"
+        } else {
+            ""
+        },
+    );
     rsx! {
-        div { class: if changed { "server-setting-row changed" } else { "server-setting-row" },
+        div { class: row_class,
             div { class: "server-setting-heading",
                 label { r#for: "setting-{setting.key}", "{setting.label}" }
                 span { class: if reset { "setting-source reset" } else if changed || setting.source == "override" { "setting-source override" } else { "setting-source" }, "{source}" }
             }
-            p { class: "server-setting-description", "{setting.description}" }
             div { class: if invalid { "form-field server-setting-input invalid" } else { "form-field server-setting-input" },
                 if setting.kind == "select" || setting.kind == "boolean" {
                     select { id: "setting-{setting.key}", value: "{choice}", disabled, onchange: move |event| editor.change(&input_setting, event.value()),
@@ -78,10 +86,10 @@ pub(super) fn SettingField(setting: Setting, mut editor: Editor, disabled: bool)
                 }
                 if invalid { small { class: "failure", "Введите корректное число в допустимом диапазоне." } }
                 if setting.secret {
-                    small { if reset { if is_set { "После сброса будет использован сохранённый ключ из env." } else { "После сброса ключ не задан." } }
-                        else if changed { if is_set { "Будет сохранён новый ключ." } else { "После сохранения ключ будет очищен." } }
-                        else if is_set { "Ключ задан и скрыт. Пустое поле оставляет текущий ключ." }
-                        else { "Ключ пока не задан." }
+                    small { if reset { if is_set { "Вернётся ключ из env" } else { "Ключ будет сброшен" } }
+                        else if changed { if is_set { "Будет сохранён новый ключ" } else { "Ключ будет очищен" } }
+                        else if is_set { "Ключ задан и скрыт" }
+                        else { "Ключ не задан" }
                     }
                 }
             }
@@ -93,7 +101,15 @@ pub(super) fn SettingField(setting: Setting, mut editor: Editor, disabled: bool)
                         button { class: "text-button", disabled, onclick: move |_| { editor.changes.write().insert(clear_key.clone(), Some(String::new())); }, "Очистить ключ" }
                     }
                     if (setting.source == "override" || changed) && !reset {
-                        button { class: "text-button", disabled, onclick: move |_| editor.reset(&reset_setting), Icon { name: "refresh", size: 13 } "Сбросить к {setting.fallback()}" }
+                        button { class: "text-button", disabled, title: "Сбросить к {setting.fallback()}", aria_label: "Сбросить {setting.label} к {setting.fallback()}", onclick: move |_| editor.reset(&reset_setting), Icon { name: "refresh", size: 13 } "Сбросить" }
+                    }
+                    details { class: "server-setting-help",
+                        summary { aria_label: "Описание: {setting.label}", title: "Описание настройки", "?" }
+                        div { class: "server-setting-help-body",
+                            p { "{setting.description}" }
+                            if setting.secret { p { "Пустое поле оставляет текущий ключ. Для замены введите новый; «Очистить ключ» сохранит пустое значение." } }
+                            p { "Сброс возвращает значение из env, если оно задано, иначе — значение по умолчанию." }
+                        }
                     }
                 }
             }

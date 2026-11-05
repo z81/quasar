@@ -259,9 +259,7 @@ pub fn ServerSettings(state: ControlState) -> Element {
     rsx! {
         div { class: "server-settings",
             section { class: "server-settings-intro",
-                div { span { class: "card-kicker", Icon { name: "settings", size: 16 } "НАСТРОЙКИ СЕРВЕРА" }
-                    p { "Общие для всех колонок. Изменения сохраняются на сервере и применяются к новым запросам." }
-                }
+                p { "Общие для всех колонок · применяются к новым запросам" }
                 button { class: "text-button", disabled: busy, onclick: move |_| { spawn(load(state, editor)); }, Icon { name: "refresh", size: 15 } "Обновить значения" }
             }
             if let Some(error) = (editor.error)() {
@@ -296,9 +294,11 @@ pub fn ServerSettings(state: ControlState) -> Element {
                         }
                     }
                     div { class: "card server-settings-fields",
-                        div { class: "server-settings-group-heading", h2 { "{group_label(&selected)}" } p { "У каждой настройки указан источник значения. Сброс возвращает значение из env или значение по умолчанию." } }
-                        for setting in fields.iter().filter(|field| field.group == selected) {
-                            field::SettingField { key: "{setting.key}", setting: setting.clone(), editor, disabled: !editable }
+                        div { class: "server-settings-group-heading", h2 { "{group_label(&selected)}" } }
+                        div { class: "server-settings-grid",
+                            for setting in fields.iter().filter(|field| field.group == selected) {
+                                field::SettingField { key: "{setting.key}", setting: setting.clone(), editor, disabled: !editable }
+                            }
                         }
                     }
                 }

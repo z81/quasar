@@ -55,7 +55,7 @@ pub fn DeviceAccess(
     rsx! {
         document::Stylesheet { href: asset!("/assets/device-access.css") }
         document::Stylesheet { href: asset!("/assets/vendor/xterm-6.0.0.css") }
-        section { class: "card device-access", aria_label: "Доступ к колонке",
+        section { class: if selected_mode() == AccessMode::Files { "card device-access device-access-files" } else { "card device-access" }, aria_label: "Доступ к колонке",
             div { class: "device-access-heading", span { class: "card-kicker", "ДОСТУП К КОЛОНКЕ" } h2 { if mode == AccessMode::Display { "Подключение к дисплею" } else { "Терминал и файлы" } } }
             if !state.allowed() {
                 p { class: "device-access-help", "Войдите в пульт Quasar, чтобы подключиться к колонке." }

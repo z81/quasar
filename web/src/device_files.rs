@@ -124,45 +124,54 @@ pub(super) fn FileBrowser(bridge: Signal<Option<document::Eval>>, mut data: File
     use_effect(move || location.set((data.path)()));
     rsx! {
         div { class: "device-files",
-            form { class: "device-file-location", onsubmit: move |event| { event.prevent_default(); if busy || dirty {return;} data.busy.set(true); send(bridge,json!({"type":"list","path":location()})); },
-                button { class: "button secondary", r#type: "button", disabled: busy || dirty || (data.path)()=="/", onclick: move |_| { data.busy.set(true); send(bridge,json!({"type":"list","path":parent(&(data.path)())})); }, "↑" }
-                input { aria_label: "Путь к каталогу", value:"{location}", disabled: busy || dirty, spellcheck:"false", oninput: move |event| location.set(event.value()) }
-                button { class: "button secondary", r#type: "submit", disabled: busy || dirty || !location().starts_with('/'), "Открыть" }
-            }
-            div { class:"device-file-list", role:"list", aria_label:"Файлы и папки",
-                if (data.entries)().is_empty() { p { class:"device-access-help", if busy {"Загрузка…"} else {"Каталог пуст"} } }
-                for entry in (data.entries)() {
-                    button { key:"{entry.path}", class:"device-file-entry", disabled: busy || dirty,
-                        onclick: move |_| {data.busy.set(true); data.notice.set(None); send(bridge,json!({"type":if entry.directory {"list"} else {"read"},"path":entry.path}));},
-                        span { class:"device-file-kind", aria_hidden:"true", if entry.directory {"▸"} else {"·"} }
-                        span { class:"device-file-name", "{entry.name}" }
-                        small {if entry.directory {"Папка"} else {"{entry.size} Б"}}
+            div { class: "device-files-layout",
+                div { class: "device-file-browser",
+                    form { class: "device-file-location", onsubmit: move |event| { event.prevent_default(); if busy || dirty {return;} data.busy.set(true); send(bridge,json!({"type":"list","path":location()})); },
+                        button { class: "button secondary", r#type: "button", disabled: busy || dirty || (data.path)()=="/", onclick: move |_| { data.busy.set(true); send(bridge,json!({"type":"list","path":parent(&(data.path)())})); }, "↑" }
+                        input { aria_label: "Путь к каталогу", value:"{location}", disabled: busy || dirty, spellcheck:"false", oninput: move |event| location.set(event.value()) }
+                        button { class: "button secondary", r#type: "submit", disabled: busy || dirty || !location().starts_with('/'), "Открыть" }
                     }
-                }
-            }
-            if (data.truncated)() { p { class:"device-access-help", "Показаны первые 500 записей." } }
-            div { class:"device-file-upload",
-                button { class:"text-button", disabled:busy || dirty, onclick:move |_| send(bridge,json!({"type":"choose_upload"})), "Выбрать файл для загрузки" }
-                if let Some(name) = (data.upload)() {
-                    span {"{name}"}
-                    button { class:"button secondary", disabled:busy || dirty, onclick:move |_| { data.busy.set(true); let path=format!("{}/{}",(data.path)().trim_end_matches('/'),name); send(bridge,json!({"type":"upload","path":path})); }, "Загрузить в этот каталог" }
-                    small {"Одноимённый файл будет заменён."}
-                }
-            }
-            if let Some(path) = (data.file)() {
-                div { class:"device-file-editor",
-                    div { class:"device-file-editor-heading", strong {"{path}"} span {"{(data.size)()} Б"} }
-                    if let Some(content) = (data.content)() {
-                        textarea { class:"device-file-text", aria_label:"Содержимое файла", value:"{content}", spellcheck:"false", disabled:busy, oninput:move |event| {data.content.set(Some(event.value())); data.notice.set(None);} }
-                    } else { p {class:"device-access-help", "Двоичный файл. Доступно скачивание."} }
-                    div {class:"device-file-actions",
-                        if (data.content)().is_some() {
-                            button {class:"button primary", disabled:busy || !dirty || (data.content)().is_some_and(|value|value.len()>262_144), onclick:move |_| {data.busy.set(true); send(bridge,json!({"type":"save_text","path":(data.file)(),"text":(data.content)()}));}, "Сохранить"}
+                    div { class:"device-file-list", role:"list", aria_label:"Файлы и папки",
+                        if (data.entries)().is_empty() { p { class:"device-access-help", if busy {"Загрузка…"} else {"Каталог пуст"} } }
+                        for entry in (data.entries)() {
+                            button { key:"{entry.path}", class: if (data.file)().as_deref() == Some(entry.path.as_str()) { "device-file-entry selected" } else { "device-file-entry" }, aria_current: if (data.file)().as_deref() == Some(entry.path.as_str()) { "true" } else { "false" }, disabled: busy || dirty,
+                                onclick: move |_| {data.busy.set(true); data.notice.set(None); send(bridge,json!({"type":if entry.directory {"list"} else {"read"},"path":entry.path}));},
+                                span { class:"device-file-kind", aria_hidden:"true", if entry.directory {"▸"} else {"·"} }
+                                span { class:"device-file-name", "{entry.name}" }
+                                small {if entry.directory {"Папка"} else {"{entry.size} Б"}}
+                            }
                         }
-                        button {class:"button secondary", disabled:busy || dirty, onclick:move |_| send(bridge,json!({"type":"download","name":path.rsplit('/').next().unwrap_or("file"),"data":(data.bytes)()})), "Скачать"}
-                        button {class:"text-button", disabled:busy, onclick:move |_| {data.file.set(None); data.content.set(None); data.original.set(None); data.bytes.set(String::new());}, if dirty {"Отменить изменения"} else {"Закрыть файл"}}
                     }
-                    if dirty {p {class:"device-access-help", "Есть несохранённые изменения. Сохраните или отмените их, чтобы открыть другой файл."}}
+                    if (data.truncated)() { p { class:"device-access-help", "Показаны первые 500 записей." } }
+                    div { class:"device-file-upload",
+                        button { class:"text-button", disabled:busy || dirty, onclick:move |_| send(bridge,json!({"type":"choose_upload"})), "Выбрать файл для загрузки" }
+                        if let Some(name) = (data.upload)() {
+                            span {"{name}"}
+                            button { class:"button secondary", disabled:busy || dirty, onclick:move |_| { data.busy.set(true); let path=format!("{}/{}",(data.path)().trim_end_matches('/'),name); send(bridge,json!({"type":"upload","path":path})); }, "Загрузить в этот каталог" }
+                            small {"Одноимённый файл будет заменён."}
+                        }
+                    }
+                }
+                aside { class: "device-file-editor", aria_label: "Просмотр файла", aria_busy: busy,
+                    if let Some(path) = (data.file)() {
+                        div { class:"device-file-editor-heading", strong {"{path}"} span {"{(data.size)()} Б"} }
+                        if let Some(content) = (data.content)() {
+                            textarea { class:"device-file-text", aria_label:"Содержимое файла", value:"{content}", wrap:"off", spellcheck:"false", disabled:busy, oninput:move |event| {data.content.set(Some(event.value())); data.notice.set(None);} }
+                        } else { p {class:"device-access-help", "Двоичный файл. Доступно скачивание."} }
+                        div {class:"device-file-actions",
+                            if (data.content)().is_some() {
+                                button {class:"button primary", disabled:busy || !dirty || (data.content)().is_some_and(|value|value.len()>262_144), onclick:move |_| {data.busy.set(true); send(bridge,json!({"type":"save_text","path":(data.file)(),"text":(data.content)()}));}, "Сохранить"}
+                            }
+                            button {class:"button secondary", disabled:busy || dirty, onclick:move |_| send(bridge,json!({"type":"download","name":path.rsplit('/').next().unwrap_or("file"),"data":(data.bytes)()})), "Скачать"}
+                            button {class:"text-button", disabled:busy, onclick:move |_| {data.file.set(None); data.content.set(None); data.original.set(None); data.bytes.set(String::new());}, if dirty {"Отменить изменения"} else {"Закрыть файл"}}
+                        }
+                        if dirty {p {class:"device-access-help", "Есть несохранённые изменения. Сохраните или отмените их, чтобы открыть другой файл."}}
+                    } else {
+                        div { class: "device-file-placeholder",
+                            strong { "Просмотр файла" }
+                            p { class: "device-access-help", "Выберите файл в списке, чтобы открыть его содержимое." }
+                        }
+                    }
                 }
             }
             if let Some(message) = (data.notice)() {p {class:"form-feedback success", role:"status", "{message}"}}

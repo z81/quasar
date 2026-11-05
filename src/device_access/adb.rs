@@ -20,7 +20,9 @@ pub(crate) struct Connection {
 impl Connection {
     pub(crate) async fn connect(host: &str, port: u16) -> Result<Self> {
         let status = Command::new("adb")
-            .args(["-L", "tcp:127.0.0.1:5037", "start-server"])
+            // Without -a, tcp:5037 binds only to loopback. Older adb releases
+            // treat an explicit host in -L as remote and refuse to start it.
+            .args(["-L", "tcp:5037", "start-server"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

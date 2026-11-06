@@ -141,6 +141,9 @@ fn Session(
                 }
             }
             if let Some(message) = error() { p { class: "form-feedback failure", role: "alert", "{message}" } }
+            if mode == AccessMode::Display && !shell_ready() {
+                p { class: "device-access-help", "Предпросмотр доступен без подключения. Для показа на колонке нажмите «Подключиться» выше." }
+            }
             div { class: if mode == AccessMode::Terminal { "device-terminal-shell" } else { "device-terminal-shell hidden" },
                 div { id: element, class: "device-terminal", aria_label: "Интерактивный терминал ADB",
                     onmounted: move |_| {
@@ -191,15 +194,13 @@ fn Session(
                     }
                 }
             }
-            if shell_ready() {
-                match mode {
-                    AccessMode::Files => rsx! { files::FileBrowser { bridge, data: file_state } },
-                    AccessMode::Display => rsx! {
-                        crate::ring_light::RingLight { bridge, status: display_status, busy: display_busy }
-                        crate::midi_display::MidiDisplay { bridge, status: display_status, busy: display_busy }
-                    },
-                    AccessMode::Terminal => rsx! {},
-                }
+            match mode {
+                AccessMode::Display => rsx! {
+                    crate::ring_light::RingLight { bridge, ready: shell_ready, status: display_status, busy: display_busy }
+                    crate::midi_display::MidiDisplay { bridge, ready: shell_ready, status: display_status, busy: display_busy }
+                },
+                AccessMode::Files if shell_ready() => rsx! { files::FileBrowser { bridge, data: file_state } },
+                _ => rsx! {},
             }
         }
     }

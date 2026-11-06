@@ -101,6 +101,7 @@ fn Segment(
 #[component]
 pub fn MidiDisplay(
     bridge: Signal<Option<document::Eval>>,
+    ready: Signal<bool>,
     mut status: Signal<Option<Value>>,
     mut busy: Signal<bool>,
 ) -> Element {
@@ -121,6 +122,11 @@ pub fn MidiDisplay(
         }
     });
     use_effect(move || {
+        if !ready() {
+            showing.set(false);
+            feedback.set(None);
+            return;
+        }
         let Some(event) = status() else {
             return;
         };
@@ -242,8 +248,8 @@ pub fn MidiDisplay(
             div { class: "midi-editor-options",
                 label { class: "form-field", span { "Яркость, %" } input { id: "midi-brightness", r#type: "text", inputmode: "numeric", value: "{brightness}", disabled: busy(), aria_invalid: brightness_value.is_none(), oninput: move |event| brightness.set(event.value()) } }
                 label { class: "form-field", span { "Длительность, с" } input { id: "midi-duration", r#type: "text", inputmode: "numeric", value: "{duration}", disabled: busy(), aria_invalid: !duration_valid, oninput: move |event| duration.set(event.value()) } }
-                button { class: "button primary", disabled: busy() || !valid, onclick: move |_| {
-                    if busy() || !valid { return; }
+                button { class: "button primary", disabled: !ready() || busy() || !valid, onclick: move |_| {
+                    if !ready() || busy() || !valid { return; }
                     let mut command = json!({"type":format!("display_{}", mode()),"brightness":brightness_value.unwrap(),"duration_ms":duration_value.unwrap()*1000});
                     match mode().as_str() {
                         "text" => command["text"] = json!(text()),

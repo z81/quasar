@@ -12,6 +12,7 @@ fn valid_color(value: &str) -> bool {
 #[component]
 pub fn RingLight(
     bridge: Signal<Option<document::Eval>>,
+    ready: Signal<bool>,
     mut status: Signal<Option<Value>>,
     mut busy: Signal<bool>,
 ) -> Element {
@@ -23,6 +24,11 @@ pub fn RingLight(
     let mut feedback = use_signal(|| None::<(bool, String)>);
 
     use_effect(move || {
+        if !ready() {
+            showing.set(false);
+            feedback.set(None);
+            return;
+        }
         let Some(event) = status() else { return };
         if !*showing.peek() {
             return;
@@ -136,8 +142,8 @@ pub fn RingLight(
                             input { id: "ring-duration", r#type: "text", inputmode: "numeric", value: "{duration}", disabled: busy(), aria_invalid: duration_value.is_none(), oninput: move |event| { duration.set(event.value()); feedback.set(None); } }
                         }
                     }
-                    button { class: "button primary ring-show", disabled: busy() || !valid, onclick: move |_| {
-                        if busy() || !valid { return; }
+                    button { class: "button primary ring-show", disabled: !ready() || busy() || !valid, onclick: move |_| {
+                        if !ready() || busy() || !valid { return; }
                         let command = json!({
                             "type":"ring_animation", "animation":animation(), "color":color(),
                             "brightness":brightness_value.unwrap(), "duration_ms":duration_value.unwrap() * 1_000,

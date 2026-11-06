@@ -3,6 +3,35 @@ use dioxus::prelude::*;
 use crate::icons::Icon;
 use crate::state::{ControlState, Panel, Theme};
 
+const NAVIGATION_GROUPS: [(&str, &[(Panel, &str)]); 3] = [
+    (
+        "Каждый день",
+        &[
+            (Panel::Control, "grid"),
+            (Panel::Favorites, "star"),
+            (Panel::Schedules, "alarm"),
+            (Panel::Timers, "timer"),
+            (Panel::History, "history"),
+        ],
+    ),
+    (
+        "Колонка",
+        &[
+            (Panel::MidiDisplay, "spark"),
+            (Panel::SmartHome, "home"),
+            (Panel::Settings, "settings"),
+        ],
+    ),
+    (
+        "Инструменты",
+        &[
+            (Panel::DeviceAccess, "terminal"),
+            (Panel::Advanced, "code"),
+            (Panel::Access, "lock"),
+        ],
+    ),
+];
+
 #[component]
 pub fn Sidebar(mut state: ControlState) -> Element {
     let devices = (state.devices)();
@@ -15,17 +44,6 @@ pub fn Sidebar(mut state: ControlState) -> Element {
             a { class: "brand", href: "/ui/", aria_label: "Quasar — главная",
                 span { class: "brand-mark", Icon { name: "spark", size: 24 } }
                 span { "quasar" span { class: "brand-dot", "." } }
-            }
-            div { class: "workspace-tag", span { class: "workspace-avatar", "Q" } div { strong { "Моё пространство" } span { "Пульт управления" } } }
-            div { class: "nav-label", "ПРОСТРАНСТВО" }
-            nav { class: "navigation", aria_label: "Разделы пульта",
-                for (panel, icon) in [(Panel::Control, "grid"), (Panel::Favorites, "star"), (Panel::Schedules, "alarm"), (Panel::Timers, "timer"), (Panel::History, "history"), (Panel::DeviceAccess, "terminal"), (Panel::MidiDisplay, "spark"), (Panel::SmartHome, "home"), (Panel::Settings, "settings"), (Panel::Access, "lock"), (Panel::Advanced, "code")] {
-                    button { class: if (state.panel)() == panel { "nav-item active" } else { "nav-item" }, aria_current: if (state.panel)() == panel { "page" } else { "false" },
-                        onclick: move |_| state.panel.set(panel),
-                        Icon { name: icon, size: 18 } "{panel.label()}"
-                        if panel == Panel::History && history_count > 0 { span { class: "nav-count", "{history_count}" } }
-                    }
-                }
             }
             section { class: "devices-section", aria_label: "Выбор колонки",
                 div { class: "nav-label device-list-heading", span { "КОЛОНКИ" } span { "{devices.len()}" } }
@@ -46,6 +64,35 @@ pub fn Sidebar(mut state: ControlState) -> Element {
                                     span { class: "device-copy", strong { "{device.label()}" } span { if server_ok { "{device.connection_label()}" } else { "Нет связи с сервером" } } }
                                     span { class: if connected { "status-dot connected" } else { "status-dot" } }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+            label { class: "mobile-navigation",
+                span { "Раздел пульта" }
+                select { aria_label: "Раздел пульта", value: (state.panel)().label(),
+                    onchange: move |event| {
+                        if let Some((panel, _)) = NAVIGATION_GROUPS.iter().flat_map(|(_, panels)| panels.iter()).find(|(panel, _)| panel.label() == event.value()) {
+                            state.panel.set(*panel);
+                        }
+                    },
+                    for (label, panels) in NAVIGATION_GROUPS {
+                        optgroup { label,
+                            for &(panel, _) in panels { option { value: panel.label(), "{panel.label()}" } }
+                        }
+                    }
+                }
+            }
+            nav { class: "navigation", aria_label: "Разделы пульта",
+                for (label, panels) in NAVIGATION_GROUPS {
+                    div { class: "nav-group",
+                        div { class: "nav-label", "{label}" }
+                        for &(panel, icon) in panels {
+                            button { class: if (state.panel)() == panel { "nav-item active" } else { "nav-item" }, aria_current: if (state.panel)() == panel { "page" } else { "false" },
+                                onclick: move |_| state.panel.set(panel),
+                                Icon { name: icon, size: 18 } "{panel.label()}"
+                                if panel == Panel::History && history_count > 0 { span { class: "nav-count", "{history_count}" } }
                             }
                         }
                     }

@@ -25,7 +25,7 @@ pub(super) fn send(bridge: Signal<Option<document::Eval>>, message: Value) {
 #[component]
 pub fn DeviceAccessPage(
     state: ControlState,
-    #[props(default = AccessMode::Terminal)] mode: AccessMode,
+    #[props(default = AccessMode::Files)] mode: AccessMode,
 ) -> Element {
     let device = state.device();
     rsx! {
@@ -52,29 +52,35 @@ pub fn DeviceAccess(
     let host = host_override().or(ip_address).unwrap_or_default();
     let mut port = use_signal(|| "5555".to_owned());
     let mut selected_mode = use_signal(|| mode);
+    let address_open = use_hook(|| host.trim().is_empty());
+    let address_fields = rsx! {
+        div { class: "device-address",
+            label { class: "form-field", span { "Адрес колонки" } input { value: "{host}", placeholder: "192.168.1.100", autocomplete: "off", spellcheck: "false", oninput: move |event| host_override.set(Some(event.value())) } }
+            label { class: "form-field device-port", span { "Порт" } input { r#type: "text", inputmode: "numeric", value: "{port}", oninput: move |event| port.set(event.value()) } }
+        }
+        p { class: "device-access-help", "Подключение идёт с сервера Quasar. На колонке должен быть включён сетевой ADB (обычно порт 5555). Переключение раздела закрывает соединение." }
+    };
     rsx! {
         document::Stylesheet { href: asset!("/assets/device-access.css") }
         document::Stylesheet { href: asset!("/assets/vendor/xterm-6.0.0.css") }
-        section { class: if selected_mode() == AccessMode::Files { "card device-access device-access-files" } else { "card device-access" }, aria_label: "Доступ к колонке",
-            div { class: "device-access-heading", span { class: "card-kicker", "ДОСТУП К КОЛОНКЕ" } h2 { if mode == AccessMode::Display { "Подключение к Миди" } else { "Терминал и файлы" } } }
+        section { class: if mode == AccessMode::Display { "card device-access" } else { "card device-access device-access-workspace" }, aria_label: "Доступ к колонке",
+            if mode == AccessMode::Display { div { class: "device-access-heading", span { class: "card-kicker", "ДОСТУП К КОЛОНКЕ" } h2 { "Подключение к Миди" } } }
             if !state.allowed() {
                 p { class: "device-access-help", "Войдите в пульт Quasar, чтобы подключиться к колонке." }
                 button { class: "button secondary", onclick: move |_| state.panel.set(Panel::Access), Icon { name:"lock", size:15 } "Открыть настройки доступа" }
             } else {
-                if mode != AccessMode::Display {
-                    div { class: "device-access-tabs", role: "tablist", aria_label: "Режим доступа",
-                        for (tab, label) in [(AccessMode::Terminal, "Терминал"), (AccessMode::Files, "Файлы")] {
-                            button { role: "tab", aria_selected: selected_mode() == tab, class: if selected_mode() == tab { "active" } else { "" }, onclick: move |_| selected_mode.set(tab), "{label}" }
+                if mode == AccessMode::Display { {address_fields} } else {
+                    div { class: "device-access-controls",
+                        div { class: "device-access-tabs", role: "tablist", aria_label: "Режим доступа",
+                            for (tab, label) in [(AccessMode::Files, "Файлы"), (AccessMode::Terminal, "Терминал")] {
+                                button { role: "tab", aria_selected: selected_mode() == tab, class: if selected_mode() == tab { "active" } else { "" }, onclick: move |_| selected_mode.set(tab), "{label}" }
+                            }
+                        }
+                        details { class: "device-connection-settings", open: address_open,
+                            summary { strong { "Подключение по ADB" } span { if host.trim().is_empty() { "Укажите адрес колонки" } else { "{host}:{port}" } } }
+                            {address_fields}
                         }
                     }
-                }
-                div { class: "device-address",
-                    label { class: "form-field", span { "Адрес колонки" } input { value: "{host}", placeholder: "192.168.1.100", autocomplete: "off", spellcheck: "false", oninput: move |event| host_override.set(Some(event.value())) } }
-                    label { class: "form-field device-port", span { "Порт" } input { r#type: "text", inputmode: "numeric", value: "{port}", oninput: move |event| port.set(event.value()) } }
-                }
-                p { class: "device-access-help",
-                    "На колонке должен быть включён сетевой ADB. Подключение идёт с сервера Quasar, стандартный порт — 5555. "
-                    if mode == AccessMode::Display { "Переход в другой раздел закрывает соединение." } else { "Переключение вкладки закрывает соединение." }
                 }
                 {rsx! { Session { key: "{duid}:{selected_mode():?}", state, duid, host: host.clone(), port: port(), mode: selected_mode() } }}
             }
@@ -119,6 +125,7 @@ fn Session(
         }
     });
     let valid_address = !host.trim().is_empty() && port.parse::<u16>().is_ok_and(|port| port > 0);
+    let connection_address = format!("{}:{}", host.trim(), port);
     let automatic_connection = (mode == AccessMode::Files && valid_address)
         .then(|| (host.trim().to_owned(), port.clone()));
     rsx! {
@@ -133,11 +140,11 @@ fn Session(
                     }, Icon { name: "link", size: 15 } "Подключиться" }
                 }
                 span { class: if connected() { "device-session-state connected" } else { "device-session-state" }, role: "status",
-                    if connecting() { "Подключаемся…" } else if connected() { "Подключено к {target}" } else { "Нет соединения" }
+                    if connecting() { "Подключаемся…" } else if connected() { "Подключено к {target}" } else { if valid_address { "Нет соединения · {connection_address}" } else { "Укажите адрес колонки" } }
                 }
                 if mode == AccessMode::Terminal && connected() {
-                    button { class: "text-button", onclick: move |_| send(bridge,json!({"type":"input","data":"\u{3}"})), "Ctrl+C" }
-                    button { class: "text-button", onclick: move |_| send(bridge,json!({"type":"clear"})), "Очистить" }
+                    button { class: "text-button", onclick: move |_| send(bridge,json!({"type":"input","data":"\u{3}"})), "Остановить команду (Ctrl+C)" }
+                    button { class: "text-button", onclick: move |_| send(bridge,json!({"type":"clear"})), "Очистить экран" }
                 }
             }
             if let Some(message) = error() { p { class: "form-feedback failure", role: "alert", "{message}" } }

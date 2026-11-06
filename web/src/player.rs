@@ -47,6 +47,12 @@ fn PlayerControls(state: ControlState) -> Element {
             _ => "Состояние неизвестно",
         })
         .unwrap_or("Состояние неизвестно");
+    let can_pause = player
+        .as_ref()
+        .is_some_and(|player| player.capabilities.pause);
+    let can_resume = player
+        .as_ref()
+        .is_some_and(|player| player.capabilities.resume);
     rsx! {
         section { class: "card player-card", aria_label: "Плеер выбранной колонки",
             div { class: "player-now",
@@ -60,11 +66,10 @@ fn PlayerControls(state: ControlState) -> Element {
             div { class: "player-controls", role: "group", aria_label: "Управление воспроизведением",
                 for (action,icon,label,available) in [
                     ("previous","previous","Предыдущий трек",player.as_ref().is_some_and(|player| player.capabilities.previous)),
-                    ("pause","pause","Пауза",player.as_ref().is_some_and(|player| player.capabilities.pause)),
-                    ("resume","play","Продолжить",player.as_ref().is_some_and(|player| player.capabilities.resume)),
+                    if can_pause { ("pause", "pause", "Пауза", true) } else { ("resume", "play", "Продолжить", can_resume) },
                     ("next","next","Следующий трек",player.as_ref().is_some_and(|player| player.capabilities.next)),
                 ] {
-                    button { class: "icon-button player-button", disabled: !enabled || !available, aria_label: label, title: label, onclick: move |_| api::player_action(state, action, None), Icon { name: icon, size: 18 } }
+                    button { class: if matches!(action, "pause" | "resume") { "icon-button player-button player-toggle" } else { "icon-button player-button" }, disabled: !enabled || !available, aria_label: label, title: label, onclick: move |_| api::player_action(state, action, None), Icon { name: icon, size: 18 } }
                 }
                 button { class: "icon-button player-button", disabled: !enabled, aria_label: "Остановить воспроизведение", title: "Остановить", onclick: move |_| api::player_action(state,"stop",None), Icon { name: "stop", size: 17 } }
             }
@@ -78,7 +83,7 @@ fn PlayerControls(state: ControlState) -> Element {
                     input { r#type: "range", min: "0", max: "100", step: "1", aria_label: "Желаемая громкость", value: level.unwrap_or(0), disabled: !can_volume, oninput: move |event| { dirty.set(true); volume.set(event.value()); } }
                     input { id: "volume-value", class: "volume-number", r#type: "text", inputmode: "numeric", pattern: "[0-9]+([.][0-9]*)?", maxlength: "6", aria_label: "Громкость в процентах", placeholder: "—", value: "{volume}", disabled: !can_volume, oninput: move |event| { dirty.set(true); volume.set(event.value()); } }
                     span { class: "form-help", "%" }
-                    button { class: "button secondary", r#type: "submit", disabled: !can_volume || level.is_none(), "Задать" }
+                    button { class: "button secondary", r#type: "submit", disabled: !can_volume || level.is_none(), "Применить" }
                 }
             }
             if dirty() && level.is_none() { p { class: "player-note failure", "Введите целое число от 0 до 100." } }

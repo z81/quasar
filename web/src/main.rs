@@ -14,10 +14,10 @@ mod ring_light;
 mod schedules;
 mod server_settings;
 mod settings;
-mod smart_home;
-mod speaker_profiles;
-mod sound_settings;
 mod sidebar;
+mod smart_home;
+mod sound_settings;
+mod speaker_profiles;
 mod state;
 mod station;
 mod timers;
@@ -114,25 +114,31 @@ fn App() -> Element {
             spawn(weather::refresh(state));
         }
     });
+    use_effect(move || {
+        let _ = (state.panel)();
+        if let Some(window) = web_sys::window() {
+            window.scroll_to_with_x_and_y(0.0, 0.0);
+        }
+    });
     let panel = (state.panel)();
     rsx! {
         document::Title { "Quasar — пульт управления" }
         document::Stylesheet { href: asset!("/assets/control.css") }
         div { class: if state.allowed() { "app" } else { "app auth-app" }, "data-theme": (state.theme)().name(),
             if !state.allowed() { access::LoginGate { state } } else {
+            a { class: "skip-link", href: "#main-content", "К содержимому" }
             sidebar::Sidebar { state }
             div { class: "workspace",
                 header { class: "topbar",
-                    div { class: "breadcrumbs", span { "Рабочее пространство" } Icon { name: "chevron", size: 13 } strong { "{panel.label()}" } }
+                    div { class: "breadcrumbs", span { if let Some(device) = state.device() { "{device.label()}" } else { "Пульт управления" } } Icon { name: "chevron", size: 13 } strong { "{panel.label()}" } }
                     span { class: "topbar-label", span { class: "tiny-orbit" } "QUASAR CONTROL" }
                 }
-                main { class: "main",
+                main { class: "main", id: "main-content", tabindex: "-1",
                     div { class: "page-heading",
                         div {
-                            div { class: "eyebrow", "ВАША АЛИСА. ВАШИ ПРАВИЛА." }
-                            h1 { match panel { Panel::Control => "Всё под контролем.", Panel::History => "История команд.", Panel::Advanced => "Прямой доступ.", Panel::Favorites => "Всегда под рукой.", Panel::Schedules => "Будильники и напоминания.", Panel::Timers => "Время пошло.", Panel::Settings => "На ваш лад.", Panel::Access => "Только для своих.", Panel::DeviceAccess => "Терминал и файлы.", Panel::MidiDisplay => "Своя Миди.", Panel::SmartHome => "Умный дом." } }
+                            h1 { "{panel.label()}" }
                             p { match panel {
-                                Panel::Control => "Скажите, что нужно сделать. Остальное — за Алисой.",
+                                Panel::Control => "Музыка, громкость и команды выбранной колонке.",
                                 Panel::History => "Запросы, ответы Алисы и результаты обработки.",
                                 Panel::Advanced => "Отправляйте колонке команды её собственного протокола.",
                                 Panel::Favorites => "Любимые команды для каждого дня. Сохраните и запускайте одним нажатием.",
@@ -145,7 +151,7 @@ fn App() -> Element {
                                 Panel::SmartHome => "Устройства Zigbee и Matter, подключённые к выбранной колонке.",
                             } }
                         }
-                        button { class: "button secondary refresh-button", disabled: (state.loading)(), onclick: move |_| { state.loading.set(true); spawn(api::refresh(state)); spawn(weather::refresh(state)); },
+                        button { class: "button secondary refresh-button", aria_label: "Обновить данные", disabled: (state.loading)(), onclick: move |_| { state.loading.set(true); spawn(api::refresh(state)); spawn(weather::refresh(state)); },
                             Icon { name: "refresh", size: 16 } "Обновить"
                         }
                     }
@@ -159,13 +165,15 @@ fn App() -> Element {
                     }
                     match panel {
                         Panel::Control => rsx! {
-                            div { class: "control-grid",
-                                composer::Composer { state }
-                                station::StationCard { state }
+                            div { class: "dashboard",
+                                player::PlayerCard { state }
+                                div { class: "control-grid",
+                                    composer::Composer { state }
+                                    station::StationCard { state }
+                                }
+                                history::History { state, compact: true }
+                                weather::WeatherCard { state }
                             }
-                            weather::WeatherCard { state }
-                            player::PlayerCard { state }
-                            history::History { state, compact: true }
                         },
                         Panel::History => rsx! { history::History { state, compact: false } },
                         Panel::Favorites => rsx! { favorites::Favorites { state } },

@@ -12,7 +12,7 @@ pub fn Composer(mut state: ControlState) -> Element {
     rsx! {
         section { class: "card composer", aria_label: "Новая команда",
             div { class: "card-heading", span { class: "card-kicker", Icon { name: "spark", size: 16 } "НОВАЯ КОМАНДА" } span { class: "subtle-pill", "Текст → действие" } }
-            h2 { "О чём попросим Алису?" }
+            h2 { "Попросить Алису" }
             div { class: "mode-tabs", role: "group", aria_label: "Способ отправки",
                 for item in Mode::ALL {
                     button { class: if item == mode { "mode-tab selected" } else { "mode-tab" }, aria_pressed: item == mode,
@@ -42,7 +42,7 @@ pub fn Composer(mut state: ControlState) -> Element {
                     let text = state.text.read().trim().to_string();
                     api::save_favorite(state, text.chars().take(80).collect(), (state.selected)(), mode.path().to_string(), serde_json::json!({"eventText":text}));
                     state.panel.set(crate::state::Panel::Favorites);
-                }, Icon { name: "star", size: 16 } "Сохранить" }
+                }, Icon { name: "star", size: 16 } "В избранное" }
                 button { class: "button primary", disabled: !enabled, onclick: move |_| api::submit(state),
                     if (state.sending)() { span { class: "spinner" } "Отправляем" } else { "Отправить" Icon { name: "arrow", size: 18 } }
                 }

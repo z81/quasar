@@ -187,6 +187,9 @@ pub struct Config {
     pub tts_model: String,
     pub tts_voice: String,
     pub tts_instructions: Option<String>,
+    /// Separate expressive model: Piper and Flash voices cannot synthesize whispering.
+    pub whisper_tts_model: String,
+    pub whisper_tts_voice: String,
     pub tts_pcm_sample_rate: u32,
     pub tts_format: TtsFormat,
     pub tts_speed: f32,

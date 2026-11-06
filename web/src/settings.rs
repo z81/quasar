@@ -26,6 +26,8 @@ pub fn Settings(state: ControlState) -> Element {
             for device in device {
                 div { class: "station-settings-stack", key: "{device.duid}",
                     DeviceSettings { state, device: device.clone() }
+                    crate::whisper_settings::WhisperSettings { state, duid: device.duid.clone() }
+                    crate::dnd_settings::DndSettings { state, duid: device.duid.clone() }
                     crate::sound_settings::SoundSettings { state, duid: device.duid.clone() }
                     crate::display_settings::DisplaySettings { state, device: device.clone() }
                     crate::display_studio::DisplayStudio { state, duid: device.duid.clone() }

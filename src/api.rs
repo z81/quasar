@@ -2,7 +2,7 @@
 //! pushing events / raw speech / raw directives. Request bodies are JSON;
 //! invalid ones get 400 or 422 with what is wrong.
 
-mod raw_directive;
+pub(crate) mod raw_directive;
 mod display;
 mod sound;
 
@@ -29,6 +29,7 @@ pub struct ApiState {
     pub settings: Arc<crate::server_settings::ServerSettings>,
     pub weather: Arc<crate::weather::WeatherService>,
     pub schedules: Arc<crate::schedules::Scheduler>,
+    pub dnd: Arc<crate::dnd::DndService>,
 }
 
 impl ApiState {
@@ -56,6 +57,8 @@ pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Rout
         .merge(crate::timer_api::router())
         .merge(crate::smart_home_api::router())
         .merge(crate::speaker_api::router(auth.clone()))
+        .merge(crate::whisper_api::router(auth.clone()))
+        .merge(crate::dnd_api::router(auth.clone()))
         .merge(crate::server_settings_api::router(auth.clone()))
         .route(
             "/devices/{duid}/player",

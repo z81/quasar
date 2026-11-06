@@ -173,4 +173,11 @@ impl StationStore {
     pub async fn list(&self) -> Vec<StationSummary> {
         self.stations.read().await.values().cloned().collect()
     }
+
+    pub async fn update_dnd_mode(&self, duid: &str, mode: &Value) -> bool {
+        let mut stations = self.stations.write().await;
+        let Some(station) = stations.get_mut(duid) else { return false; };
+        station.quasar_config["deviceConfig"]["dndMode"] = mode.clone();
+        true
+    }
 }

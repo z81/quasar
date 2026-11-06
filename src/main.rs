@@ -14,6 +14,8 @@ mod control;
 mod control_ui;
 mod directives;
 mod display;
+mod dnd;
+mod dnd_api;
 mod device_access;
 mod gigastt;
 mod logging;
@@ -48,6 +50,8 @@ mod updates;
 mod weather;
 mod weather_api;
 mod weather_tool;
+mod whisper;
+mod whisper_api;
 
 use std::sync::Arc;
 
@@ -109,7 +113,9 @@ async fn main() -> Result<()> {
     })).await?;
 
     let speakers = speaker::SpeakerService::load(storage.clone()).await?;
-    let runtime = runtime::Runtime::new(config, weather.clone(), schedules.clone(), speakers).await?;
+    let whisper = Arc::new(whisper::WhisperService::new(storage.clone()));
+    let dnd = dnd::DndService::load(storage.clone(), registry.clone()).await?;
+    let runtime = runtime::Runtime::new(config, weather.clone(), schedules.clone(), speakers, whisper).await?;
     let settings = server_settings::ServerSettings::new(
         storage.clone(), environment, runtime.clone(), bootstrap.port, bootstrap.api_port, settings_revision,
     );
@@ -151,12 +157,14 @@ async fn main() -> Result<()> {
             settings,
             weather,
             schedules: schedules.clone(),
+            dnd: dnd.clone(),
         }),
         auth,
     );
     let api_listener = tokio::net::TcpListener::bind(("0.0.0.0", api_port)).await?;
     tracing::info!("management API listening on {}", api_listener.local_addr()?);
     schedules.start();
+    dnd.start();
 
     // stop on SIGINT/SIGTERM: as PID 1 in Docker there is no default handler,
     // so without this `docker stop` waits 10 s and kills the process

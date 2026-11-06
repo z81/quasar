@@ -46,6 +46,7 @@ pub struct ConnectionRegistry {
     alarm_support: Arc<Mutex<HashMap<String, bool>>>,
     display_capabilities: Arc<Mutex<HashMap<u64, crate::display::DisplayCapability>>>,
     sound_capabilities: Arc<Mutex<HashMap<u64, crate::sound::SoundCapability>>>,
+    dnd_states: Arc<Mutex<HashMap<u64, (bool, String)>>>,
 }
 
 impl ConnectionRegistry {
@@ -70,6 +71,31 @@ impl ConnectionRegistry {
 
     pub fn effective_timezone(&self, device_id: &str) -> Option<String> {
         self.timezone(device_id).or_else(|| self.reported_timezones.lock().unwrap().get(device_id).cloned())
+    }
+
+    pub fn reported_timezone(&self, device_id: &str) -> Option<String> {
+        self.reported_timezones.lock().unwrap().get(device_id).cloned()
+    }
+
+    pub fn current_connection_id(&self, device_id: &str) -> Option<u64> {
+        self.connections.lock().unwrap().get(device_id)
+            .and_then(|targets| targets.iter().filter(|(_, sender)| !sender.is_closed()).map(|(id, _)| *id).max())
+    }
+
+    pub fn report_dnd_enabled(&self, device_id: &str, connection_id: u64, enabled: bool) {
+        let connections = self.connections.lock().unwrap();
+        let current = connections.get(device_id)
+            .and_then(|targets| targets.iter().filter(|(_, sender)| !sender.is_closed()).map(|(id, _)| *id).max());
+        if current == Some(connection_id) {
+            self.dnd_states.lock().unwrap().insert(connection_id, (enabled, chrono::Utc::now().to_rfc3339()));
+        }
+    }
+
+    pub fn dnd_enabled(&self, device_id: &str) -> Option<(bool, String)> {
+        let connections = self.connections.lock().unwrap();
+        let connection_id = connections.get(device_id)?
+            .iter().filter(|(_, sender)| !sender.is_closed()).map(|(id, _)| *id).max()?;
+        self.dnd_states.lock().unwrap().get(&connection_id).cloned()
     }
 
     pub fn report_alarm_support(&self, device_id: &str, supported: bool) {
@@ -176,6 +202,7 @@ impl ConnectionRegistry {
         }
         self.display_capabilities.lock().unwrap().remove(&connection_id);
         self.sound_capabilities.lock().unwrap().remove(&connection_id);
+        self.dnd_states.lock().unwrap().remove(&connection_id);
         drop(connections);
         self.smart_home.disconnected(device_id, connection_id);
     }

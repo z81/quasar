@@ -185,6 +185,8 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
         tts_model: values.required("OPENROUTER_TTS_MODEL")?,
         tts_voice: values.required("OPENROUTER_TTS_VOICE")?,
         tts_instructions: values.optional("OPENROUTER_TTS_INSTRUCTIONS"),
+        whisper_tts_model: values.required("WHISPER_TTS_MODEL")?,
+        whisper_tts_voice: values.required("WHISPER_TTS_VOICE")?,
         tts_pcm_sample_rate: values.integer("OPENROUTER_TTS_PCM_SAMPLE_RATE")? as u32,
         tts_format: if values.lower("OPENROUTER_TTS_FORMAT") == "mp3" {
             TtsFormat::Mp3

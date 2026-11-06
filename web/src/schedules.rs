@@ -1,5 +1,5 @@
 mod editor;
-mod time;
+pub(crate) mod time;
 
 use dioxus::prelude::*;
 use gloo_timers::future::TimeoutFuture;

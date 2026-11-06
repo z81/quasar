@@ -1,0 +1,9 @@
+.quiet-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 14px; margin-bottom: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+.quiet-status > strong { font-size: 12px; color: var(--text); }
+.quiet-status > p { flex-basis: 100%; }
+.quiet-status .subtle-pill { display: inline-block; white-space: normal; }
+.whisper-settings .subtle-pill { display: inline-block; white-space: normal; }
+.quiet-times { margin-top: 8px; }
+.quiet-manual { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding-top: 20px; margin-top: 20px; margin-bottom: 16px; border-top: 1px solid var(--line); }
+.dnd-settings input[type="time"] { color-scheme: light; }
+[data-theme="dark"] .dnd-settings input[type="time"] { color-scheme: dark; }

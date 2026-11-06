@@ -264,6 +264,18 @@ impl Storage {
             }
         }
     }
+
+    /// Change only the native DND section, without a read/replace race with
+    /// unrelated station configuration changes.
+    pub async fn update_dnd_mode(&self, duid: &str, mode: &Value) -> anyhow::Result<bool> {
+        match self {
+            Self::Memory { stations, .. } => Ok(stations.update_dnd_mode(duid, mode).await),
+            Self::Postgres(client) => Ok(client.execute(
+                "UPDATE alice_stations SET quasar_config = jsonb_set(quasar_config, '{deviceConfig,dndMode}', $2, true) WHERE duid = $1",
+                &[&duid, &mode],
+            ).await? > 0),
+        }
+    }
 }
 
 async fn select_station(client: &tokio_postgres::Client, duid: &str) -> anyhow::Result<Option<StationSummary>> {

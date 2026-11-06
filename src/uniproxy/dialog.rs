@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use super::metadata::{BiometrySlot, InputMetadata};
 use super::outbox::{Outbox, ResponseTarget};
-use super::speech::{self, SpeechEnd};
+use super::speech::{self, SpeechEnd, SpeechStyle};
 use super::{report, UniproxyContext};
 use crate::agent::protocol::{DirectiveResult, FunctionCall};
 use crate::agent::{
@@ -60,6 +60,8 @@ struct Dialog {
     awaiting_input: bool,
     /// The parts of the dialog's latest turn, for continue requests
     answers: Option<Answers>,
+    /// Frozen for all streamed/continued parts of the current answer.
+    speech_style: SpeechStyle,
 }
 
 /// The connection's current dialog, shared by the receive loop and the turns
@@ -67,6 +69,17 @@ struct Dialog {
 pub struct DialogSlot(Arc<Mutex<Option<Dialog>>>);
 
 impl DialogSlot {
+    fn set_speech_style(&self, id: &str, style: SpeechStyle) {
+        if let Some(dialog) = self.lock().as_mut().filter(|dialog| dialog.id == id) {
+            dialog.speech_style = style;
+        }
+    }
+
+    fn speech_style(&self, id: &str) -> SpeechStyle {
+        self.lock().as_ref().filter(|dialog| dialog.id == id)
+            .map(|dialog| dialog.speech_style).unwrap_or_default()
+    }
+
     /// A verified profile may keep its follow-up history. A change to another
     /// profile or to unknown gets a fresh history, preventing household leaks.
     fn for_speaker(&self, id: &str, speaker_id: Option<&str>, context: &UniproxyContext, zone: &Zone, fallback: &Arc<Agent>) -> Arc<Agent> {
@@ -193,6 +206,7 @@ fn open(slot: &mut Option<Dialog>, context: &Arc<UniproxyContext>, zone: &Zone) 
         speaker_id: None,
         awaiting_input: false,
         answers: None,
+        speech_style: SpeechStyle::Normal,
     };
     tracing::info!("dialog {} started", dialog.id);
     let opened = (dialog.id.clone(), dialog.agent.clone());
@@ -345,7 +359,18 @@ impl Request {
             feedback.running().await;
             feedback.answer(&text).await;
         }
-        if !self.context.can_speak() {
+        let style = match self.preferred_speech_style().await {
+            Ok(style) => style,
+            Err(error) => {
+                tracing::warn!("cannot read whisper preference: {error}");
+                report(self.outbox.alice_response(&self.target, &text, false, Vec::new()));
+                if let Some(feedback) = &self.feedback {
+                    feedback.failed("Не удалось прочитать настройки голоса").await;
+                }
+                return;
+            }
+        };
+        if !self.can_speak(style) {
             report(self.outbox.alice_response(&self.target, &text, false, Vec::new()));
             if let Some(feedback) = &self.feedback {
                 feedback.failed("Синтез речи не настроен. Откройте настройки сервера Quasar.").await;
@@ -365,6 +390,7 @@ impl Request {
                     &text,
                     &self.target.reference_message_id,
                     None,
+                    style,
                 )
                 .await;
                 if let Some(feedback) = &self.feedback {
@@ -401,10 +427,66 @@ impl Request {
         metadata: &InputMetadata,
         live_context: Option<LiveContext>,
     ) {
+        // Explicit voice/text commands are handled locally before the LLM,
+        // so persistence is real and cannot be replaced by a verbal promise.
+        let preference_command = (!turn.external_event).then(|| crate::whisper::command(&turn.text)).flatten();
+        // The preference lookup is awaited before run_agent's own guard exists.
+        let _preference_guard = self.feedback.as_ref().map(crate::control::FeedbackGuard::new);
+        if preference_command.is_some() {
+            if let Some(feedback) = &self.feedback { feedback.running().await; }
+        }
+        let command_result = match preference_command {
+            Some(enabled) => Some(self.context.whisper.set(&self.context.config, &self.device_id, enabled).await),
+            None => None,
+        };
+        let style = match self.preferred_speech_style().await {
+            Ok(style) => style,
+            Err(error) => {
+                tracing::warn!("cannot read whisper preference: {error}");
+                if let Some(feedback) = &self.feedback {
+                    feedback.failed("Не удалось прочитать настройки голоса").await;
+                }
+                report(self.outbox.empty_response(&self.target));
+                self.dialog.finish_turn(&self.target.dialog_id, false);
+                return;
+            }
+        };
+        self.dialog.set_speech_style(&self.target.dialog_id, style);
+        if let Some(result) = command_result {
+            let text = match result {
+                Ok(()) => {
+                    if let Some(feedback) = &self.feedback {
+                        feedback.action("whisper", "completed", None).await;
+                    }
+                    if preference_command == Some(true) { "Хорошо, буду отвечать шёпотом." } else { "Хорошо, буду говорить обычным голосом." }.to_owned()
+                }
+                Err(error) => {
+                    tracing::warn!("cannot set whisper preference: {error}");
+                    if let Some(feedback) = &self.feedback {
+                        feedback.failed("Не удалось сохранить режим шёпота. Проверьте настройки сервера.").await;
+                    }
+                    if preference_command == Some(true) && !crate::whisper::available(&self.context.config) {
+                        "Для шёпота сначала добавьте ключ OpenRouter в настройках сервера Quasar."
+                    } else { "Не удалось сохранить настройку голоса. Попробуйте ещё раз." }.to_owned()
+                }
+            };
+            if let Some(feedback) = &self.feedback { feedback.answer(&text).await; }
+            self.deliver(AgentOutput { directives: Vec::new(), finished: true, should_listen: false, text: OutputText::Complete(text) }).await;
+            if let Some(feedback) = &self.feedback { feedback.completed().await; }
+            return;
+        }
         let (parts, answers) = mpsc::unbounded_channel();
         let answers: Answers = Arc::new(tokio::sync::Mutex::new(answers));
         self.dialog.set_answers(&self.target.dialog_id, answers.clone());
         tokio::join!(self.run_agent(agent, turn, metadata, live_context, parts), self.answer_next(&answers));
+    }
+
+    async fn preferred_speech_style(&self) -> anyhow::Result<SpeechStyle> {
+        Ok(if self.context.whisper.enabled(&self.device_id).await? { SpeechStyle::Whisper } else { SpeechStyle::Normal })
+    }
+
+    fn can_speak(&self, style: SpeechStyle) -> bool {
+        if style == SpeechStyle::Whisper { crate::whisper::available(&self.context.config) } else { self.context.can_speak() }
     }
 
     async fn run_agent(
@@ -521,12 +603,21 @@ impl Request {
     /// for an empty answer), the words follow in its TTS stream and the full
     /// text in the log; the station plays the stream via the placeholder
     async fn deliver(&self, part: AgentOutput) {
+        let style = self.dialog.speech_style(&self.target.dialog_id);
         let mut station_directives: Vec<TDirective> = part.directives.iter().filter_map(directives::to_directive).collect();
         let (shown_text, speaks) = match &part.text {
             OutputText::Complete(text) => (text.as_str(), !text.is_empty()),
             OutputText::Streaming(_) => ("", true),
         };
-        let speaks = speaks && self.context.can_speak();
+        let synthesis_available = self.can_speak(style);
+        if speaks && !synthesis_available {
+            if let Some(feedback) = &self.feedback {
+                feedback.failed(if style == SpeechStyle::Whisper {
+                    "Шёпот недоступен: проверьте ключ OpenRouter в настройках сервера"
+                } else { "Синтез речи не настроен в настройках сервера" }).await;
+            }
+        }
+        let speaks = speaks && synthesis_available;
         if part.finished {
             if speaks {
                 station_directives.push(directives::tts_play_placeholder(None));
@@ -563,10 +654,13 @@ impl Request {
         if part.finished {
             self.dialog.finish_turn(&self.target.dialog_id, part.should_listen);
         }
+        if !speaks {
+            return;
+        }
         let reference_message_id = &self.target.reference_message_id;
         let result = match part.text {
             OutputText::Complete(text) => {
-                speech::speak_text(&self.context, &self.outbox, &text, reference_message_id, self.speech_end).await
+                speech::speak_text(&self.context, &self.outbox, &text, reference_message_id, self.speech_end, style).await
             }
             OutputText::Streaming(chunks) => {
                 speech::speak(
@@ -575,6 +669,7 @@ impl Request {
                     chunks,
                     reference_message_id,
                     self.speech_end,
+                    style,
                 )
                 .await
             }

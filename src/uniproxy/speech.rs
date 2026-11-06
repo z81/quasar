@@ -40,6 +40,13 @@ const SPEECH_RATE: u32 = 24_000;
 /// At most this much of a chunk's text goes into its log line
 const LOGGED_TEXT_CHARS: usize = 40;
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum SpeechStyle {
+    #[default]
+    Normal,
+    Whisper,
+}
+
 /// The PCM of one chunk as it arrives
 type Pcm = mpsc::UnboundedReceiver<Result<Bytes>>;
 
@@ -73,6 +80,7 @@ pub async fn speak_text(
     text: &str,
     reference_message_id: &str,
     speech_end: Option<SpeechEnd>,
+    style: SpeechStyle,
 ) -> Result<()> {
     if text.is_empty() {
         return Ok(());
@@ -80,7 +88,7 @@ pub async fn speak_text(
     let (chunks, receiver) = mpsc::unbounded_channel();
     let _ = chunks.send(text.to_string());
     drop(chunks);
-    speak(context, outbox, receiver, reference_message_id, speech_end).await
+    speak(context, outbox, receiver, reference_message_id, speech_end, style).await
 }
 
 /// Speaks the chunks of a part through one TTS stream, closed once the
@@ -91,9 +99,10 @@ pub async fn speak(
     chunks: mpsc::UnboundedReceiver<String>,
     reference_message_id: &str,
     speech_end: Option<SpeechEnd>,
+    style: SpeechStyle,
 ) -> Result<()> {
-    anyhow::ensure!(context.can_speak(), "Синтез речи не настроен в настройках сервера Quasar");
-    let speech = stream_speech(context, outbox, chunks, reference_message_id, speech_end);
+    anyhow::ensure!(if style == SpeechStyle::Whisper { crate::whisper::available(&context.config) } else { context.can_speak() }, "Синтез речи не настроен в настройках сервера Quasar");
+    let speech = stream_speech(context, outbox, chunks, reference_message_id, speech_end, style);
     match tokio::time::timeout(SPEECH_LIFETIME, speech).await {
         Ok(result) => result,
         Err(_) => Err(anyhow!(
@@ -108,6 +117,7 @@ async fn stream_speech(
     mut chunks: mpsc::UnboundedReceiver<String>,
     reference_message_id: &str,
     mut speech_end: Option<SpeechEnd>,
+    style: SpeechStyle,
 ) -> Result<()> {
     // dropping the guard closes the stream, dropping the encoder kills ffmpeg
     let stream = outbox.open_tts_stream(reference_message_id)?;
@@ -125,7 +135,7 @@ async fn stream_speech(
             }
         }
     };
-    tokio::try_join!(feed(context, &mut chunks, input), drain)?;
+    tokio::try_join!(feed(context, &mut chunks, input, style), drain)?;
     encoder.finish().await
 }
 
@@ -135,6 +145,7 @@ async fn feed(
     context: &Arc<UniproxyContext>,
     chunks: &mut mpsc::UnboundedReceiver<String>,
     mut input: ChildStdin,
+    style: SpeechStyle,
 ) -> Result<()> {
     // dropping the set (on an abort) cancels the requests still running
     let mut syntheses = JoinSet::new();
@@ -147,7 +158,7 @@ async fn feed(
             let Some(text) = waiting.pop_front() else {
                 break;
             };
-            started.push_back(synthesize(context, text, &mut syntheses));
+            started.push_back(synthesize(context, text, style, &mut syntheses));
         }
         if started.is_empty() && !more_text {
             break;
@@ -161,6 +172,11 @@ async fn feed(
             pcm = next_pcm(&mut started), if !started.is_empty() => match pcm {
                 Some(Ok(pcm)) => write_samples(&mut input, &mut odd_byte, &pcm).await.context("writing PCM to ffmpeg")?,
                 Some(Err(error)) => {
+                    if style == SpeechStyle::Whisper {
+                        // A normal-voice fallback or silently skipped whisper
+                        // would break the user's explicit quiet response mode.
+                        return Err(error);
+                    }
                     tracing::warn!("a chunk is skipped: {error:#}");
                     started.pop_front();
                     odd_byte = None;
@@ -190,16 +206,18 @@ fn pcm_rate(context: &UniproxyContext) -> u32 {
 /// Requests the synthesis of a chunk; its PCM comes through the returned
 /// channel as it arrives. Dropping the set aborts the task, which kills its
 /// decoder
-fn synthesize(context: &Arc<UniproxyContext>, text: String, syntheses: &mut JoinSet<()>) -> Pcm {
+fn synthesize(context: &Arc<UniproxyContext>, text: String, style: SpeechStyle, syntheses: &mut JoinSet<()>) -> Pcm {
     let (pcm, receiver) = mpsc::unbounded_channel();
     let context = context.clone();
     syntheses.spawn(async move {
         tracing::debug!("synthesizing '{text}'");
         let started = Instant::now();
-        let synthesized = match &context.piper {
+        let synthesized = if style == SpeechStyle::Whisper {
+            synthesize_whisper(&context, &text, &pcm, started).await
+        } else { match &context.piper {
             Some(piper) => synthesize_piper(&context, piper, &text, &pcm, started).await,
             None => synthesize_openrouter(&context, &text, &pcm, started).await,
-        };
+        }};
         match synthesized {
             Ok(synthesis) => synthesis.log(&text, pcm_rate(&context)),
             Err(error) => {
@@ -209,6 +227,31 @@ fn synthesize(context: &Arc<UniproxyContext>, text: String, syntheses: &mut Join
         }
     });
     receiver
+}
+
+/// Eleven v3/v4 interpret the delivery tag as acoustic whispering. MP3 is
+/// decoded at the current encoder's rate, independently of normal TTS's
+/// format/rate. Whisper failures never fall back to a normal speaking voice.
+async fn synthesize_whisper(
+    context: &UniproxyContext,
+    text: &str,
+    pcm: &mpsc::UnboundedSender<Result<Bytes>>,
+    started: Instant,
+) -> Result<Synthesis> {
+    let decoder = Transcoder::decode_to_pcm(Encoded::Mp3, pcm_rate(context))?;
+    // Do not let square brackets from ordinary answer text insert competing
+    // ElevenLabs delivery tags after the whisper tag.
+    let text = format!("[whispers] {}", text.replace(['[', ']'], ""));
+    let speech = context.openrouter.speech_stream(
+        &context.config.whisper_tts_model,
+        &context.config.whisper_tts_voice,
+        &None,
+        1.0,
+        TtsFormat::Mp3,
+        &text,
+    ).await?;
+    Ok(decode(decoder, speech, pcm, started, &AtomicBool::new(false)).await?
+        .labelled("whisper".to_owned()))
 }
 
 /// The chunk by Piper, its WAV decoded by its own ffmpeg. A chunk Piper

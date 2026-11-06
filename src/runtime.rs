@@ -18,6 +18,7 @@ pub struct Runtime {
     weather: Arc<WeatherService>,
     schedules: Arc<Scheduler>,
     speakers: Arc<crate::speaker::SpeakerService>,
+    whisper: Arc<crate::whisper::WhisperService>,
 }
 
 impl Runtime {
@@ -26,8 +27,9 @@ impl Runtime {
         weather: Arc<WeatherService>,
         schedules: Arc<Scheduler>,
         speakers: Arc<crate::speaker::SpeakerService>,
+        whisper: Arc<crate::whisper::WhisperService>,
     ) -> Result<Arc<Self>> {
-        let prepared = prepare(config, weather.clone(), schedules.clone(), speakers.clone(), None).await?;
+        let prepared = prepare(config, weather.clone(), schedules.clone(), speakers.clone(), whisper.clone(), None).await?;
         crate::logging::apply(&prepared.config.log_filter);
         crate::time_zone::set_default(prepared.config.timezone.as_deref());
         prepared.mcp.start();
@@ -36,6 +38,7 @@ impl Runtime {
             weather,
             schedules,
             speakers,
+            whisper,
         }))
     }
 
@@ -55,6 +58,7 @@ impl Runtime {
             self.weather.clone(),
             self.schedules.clone(),
             self.speakers.clone(),
+            self.whisper.clone(),
             Some(&current),
         )
         .await
@@ -82,6 +86,7 @@ async fn prepare(
     weather: Arc<WeatherService>,
     schedules: Arc<Scheduler>,
     speakers: Arc<crate::speaker::SpeakerService>,
+    whisper: Arc<crate::whisper::WhisperService>,
     previous: Option<&UniproxyContext>,
 ) -> Result<Arc<UniproxyContext>> {
     let openrouter = crate::openrouter::OpenRouter::new(
@@ -174,6 +179,7 @@ async fn prepare(
         weather,
         schedules,
         speakers,
+        whisper,
         gigastt,
         piper,
         updates,

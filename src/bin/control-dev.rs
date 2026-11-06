@@ -80,6 +80,7 @@ async fn main() -> Result<()> {
         .route("/devices", get(forward))
         .route("/devices/{duid}", patch(forward))
         .route("/devices/{duid}/{action}", get(forward).post(forward).put(forward))
+        .route("/devices/{duid}/dnd/manual", axum::routing::post(forward))
         .route("/devices/{duid}/terminal", get(forward_websocket))
         .route("/devices/{duid}/files", get(forward_websocket))
         .route("/devices/{duid}/weather/location", put(forward))

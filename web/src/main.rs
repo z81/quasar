@@ -4,6 +4,7 @@ mod composer;
 mod device_access;
 mod display_settings;
 mod display_studio;
+mod dnd_settings;
 mod favorites;
 mod history;
 mod icons;
@@ -21,6 +22,7 @@ mod state;
 mod station;
 mod timers;
 mod weather;
+mod whisper_settings;
 
 use dioxus::prelude::*;
 use gloo_timers::future::TimeoutFuture;

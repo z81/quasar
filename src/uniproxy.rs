@@ -61,6 +61,7 @@ pub struct UniproxyContext {
     pub weather: Arc<crate::weather::WeatherService>,
     pub schedules: Arc<crate::schedules::Scheduler>,
     pub speakers: Arc<crate::speaker::SpeakerService>,
+    pub whisper: Arc<crate::whisper::WhisperService>,
     /// MCP servers: their tools as functions, their live context in the state
     pub mcp: Arc<Mcp>,
     pub cache: ResponseCache,
@@ -407,7 +408,12 @@ impl Connection {
                                     self.registry.report_sound_capability(&self.device_id, self.connection_id, endpoint_id, capability);
                                 }
                             }
-                            if let Some(state)=response.device_state { self.registry.player.observe_state(&self.device_id, &state); }
+                            if let Some(state) = response.device_state {
+                                self.registry.player.observe_state(&self.device_id, &state);
+                                if let Some(enabled) = state.dnd_enabled {
+                                    self.registry.report_dnd_enabled(&self.device_id, self.connection_id, enabled);
+                                }
+                            }
                         }
                     }
                     _ => tracing::debug!("ignoring client event"),
@@ -422,7 +428,7 @@ impl Connection {
 
     fn handle_voice_input(&mut self, header: TEventHeader, mut request: TAliceRequestProto) {
         self.context = self.runtime.snapshot();
-        self.registry.player.observe(&self.device_id, &request);
+        self.observe_device_state(&request);
         if self.interrupt_turns() {
             tracing::info!("the dialog turn in flight was interrupted by a new voice input");
         }
@@ -584,8 +590,23 @@ impl Connection {
         }
     }
 
-    fn handle_matched_user(&self, request: &TAliceRequestProto) {
+    fn observe_device_state(&self, request: &TAliceRequestProto) {
+        use crate::proto::n_alice::t_alice_request_proto::t_request::DeviceStateType;
+        use crate::proto::n_alice::n_alice_api::TDeviceState;
+
         self.registry.player.observe(&self.device_id, request);
+        let enabled = match request.request.as_ref().and_then(|request| request.device_state_type.as_ref()) {
+            Some(DeviceStateType::DeviceState(state)) => state.dnd_enabled,
+            Some(DeviceStateType::DeviceStateRaw(raw)) => TDeviceState::decode(raw.as_slice()).ok().and_then(|state| state.dnd_enabled),
+            None => None,
+        };
+        if let Some(enabled) = enabled {
+            self.registry.report_dnd_enabled(&self.device_id, self.connection_id, enabled);
+        }
+    }
+
+    fn handle_matched_user(&self, request: &TAliceRequestProto) {
+        self.observe_device_state(request);
         if let Some(biometry) = metadata::biometry(request) {
             tracing::info!("speaker biometry: age {}, gender {}", biometry.age, biometry.gender);
             self.biometry.set(biometry);
@@ -594,7 +615,7 @@ impl Connection {
 
     fn handle_text_input(&mut self, header: TEventHeader, mut request: TAliceRequestProto) {
         self.context = self.runtime.snapshot();
-        self.registry.player.observe(&self.device_id, &request);
+        self.observe_device_state(&request);
         let feedback =
             text_input::command_id(&request).and_then(|id| self.pending_commands.remove(&id));
         let request_header = request.header.take().unwrap_or_default();

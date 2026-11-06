@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use dioxus::prelude::*;
 use serde::Deserialize;
 use serde_json::Value;
@@ -269,6 +271,7 @@ pub struct ControlState {
     pub weather_error: Signal<Option<String>>,
     pub weather_loading: Signal<bool>,
     pub weather_request: Signal<u64>,
+    pub station_previews: Signal<BTreeMap<String, crate::station_preview::StationPreview>>,
     pub auth: Signal<AuthStatus>,
     pub auth_loaded: Signal<bool>,
     pub auth_error: Signal<Option<String>>,

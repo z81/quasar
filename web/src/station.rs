@@ -2,12 +2,14 @@ use dioxus::prelude::*;
 
 use crate::api;
 use crate::icons::Icon;
-use crate::state::ControlState;
+use crate::state::{ControlState, Panel};
 
 mod illustration;
+mod model;
+pub(crate) use model::StationModel;
 
 #[component]
-pub fn StationCard(state: ControlState) -> Element {
+pub fn StationCard(mut state: ControlState) -> Element {
     let device = state.device();
     let connected = device
         .as_ref()
@@ -23,10 +25,9 @@ pub fn StationCard(state: ControlState) -> Element {
             div { class: "card-heading", span { class: "card-kicker", "ВАША КОЛОНКА" }
                 span { class: if connected { "connection-badge online" } else { "connection-badge" }, span { class: "status-dot" } if connected { "На связи" } else if unknown { "Статус неизвестен" } else { "Не в сети" } }
             }
-            div { class: if connected { "station-scene" } else { "station-scene disconnected" }, role: "img", aria_label: "Иллюстрация Яндекс Станции Миди",
-                div { class: "orbit orbit-one" } div { class: "orbit orbit-two" }
-                illustration::Midi {}
-                span { class: "scene-dot dot-one" } span { class: "scene-dot dot-two" }
+            StationModel { key: "{(state.selected)()}", state, duid: (state.selected)() }
+            button { class: "text-button station-customize", onclick: move |_| state.panel.set(Panel::MidiDisplay),
+                Icon { name: "spark", size: 14 } "Текст и подсветка" Icon { name: "chevron", size: 12 }
             }
             div { class: "station-title",
                 h2 { if let Some(device) = &device { "{device.label()}" } else { "Ждём вашу колонку" } }

@@ -12,5 +12,14 @@
     "source": "https://github.com/xtermjs/xterm.js/tree/master/addons/addon-fit",
     "archive": "https://registry.npmjs.org/@xterm/addon-fit/-/addon-fit-0.11.0.tgz",
     "integrity": "sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g=="
+  },
+  "three": {
+    "version": "0.187.0",
+    "license": "MIT",
+    "source": "https://github.com/mrdoob/three.js",
+    "archive": "https://registry.npmjs.org/three/-/three-0.187.0.tgz",
+    "integrity": "sha512-Qiu7R+Cmh8CstZsY1uJOSWnVlfo7ZtNLV7mF8Jltk3LB3AtDu9cRZlcnRKkAk8Y4z6KKw35z7Y7Urd7jWY8etA==",
+    "bundle": "three-quasar-0.187.0.min.js",
+    "bundler": "esbuild 0.25.12; ESM, minified, selected WebGL exports; MIT notice retained"
   }
 }

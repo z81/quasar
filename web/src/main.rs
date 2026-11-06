@@ -20,6 +20,7 @@ mod sound_settings;
 mod speaker_profiles;
 mod state;
 mod station;
+mod station_preview;
 mod timers;
 mod weather;
 mod whisper_settings;
@@ -51,6 +52,7 @@ fn App() -> Element {
         weather_error: use_signal(|| None),
         weather_loading: use_signal(|| false),
         weather_request: use_signal(|| 0),
+        station_previews: use_signal(Default::default),
         auth: use_signal(Default::default),
         auth_loaded: use_signal(|| false),
         auth_error: use_signal(|| None),

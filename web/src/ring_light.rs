@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use serde_json::{json, Value};
 
-use crate::{device_access::send, icons::Icon};
+use crate::{device_access::send, icons::Icon, state::ControlState, station_preview::LightDraft};
 
 fn valid_color(value: &str) -> bool {
     value.len() == 7
@@ -11,18 +11,65 @@ fn valid_color(value: &str) -> bool {
 
 #[component]
 pub fn RingLight(
+    mut state: ControlState,
+    duid: String,
     bridge: Signal<Option<document::Eval>>,
     ready: Signal<bool>,
     mut status: Signal<Option<Value>>,
     mut busy: Signal<bool>,
     #[props(default = false)] logo: bool,
 ) -> Element {
-    let mut animation = use_signal(|| "wave".to_owned());
-    let mut color = use_signal(|| "#a855f7".to_owned());
-    let mut brightness = use_signal(|| "40".to_owned());
-    let mut duration = use_signal(|| "5".to_owned());
+    let initial = use_hook(|| {
+        state
+            .station_previews
+            .peek()
+            .get(&duid)
+            .map(|preview| {
+                if logo {
+                    preview.logo.clone()
+                } else {
+                    preview.ring.clone()
+                }
+            })
+            .unwrap_or_default()
+    });
+    let mut animation = use_signal(|| initial.animation.clone());
+    let mut color = use_signal(|| initial.color.clone());
+    let mut brightness = use_signal(|| initial.brightness.clone());
+    let mut duration = use_signal(|| initial.duration.clone());
     let mut showing = use_signal(|| false);
     let mut feedback = use_signal(|| None::<(bool, String)>);
+
+    use_effect(move || {
+        let draft = LightDraft {
+            animation: animation(),
+            color: color(),
+            brightness: brightness(),
+            duration: duration(),
+        };
+        let changed = state
+            .station_previews
+            .peek()
+            .get(&duid)
+            .map(|preview| {
+                if logo {
+                    preview.logo != draft
+                } else {
+                    preview.ring != draft
+                }
+            })
+            .unwrap_or(true);
+        if changed {
+            state.station_previews.with_mut(|previews| {
+                let preview = previews.entry(duid.clone()).or_default();
+                if logo {
+                    preview.logo = draft;
+                } else {
+                    preview.ring = draft;
+                }
+            });
+        }
+    });
 
     use_effect(move || {
         if !ready() {

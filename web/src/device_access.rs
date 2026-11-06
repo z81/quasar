@@ -36,7 +36,18 @@ pub fn DeviceAccessPage(
             }
         }
         for device in device {
-            DeviceAccess { key: "{device.duid}:{mode:?}", state, duid: device.duid, ip_address: device.ip_address, mode }
+            if mode == AccessMode::Display {
+                div { class: "midi-workspace", key: "{device.duid}:{mode:?}",
+                    DeviceAccess { state, duid: device.duid.clone(), ip_address: device.ip_address, mode }
+                    aside { class: "card midi-model-card",
+                        h2 { "Предпросмотр" }
+                        p { "Текст и подсветка из редактора. Работает без подключения." }
+                        crate::station::StationModel { state, duid: device.duid.clone() }
+                    }
+                }
+            } else {
+                DeviceAccess { key: "{device.duid}:{mode:?}", state, duid: device.duid, ip_address: device.ip_address, mode }
+            }
         }
     }
 }
@@ -128,6 +139,7 @@ fn Session(
     let connection_address = format!("{}:{}", host.trim(), port);
     let automatic_connection = (mode == AccessMode::Files && valid_address)
         .then(|| (host.trim().to_owned(), port.clone()));
+    let preview_duid = duid.clone();
     rsx! {
         div { class: "device-session", role: if mode == AccessMode::Display { "group" } else { "tabpanel" },
             div { class: "device-session-toolbar",
@@ -203,9 +215,9 @@ fn Session(
             }
             match mode {
                 AccessMode::Display => rsx! {
-                    crate::ring_light::RingLight { bridge, ready: shell_ready, status: display_status, busy: display_busy }
-                    crate::ring_light::RingLight { bridge, ready: shell_ready, status: display_status, busy: display_busy, logo: true }
-                    crate::midi_display::MidiDisplay { bridge, ready: shell_ready, status: display_status, busy: display_busy }
+                    crate::ring_light::RingLight { state, duid: preview_duid.clone(), bridge, ready: shell_ready, status: display_status, busy: display_busy }
+                    crate::ring_light::RingLight { state, duid: preview_duid.clone(), bridge, ready: shell_ready, status: display_status, busy: display_busy, logo: true }
+                    crate::midi_display::MidiDisplay { state, duid: preview_duid.clone(), bridge, ready: shell_ready, status: display_status, busy: display_busy }
                 },
                 AccessMode::Files if shell_ready() => rsx! { files::FileBrowser { bridge, data: file_state } },
                 _ => rsx! {},

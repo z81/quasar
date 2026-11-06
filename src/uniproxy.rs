@@ -385,6 +385,13 @@ impl Connection {
                     Some(ClientEvent::LogSpotter(_)) => report(self.outbox.log_ack(&header.message_id)),
                     Some(ClientEvent::MatchedUser(request)) => self.handle_matched_user(&request),
                     Some(ClientEvent::CapabilityUpdateState(event)) if self.registry.is_current(&self.device_id, self.connection_id) => {
+                        let own_dnd_endpoint = event.endpoint_id == self.device_id || self.registry.dnd_capability(&self.device_id)
+                            .is_some_and(|(_, capability)| capability.matches_endpoint(&event.endpoint_id));
+                        if own_dnd_endpoint {
+                            if let Some(capability) = crate::dnd::protocol::capability_update(&event) {
+                                self.registry.report_dnd_capability(&self.device_id, self.connection_id, &event.endpoint_id, capability);
+                            }
+                        }
                         if let Some(capability) = crate::sound::capability_update(&event) {
                             self.registry.report_sound_capability(&self.device_id, self.connection_id, &event.endpoint_id, capability);
                         }
@@ -403,6 +410,10 @@ impl Connection {
                     Some(ClientEvent::SyncPushResponse(response)) => {
                         if let Some(crate::proto::n_alice::n_alice_api::t_sync_response::Response::GetDeviceStateResponse(response)) = response.sync_response.and_then(|response| response.response) {
                             if self.registry.is_current(&self.device_id, self.connection_id) {
+                                if let Some((endpoint_id, capability)) = response.environment_state.as_ref()
+                                    .and_then(|environment| crate::dnd::protocol::environment_capability(environment, &self.device_id)) {
+                                    self.registry.report_dnd_capability(&self.device_id, self.connection_id, endpoint_id, capability);
+                                }
                                 if let Some((endpoint_id, capability)) = response.environment_state.as_ref()
                                     .and_then(|environment| crate::sound::environment_capability(environment, &self.device_id)) {
                                     self.registry.report_sound_capability(&self.device_id, self.connection_id, endpoint_id, capability);

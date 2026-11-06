@@ -3,6 +3,7 @@
 
 mod calendar;
 mod model;
+pub mod protocol;
 
 use std::collections::HashMap;
 use std::sync::{
@@ -28,7 +29,9 @@ type Result<T> = std::result::Result<T, DndError>;
 struct Receipt {
     connection_id: u64,
     mode: NativeMode,
+    force: Option<bool>,
     sent_at: DateTime<Utc>,
+    force_sent_at: Option<DateTime<Utc>>,
     last_poll_at: DateTime<Utc>,
 }
 
@@ -93,6 +96,12 @@ impl DndService {
         if !doc.schedule.enabled && !doc.manual_pending {
             doc.baseline = NativeMode::from_config(&station.quasar_config);
         }
+        if !doc.schedule.enabled && schedule.enabled {
+            doc.baseline_force = doc.manual_force;
+        }
+        if doc.schedule.enabled && !schedule.enabled {
+            doc.manual_force = doc.baseline_force;
+        }
         doc.manual_pending = !schedule.enabled && (doc.schedule.enabled || doc.manual_pending);
         doc.schedule = schedule;
         doc.manual_override = None;
@@ -125,7 +134,7 @@ impl DndService {
             if !doc.manual_pending {
                 doc.baseline = NativeMode::from_config(&station.quasar_config);
             }
-            doc.baseline.enabled = enabled;
+            doc.manual_force = Some(enabled);
             doc.manual_pending = true;
             doc.manual_override = None;
         }
@@ -178,14 +187,16 @@ impl DndService {
         {
             doc.manual_override = None;
         }
-        if !doc.schedule.enabled && !doc.manual_pending {
+        if !doc.schedule.enabled && !doc.manual_pending && doc.manual_force.is_none() {
             runtime.error = None;
             return Ok(());
         }
         let target = self.target(station, doc, now)?;
+        let force = self.force(station, doc, now)?;
         let config_changed = NativeMode::from_config(&station.quasar_config) != target;
-        if config_changed {
-            // Immutable original snapshot is saved before the first config write.
+        if config_changed || runtime.receipt.is_none() {
+            // Immutable original snapshot precedes either a config change or a
+            // typed force, including when the native schedule flag stays false.
             // It contains the server configuration only, never device credentials.
             self.storage
                 .insert_control_value(
@@ -196,6 +207,8 @@ impl DndService {
                 )
                 .await
                 .map_err(unavailable)?;
+        }
+        if config_changed {
             if !self
                 .storage
                 .update_dnd_mode(duid, &target.value())
@@ -210,19 +223,16 @@ impl DndService {
         let Some(connection_id) = self.registry.current_connection_id(duid) else {
             return Ok(());
         };
-        let confirmed = self.confirmed(duid, runtime, &target);
+        let confirmed = self.confirmed(duid, runtime, &target, force);
         if !doc.schedule.enabled && confirmed {
             doc.manual_pending = false;
             return Ok(());
         }
-        let send = config_changed
+        let configure = config_changed
             || runtime.receipt.as_ref().is_none_or(|receipt| {
-                receipt.connection_id != connection_id
-                    || receipt.mode != target
-                    || (!confirmed
-                        && now.signed_duration_since(receipt.sent_at).num_seconds() >= 30)
+                receipt.connection_id != connection_id || receipt.mode != target
             });
-        if send {
+        if configure {
             let command = StationCommand::Directives {
                 directives: vec![crate::api::raw_directive::push_update_config()],
             };
@@ -231,45 +241,99 @@ impl DndService {
                 runtime.receipt = Some(Receipt {
                     connection_id,
                     mode: target,
+                    force,
                     sent_at: now,
+                    force_sent_at: None,
                     last_poll_at: now,
                 });
             }
-        } else if !confirmed {
-            if let Some(receipt) = runtime.receipt.as_mut() {
-                if now
-                    .signed_duration_since(receipt.last_poll_at)
-                    .num_seconds()
-                    >= 5
-                {
-                    // The existing state query is silent; it confirms DNDEnabled.
+            return Ok(());
+        }
+        let Some(receipt) = runtime.receipt.as_mut() else {
+            return Ok(());
+        };
+        if receipt.force != force {
+            receipt.force = force;
+            receipt.force_sent_at = None;
+        }
+        // Native config reload resets the firmware's force override. Allow the
+        // asynchronous config fetch to finish before applying an explicit state.
+        if now.signed_duration_since(receipt.sent_at).num_seconds() < 5 {
+            return Ok(());
+        }
+        let force_due = receipt
+            .force_sent_at
+            .is_none_or(|sent| !confirmed && now.signed_duration_since(sent).num_seconds() >= 30);
+        if force_due {
+            let directive = self
+                .registry
+                .dnd_capability(duid)
+                .filter(|(id, _)| *id == connection_id)
+                .map(|(_, capability)| capability.force_directive(force));
+            match directive {
+                Some(Ok(directive)) => {
+                    if self.registry.send_to_current(
+                        duid,
+                        connection_id,
+                        StationCommand::Directives {
+                            directives: vec![directive],
+                        },
+                    ) {
+                        receipt.force_sent_at = Some(now);
+                        receipt.last_poll_at = now;
+                        doc.last_sent_at = Some(stamp(now));
+                    }
+                }
+                unavailable => {
+                    if let Some(Err(error)) = unavailable {
+                        runtime.error = Some(error.to_owned());
+                    }
                     self.registry.send_to_current(
                         duid,
                         connection_id,
-                        StationCommand::RefreshPlayer,
+                        StationCommand::RefreshSmartHome,
                     );
-                    receipt.last_poll_at = now;
                 }
             }
+        } else if !confirmed
+            && now
+                .signed_duration_since(receipt.last_poll_at)
+                .num_seconds()
+                >= 5
+        {
+            // The existing state query is silent; it confirms actual DNDEnabled.
+            self.registry
+                .send_to_current(duid, connection_id, StationCommand::RefreshPlayer);
+            receipt.last_poll_at = now;
         }
         Ok(())
     }
 
-    fn confirmed(&self, duid: &str, runtime: &RuntimeState, target: &NativeMode) -> bool {
+    fn confirmed(
+        &self,
+        duid: &str,
+        runtime: &RuntimeState,
+        target: &NativeMode,
+        force: Option<bool>,
+    ) -> bool {
         let Some(receipt) = runtime.receipt.as_ref() else {
             return false;
         };
         if receipt.mode != *target
+            || receipt.force != force
             || self.registry.current_connection_id(duid) != Some(receipt.connection_id)
         {
             return false;
         }
+        let Some(sent) = receipt.force_sent_at else {
+            return false;
+        };
         self.registry
             .dnd_enabled(duid)
             .is_some_and(|(enabled, observed)| {
-                enabled == target.enabled
+                force.is_none_or(|target| enabled == target)
                     && DateTime::parse_from_rfc3339(&observed)
-                        .is_ok_and(|observed| observed.with_timezone(&Utc) >= receipt.sent_at)
+                        .is_ok_and(|observed| observed.with_timezone(&Utc) >= sent)
             })
     }
 
@@ -277,7 +341,7 @@ impl DndService {
         &self,
         station: &StationSummary,
         doc: &Document,
-        now: DateTime<Utc>,
+        _now: DateTime<Utc>,
     ) -> Result<NativeMode> {
         if !doc.schedule.enabled {
             return Ok(if doc.manual_pending {
@@ -286,15 +350,30 @@ impl DndService {
                 NativeMode::from_config(&station.quasar_config)
             });
         }
-        let window = calendar::window(&doc.schedule, self.zone(station, Some(doc)), now)?;
         Ok(NativeMode {
-            enabled: doc
-                .manual_override
+            // The native flag enables a separate daily schedule. The server
+            // owns weekdays and explicit state through typed force directives.
+            enabled: false,
+            allow_incoming_calls: doc.schedule.allow_incoming_calls,
+        })
+    }
+
+    fn force(
+        &self,
+        station: &StationSummary,
+        doc: &Document,
+        now: DateTime<Utc>,
+    ) -> Result<Option<bool>> {
+        if !doc.schedule.enabled {
+            return Ok(doc.manual_force);
+        }
+        let window = calendar::window(&doc.schedule, self.zone(station, Some(doc)), now)?;
+        Ok(Some(
+            doc.manual_override
                 .as_ref()
                 .filter(|value| override_active(value, now))
                 .map_or(window.active, |value| value.enabled),
-            allow_incoming_calls: doc.schedule.allow_incoming_calls,
-        })
+        ))
     }
 
     fn describe(
@@ -313,12 +392,18 @@ impl DndService {
             .map(|doc| self.target(station, doc, now))
             .transpose()?
             .unwrap_or_else(|| native.clone());
+        let force = doc
+            .map(|doc| self.force(station, doc, now))
+            .transpose()?
+            .flatten();
         let confirmed =
-            runtime.is_some_and(|runtime| self.confirmed(&station.duid, runtime, &target));
+            runtime.is_some_and(|runtime| self.confirmed(&station.duid, runtime, &target, force));
         let observation = self.registry.dnd_enabled(&station.duid);
         let status = if runtime.is_some_and(|runtime| runtime.error.is_some()) {
             "error"
-        } else if doc.is_none_or(|doc| !doc.schedule.enabled && !doc.manual_pending) {
+        } else if doc.is_none_or(|doc| {
+            !doc.schedule.enabled && !doc.manual_pending && doc.manual_force.is_none()
+        }) {
             "idle"
         } else if !connected {
             "offline"
@@ -336,7 +421,10 @@ impl DndService {
         Ok(Status {
             schedule,
             timezone: zone.name().to_owned(),
-            current_enabled: native.enabled,
+            current_enabled: force
+                .or_else(|| observation.as_ref().map(|(enabled, _)| *enabled))
+                .unwrap_or(false),
+            forced_target: force,
             scheduled_active: window.active,
             next_transition_at: window.next_transition.map(stamp),
             next_enabled: window.next_enabled,
@@ -372,6 +460,8 @@ impl DndService {
         Document {
             schedule: Schedule::default(),
             baseline: NativeMode::from_config(&station.quasar_config),
+            baseline_force: None,
+            manual_force: None,
             manual_override: None,
             manual_pending: false,
             station_timezone: self.registry.reported_timezone(&station.duid),

@@ -54,7 +54,7 @@ pub fn WhisperSettings(state: ControlState, duid: String) -> Element {
         section { class: "card settings-card whisper-settings", aria_label: "Режим шёпота",
             div { class: "card-heading",
                 span { class: "card-kicker", Icon { name: "volume-down", size: 16 } "ГОЛОС АЛИСЫ" }
-                span { class: "subtle-pill", if busy() { "Сохраняем…" } else if snapshot.is_none() { "Загружаем…" } else if enabled { "Шёпот включён" } else { "Обычный голос" } }
+                span { class: "subtle-pill", if busy() { "Сохраняем…" } else if error().is_some() { "Нет связи" } else if snapshot.is_none() { "Загружаем…" } else if enabled { "Шёпот включён" } else { "Обычный голос" } }
             }
             h2 { "Режим шёпота" }
             p { class: "settings-intro", "Алиса озвучивает ответы шёпотом, пока вы не выключите этот режим. Настройка действует только на выбранную колонку." }

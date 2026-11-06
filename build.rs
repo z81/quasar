@@ -10,6 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "protos/alice/protos/endpoint/capabilities/on_off/capability.proto".to_string(),
         "protos/alice/protos/endpoint/capabilities/level/capability.proto".to_string(),
         "protos/alice/protos/endpoint/capabilities/equalizer/capability.proto".to_string(),
+        "protos/alice/protos/endpoint/capabilities/do_not_disturb/capability.proto".to_string(),
     ];
 
     let file_descriptors = protox::compile(file_names, ["protos/".to_string()])?;

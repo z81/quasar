@@ -28,6 +28,8 @@ struct Status {
     schedule: Schedule,
     timezone: String,
     current_enabled: bool,
+    #[serde(default)]
+    forced_target: Option<bool>,
     next_transition_at: Option<String>,
     next_enabled: Option<bool>,
     manual_override: Option<Override>,
@@ -188,7 +190,9 @@ pub fn DndSettings(state: ControlState, duid: String) -> Element {
                     strong {
                         if let Some(enabled) = status.delivery.confirmed_enabled.filter(|_| status.connected) {
                             if enabled { "Сейчас: не беспокоить" } else { "Сейчас: обычный режим" }
-                        } else if status.current_enabled { "Сохранено: не беспокоить" } else { "Сохранено: обычный режим" }
+                        } else if let Some(enabled) = status.forced_target {
+                            if enabled { "Задано: не беспокоить" } else { "Задано: обычный режим" }
+                        } else { "Режим колонки пока неизвестен" }
                     }
                     span { class: "subtle-pill", match status.delivery.status.as_str() {
                         "confirmed" => "Подтверждено колонкой", "offline" => "Ждём подключения",

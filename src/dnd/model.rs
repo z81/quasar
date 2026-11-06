@@ -56,6 +56,10 @@ impl NativeMode {
 pub(super) struct Document {
     pub schedule: Schedule,
     pub baseline: NativeMode,
+    #[serde(default)]
+    pub baseline_force: Option<bool>,
+    #[serde(default)]
+    pub manual_force: Option<bool>,
     pub manual_override: Option<ManualOverride>,
     /// A disabled schedule relinquishes control after its final manual value is
     /// confirmed. Subsequent direct/native manual changes remain independent.
@@ -69,8 +73,11 @@ pub(super) struct Document {
 pub struct Status {
     pub schedule: Schedule,
     pub timezone: String,
-    /// The native value saved in the server config, independently of confirmation.
+    /// Explicit requested physical state, or the latest observed state when the
+    /// native schedule is in control. Confirmation is exposed separately below.
     pub current_enabled: bool,
+    /// Explicit current-state override, independent of native schedule config.
+    pub forced_target: Option<bool>,
     pub scheduled_active: bool,
     pub next_transition_at: Option<String>,
     pub next_enabled: Option<bool>,

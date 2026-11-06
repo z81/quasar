@@ -39,6 +39,12 @@ pub fn Sidebar(mut state: ControlState) -> Element {
     let history_count = (state.history)().len();
     let server_ok =
         state.server_error.read().is_none() && (!(state.loading)() || !devices.is_empty());
+    use_effect(move || {
+        let _ = (state.panel)();
+        document::eval(
+            "if (matchMedia('(max-width: 760px)').matches) document.querySelector('.navigation [aria-current=\"page\"]')?.scrollIntoView({block: 'nearest', inline: 'nearest'});",
+        );
+    });
     rsx! {
         aside { class: "sidebar",
             a { class: "brand", href: "/ui/", aria_label: "Quasar — главная",
@@ -65,21 +71,6 @@ pub fn Sidebar(mut state: ControlState) -> Element {
                                     span { class: if connected { "status-dot connected" } else { "status-dot" } }
                                 }
                             }
-                        }
-                    }
-                }
-            }
-            label { class: "mobile-navigation",
-                span { "Раздел пульта" }
-                select { aria_label: "Раздел пульта", value: (state.panel)().label(),
-                    onchange: move |event| {
-                        if let Some((panel, _)) = NAVIGATION_GROUPS.iter().flat_map(|(_, panels)| panels.iter()).find(|(panel, _)| panel.label() == event.value()) {
-                            state.panel.set(*panel);
-                        }
-                    },
-                    for (label, panels) in NAVIGATION_GROUPS {
-                        optgroup { label,
-                            for &(panel, _) in panels { option { value: panel.label(), "{panel.label()}" } }
                         }
                     }
                 }

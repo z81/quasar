@@ -69,6 +69,20 @@ a { color: inherit; text-decoration: none; }
 .nav-label { font-size: 10px; font-weight: 650; letter-spacing: 1.1px; color: var(--muted); margin: 0 10px 6px; text-transform: uppercase; }
 .navigation { display: grid; gap: 18px; margin-top: 22px; }
 .nav-group { display: grid; gap: 3px; }
+.mobile-menu-toggle.button { display: none; }
+.mobile-menu { position: fixed; inset: 0; width: 100%; max-width: none; height: 100dvh; max-height: none; margin: 0; padding: 0; border: 0; color: var(--text); background: transparent; overflow: hidden; overscroll-behavior: contain; }
+.mobile-menu::backdrop { background: #100d1c66; -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+.mobile-menu-panel { display: flex; flex-direction: column; width: min(360px, calc(100% - 40px)); height: 100%; border-right: 1px solid var(--glass-line); border-radius: 0 24px 24px 0; background: var(--surface); background-image: var(--glass); box-shadow: 12px 0 48px #100d1c33, inset -1px 0 0 var(--glass-shine); }
+.mobile-menu-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: max(16px, env(safe-area-inset-top)) 16px 16px; }
+.mobile-menu-heading h2 { font-size: 18px; font-weight: 600; letter-spacing: -.3px; }
+.mobile-menu-close { flex-shrink: 0; width: 44px; height: 44px; padding: 0; }
+.mobile-menu-navigation { display: grid; align-content: start; gap: 20px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 6px 16px max(24px, env(safe-area-inset-bottom)); }
+.mobile-menu-navigation .nav-item { min-height: 44px; }
+.mobile-menu[open] .mobile-menu-panel { animation: menu-slide-in .24s cubic-bezier(.2, .7, .2, 1); }
+.mobile-menu[open]::backdrop { animation: menu-fade-in .2s ease-out; }
+.mobile-menu.closing .mobile-menu-panel { animation: menu-slide-out .2s ease-in forwards; }
+.mobile-menu.closing::backdrop { animation: menu-fade-out .2s ease-in forwards; }
+html:has(.mobile-menu[open]) { overflow: hidden; }
 .devices-section { margin-top: 24px; }
 .skip-link { position: fixed; top: 12px; left: 12px; z-index: 100; padding: 12px 16px; border-radius: 8px; color: var(--on-accent); background: var(--accent); transform: translateY(-200%); }
 .skip-link:focus { transform: translateY(0); }
@@ -216,6 +230,10 @@ textarea::placeholder, input::placeholder { color: var(--muted); opacity: 1; }
 @keyframes aurora-drift { from { transform: scale(1.08) translate3d(-1%, 0, 0); } to { transform: scale(1.08) translate3d(1%, 2%, 0); } }
 @keyframes glass-reveal { from { opacity: .55; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes scene-glow { from { opacity: .55; transform: scale(.95); } to { opacity: 1; transform: scale(1.05); } }
+@keyframes menu-slide-in { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+@keyframes menu-slide-out { to { transform: translateX(-100%); } }
+@keyframes menu-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes menu-fade-out { to { opacity: 0; } }
 @media (hover: hover) and (pointer: fine) {
   .button:hover:not(:disabled), .quick-control:hover:not(:disabled), .player-button:hover:not(:disabled) { transform: translateY(-2px); }
   .nav-item:hover { transform: translateX(2px); }
@@ -266,7 +284,8 @@ textarea::placeholder, input::placeholder { color: var(--muted); opacity: 1; }
   .sidebar-bottom { grid-row: 1; grid-column: 2; padding: 0; align-self: center; }
   .theme-option { padding: 5px 8px; }
   .theme-switch { gap: 0; }
-  .navigation { display: flex; grid-column: 1 / -1; grid-row: 3; min-width: 0; gap: 8px; margin: 0 -16px; padding: 6px 16px; overflow-x: auto; overscroll-behavior-x: contain; scroll-behavior: smooth; scroll-padding-inline: 16px; scrollbar-width: none; }
+  .mobile-menu-toggle.button { display: grid; grid-column: 1; grid-row: 3; align-self: center; width: 44px; height: 44px; padding: 0; }
+  .navigation { display: flex; grid-column: 1 / -1; grid-row: 3; min-width: 0; gap: 8px; margin: 0 -16px 0 48px; padding: 6px 16px 6px 6px; overflow-x: auto; overscroll-behavior-x: contain; scroll-behavior: smooth; scroll-padding-inline: 6px 16px; scrollbar-width: none; }
   .navigation::-webkit-scrollbar { display: none; }
   .navigation .nav-group { display: contents; }
   .navigation .nav-label { display: none; }

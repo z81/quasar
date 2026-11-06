@@ -3,6 +3,8 @@ use dioxus::prelude::*;
 #[component]
 pub fn Icon(name: &'static str, #[props(default = 20)] size: u32) -> Element {
     let path = match name {
+        "menu" => "M4 6h16 M4 12h16 M4 18h16",
+        "close" => "m6 6 12 12 M6 18 18 6",
         "home" => "m3 10 9-7 9 7v11h-6v-7H9v7H3V10Z",
         "star" => "m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2 7.5 14 3 9.6l6.2-.9L12 3Z",
         "lock" => "M6 10h12v11H6z M8 10V6a4 4 0 0 1 8 0v4 M12 14v3",

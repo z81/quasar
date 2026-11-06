@@ -36,7 +36,6 @@ const NAVIGATION_GROUPS: [(&str, &[(Panel, &str)]); 3] = [
 pub fn Sidebar(mut state: ControlState) -> Element {
     let devices = (state.devices)();
     let selected = (state.selected)();
-    let history_count = (state.history)().len();
     let server_ok =
         state.server_error.read().is_none() && (!(state.loading)() || !devices.is_empty());
     use_effect(move || {
@@ -46,6 +45,7 @@ pub fn Sidebar(mut state: ControlState) -> Element {
         );
     });
     rsx! {
+        document::Script { r#type: "module", src: asset!("/assets/mobile-menu.js") }
         aside { class: "sidebar",
             a { class: "brand", href: "/ui/", aria_label: "Quasar — главная",
                 span { class: "brand-mark", Icon { name: "spark", size: 24 } }
@@ -75,18 +75,19 @@ pub fn Sidebar(mut state: ControlState) -> Element {
                     }
                 }
             }
-            nav { class: "navigation", aria_label: "Разделы пульта",
-                for (label, panels) in NAVIGATION_GROUPS {
-                    div { class: "nav-group",
-                        div { class: "nav-label", "{label}" }
-                        for &(panel, icon) in panels {
-                            button { class: if (state.panel)() == panel { "nav-item active" } else { "nav-item" }, aria_current: if (state.panel)() == panel { "page" } else { "false" },
-                                onclick: move |_| state.panel.set(panel),
-                                Icon { name: icon, size: 18 } "{panel.label()}"
-                                if panel == Panel::History && history_count > 0 { span { class: "nav-count", "{history_count}" } }
-                            }
+            button { class: "mobile-menu-toggle button secondary", aria_label: "Открыть меню разделов", aria_haspopup: "dialog", aria_controls: "mobile-menu",
+                Icon { name: "menu", size: 20 }
+            }
+            nav { class: "navigation", aria_label: "Разделы пульта", NavigationGroups { state } }
+            dialog { id: "mobile-menu", class: "mobile-menu", aria_labelledby: "mobile-menu-title",
+                div { class: "mobile-menu-panel",
+                    header { class: "mobile-menu-heading",
+                        h2 { id: "mobile-menu-title", "Разделы пульта" }
+                        button { class: "mobile-menu-close button secondary", aria_label: "Закрыть меню", autofocus: true,
+                            Icon { name: "close", size: 20 }
                         }
                     }
+                    nav { class: "mobile-menu-navigation", aria_label: "Все разделы пульта", NavigationGroups { state } }
                 }
             }
             div { class: "sidebar-bottom",
@@ -98,6 +99,25 @@ pub fn Sidebar(mut state: ControlState) -> Element {
                         button { class: if (state.theme)() == theme { "theme-option chosen" } else { "theme-option" }, aria_pressed: (state.theme)() == theme,
                             onclick: move |_| { theme.save(); state.theme.set(theme); }, Icon { name: icon, size: 15 } "{label}"
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn NavigationGroups(mut state: ControlState) -> Element {
+    let history_count = (state.history)().len();
+    rsx! {
+        for (label, panels) in NAVIGATION_GROUPS {
+            div { class: "nav-group",
+                div { class: "nav-label", "{label}" }
+                for &(panel, icon) in panels {
+                    button { class: if (state.panel)() == panel { "nav-item active" } else { "nav-item" }, aria_current: if (state.panel)() == panel { "page" } else { "false" },
+                        onclick: move |_| state.panel.set(panel),
+                        Icon { name: icon, size: 18 } "{panel.label()}"
+                        if panel == Panel::History && history_count > 0 { span { class: "nav-count", "{history_count}" } }
                     }
                 }
             }

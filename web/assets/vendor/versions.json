@@ -20,6 +20,6 @@
     "archive": "https://registry.npmjs.org/three/-/three-0.187.0.tgz",
     "integrity": "sha512-Qiu7R+Cmh8CstZsY1uJOSWnVlfo7ZtNLV7mF8Jltk3LB3AtDu9cRZlcnRKkAk8Y4z6KKw35z7Y7Urd7jWY8etA==",
     "bundle": "three-quasar-0.187.0.min.js",
-    "bundler": "esbuild 0.25.12; ESM, minified, selected WebGL exports; MIT notice retained"
+    "bundler": "esbuild 0.25.12; ESM, minified, selected WebGL exports, template-literal=false; MIT notice retained"
   }
 }

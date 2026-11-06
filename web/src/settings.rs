@@ -7,15 +7,18 @@ use crate::state::{ControlState, Device};
 
 #[component]
 pub fn Settings(state: ControlState) -> Element {
-    let mut server = use_signal(|| true);
+    let mut tab = use_signal(|| "server");
     let device = state.device();
     rsx! {
         div { class: "settings-tabs", role: "tablist", aria_label: "Область настроек",
-            button { class: if server() { "settings-tab active" } else { "settings-tab" }, role: "tab", aria_selected: server(), onclick: move |_| server.set(true), Icon { name: "settings", size: 16 } "Сервер" }
-            button { class: if !server() { "settings-tab active" } else { "settings-tab" }, role: "tab", aria_selected: !server(), onclick: move |_| server.set(false), Icon { name: "speaker", size: 16 } "Колонка" }
+            button { class: if tab() == "server" { "settings-tab active" } else { "settings-tab" }, role: "tab", aria_selected: tab() == "server", onclick: move |_| tab.set("server"), Icon { name: "settings", size: 16 } "Сервер" }
+            button { class: if tab() == "station" { "settings-tab active" } else { "settings-tab" }, role: "tab", aria_selected: tab() == "station", onclick: move |_| tab.set("station"), Icon { name: "speaker", size: 16 } "Колонка" }
+            button { class: if tab() == "voices" { "settings-tab active" } else { "settings-tab" }, role: "tab", aria_selected: tab() == "voices", onclick: move |_| tab.set("voices"), Icon { name: "home", size: 16 } "Голоса" }
         }
-        if server() {
+        if tab() == "server" {
             crate::server_settings::ServerSettings { state }
+        } else if tab() == "voices" {
+            crate::speaker_profiles::SpeakerProfiles { state }
         } else if device.is_none() {
             div { class: "card history-empty", Icon { name: "speaker", size: 28 } h3 { "Выберите колонку" } p { "Настройки появятся после её подключения к серверу." } }
         } else {
@@ -23,6 +26,7 @@ pub fn Settings(state: ControlState) -> Element {
             for device in device {
                 div { class: "station-settings-stack", key: "{device.duid}",
                     DeviceSettings { state, device: device.clone() }
+                    crate::sound_settings::SoundSettings { state, duid: device.duid.clone() }
                     crate::display_settings::DisplaySettings { state, device: device.clone() }
                     crate::display_studio::DisplayStudio { state, duid: device.duid.clone() }
                     crate::weather::WeatherSettings { state, duid: device.duid }

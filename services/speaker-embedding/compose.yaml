@@ -1,0 +1,14 @@
+services:
+  speaker-embedding:
+    build: .
+    restart: unless-stopped
+    # Join the Quasar private Docker network. Do not publish this audio API.
+    expose: ["8091"]
+    mem_limit: 1536m
+    cpus: 2.0
+    pids_limit: 64
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]

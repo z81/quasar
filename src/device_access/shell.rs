@@ -75,19 +75,20 @@ pub(super) async fn handle(
 ) -> Result<Value, Error> {
     match message {
         ClientMessage::RingAnimation {
+            target,
             animation,
             color,
             brightness,
             duration_ms,
         } => {
-            let script = super::ring::script(&animation, &color, brightness, duration_ms)
+            let script = super::ring::script(target, &animation, &color, brightness, duration_ms)
                 .map_err(Error::Request)?;
             let (status, output) = execute(connection, &script)
                 .await
                 .map_err(|_| Error::Transport)?;
             let message = match status {
                 0 => None,
-                2 => Some("Управление верхней подсветкой Миди на этой колонке недоступно"),
+                2 => Some("Управление выбранной подсветкой Миди на этой колонке недоступно"),
                 3 => Some("Подсветка занята штатной индикацией. Повторите позже"),
                 4 => Some("На верхней панели уже выполняется анимация"),
                 5 => Some("Не удалось сохранить состояние подсветки"),

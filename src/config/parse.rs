@@ -96,6 +96,11 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
         url("PIPER_URL", address, &["http", "https"])?;
     }
     let gigastt_url = values.optional("GIGASTT_URL");
+    let speaker_embedding_url = values.optional("SPEAKER_EMBEDDING_URL");
+    if let Some(address) = speaker_embedding_url.as_deref() {
+        let parsed = url("SPEAKER_EMBEDDING_URL", address, &["http", "https"])?;
+        ensure!(parsed.query().is_none() && parsed.fragment().is_none(), "SPEAKER_EMBEDDING_URL: нужен базовый адрес без query и fragment");
+    }
     if let Some(address) = gigastt_url.as_deref() {
         let parsed = url("GIGASTT_URL", address, &["http", "ws"])?;
         ensure!(
@@ -174,6 +179,7 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
         stt_language: values.optional("OPENROUTER_STT_LANGUAGE"),
         stt_provider,
         gigastt_url,
+        speaker_embedding_url,
         end_of_speech,
         gigastt_min_silence_ms: values.integer("GIGASTT_MIN_SILENCE_MS")? as u32,
         tts_model: values.required("OPENROUTER_TTS_MODEL")?,

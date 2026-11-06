@@ -1,0 +1,21 @@
+.sound-settings h2 { margin: 10px 0 6px; font-size: 17px; }
+.sound-settings .settings-intro { margin-bottom: 16px; }
+.sound-settings .sound-first-toggle { border-top: 0; padding-top: 0; }
+.sound-bands { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 16px; padding: 16px 0 8px; }
+.sound-band { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.sound-band > label { color: var(--secondary); font-size: 11px; }
+.sound-band > input { width: 100%; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.sound-band > input:disabled { opacity: .5; cursor: default; }
+.sound-gain-number { display: flex; align-items: center; gap: 5px; margin: 0; }
+.sound-gain-number input { min-width: 0; min-height: 34px; padding: 8px; }
+.sound-gain-number span { color: var(--muted); font-size: 10px; }
+.sound-gain-number input[aria-invalid="true"] { border-color: var(--error); }
+.sound-band-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 14px; }
+.sound-settings .form-help.failure { color: var(--error); }
+.sound-readback { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px 0 16px; }
+.sound-readback .form-help { margin: 0; }
+@media (max-width: 560px) {
+  .sound-bands { grid-template-columns: 1fr; gap: 14px; }
+  .sound-band { display: grid; grid-template-columns: 58px minmax(0, 1fr) 83px; align-items: center; gap: 12px; }
+  .sound-gain-number input { font-size: 16px; }
+}

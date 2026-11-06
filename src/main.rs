@@ -37,6 +37,11 @@ mod timer_tool;
 mod station_config;
 mod stations;
 mod storage;
+mod speaker;
+mod speaker_api;
+mod smart_home;
+mod smart_home_api;
+mod sound;
 mod time_zone;
 mod uniproxy;
 mod updates;
@@ -103,7 +108,8 @@ async fn main() -> Result<()> {
         control: control.clone(),
     })).await?;
 
-    let runtime = runtime::Runtime::new(config, weather.clone(), schedules.clone()).await?;
+    let speakers = speaker::SpeakerService::load(storage.clone()).await?;
+    let runtime = runtime::Runtime::new(config, weather.clone(), schedules.clone(), speakers).await?;
     let settings = server_settings::ServerSettings::new(
         storage.clone(), environment, runtime.clone(), bootstrap.port, bootstrap.api_port, settings_revision,
     );

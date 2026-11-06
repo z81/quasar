@@ -4,6 +4,7 @@
 
 mod raw_directive;
 mod display;
+mod sound;
 
 use std::sync::Arc;
 
@@ -47,11 +48,14 @@ pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Rout
         .route("/devices/{duid}/push-text", post(push_text))
         .route("/devices/{duid}/push-directive", post(push_directive))
         .route("/devices/{duid}/display", get(display::status).post(display::animate))
+        .route("/devices/{duid}/sound", get(sound::status).put(sound::update))
         .route("/devices/{duid}/weather", get(crate::weather_api::forecast))
         .route("/weather/locations", get(crate::weather_api::locations))
         .route("/devices/{duid}/weather/location", put(crate::weather_api::set_location))
         .merge(crate::schedule_api::router())
         .merge(crate::timer_api::router())
+        .merge(crate::smart_home_api::router())
+        .merge(crate::speaker_api::router(auth.clone()))
         .merge(crate::server_settings_api::router(auth.clone()))
         .route(
             "/devices/{duid}/player",

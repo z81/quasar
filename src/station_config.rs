@@ -80,6 +80,9 @@ pub fn glagol_device_config(config: &Value, name: &str) -> Value {
     if let Some(stereo_pair) = device.get("stereoPair") {
         result["stereo_pair"] = stereo_pair.clone();
     }
+    if let Some(equalizer) = device.get("equalizer") {
+        result["equalizer"] = equalizer.clone();
+    }
     result
 }
 
@@ -545,6 +548,19 @@ fn quasar_config_schema() -> Schema {
 
     let device_config = object(vec![
         ("beta", boolean(false)),
+        // Device-side EqualizerController consumes these exact keys. Keep the
+        // object absent until configured, preserving firmware defaults.
+        ("equalizer", object(vec![
+            ("enabled", Schema::new(Node::Boolean)),
+            ("smartEnabled", Schema::new(Node::Boolean).optional()),
+            ("mediaCorrectionEnabled", Schema::new(Node::Boolean).optional()),
+            ("loudnessCompensationEnabled", Schema::new(Node::Boolean).optional()),
+            ("bands", Schema::new(Node::Array(Box::new(object(vec![
+                ("freq", Schema::new(Node::Number)),
+                ("width", Schema::new(Node::Number)),
+                ("gain", Schema::new(Node::Number)),
+            ]))))),
+        ]).optional()),
         ("dndMode", object(vec![
             ("enabled", boolean(false)),
             ("features", object(vec![("allowIncomingCalls", boolean(false))])),

@@ -61,11 +61,12 @@ impl BiometrySlot {
 /// What TS passes along with a request as `metadata`
 pub struct InputMetadata {
     pub biometry: Option<Biometry>,
+    pub speaker: Option<crate::speaker::Identity>,
 }
 
 impl InputMetadata {
     pub fn new(biometry: Option<Biometry>) -> Self {
-        Self { biometry }
+        Self { biometry, speaker: None }
     }
 
     /// The JSON remote servers receive: `age`/`gender` and
@@ -77,6 +78,10 @@ impl InputMetadata {
             metadata.insert("gender".to_string(), json!(biometry.gender));
         }
         metadata.insert("serverType".to_string(), json!("quasar"));
+        // No embedding or biometric similarity scores leave the local matcher.
+        if let Some(speaker) = &self.speaker {
+            metadata.insert("speaker".to_owned(), json!({"id": speaker.id, "name": speaker.name}));
+        }
         Value::Object(metadata)
     }
 }

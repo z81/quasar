@@ -15,6 +15,7 @@ pub fn RingLight(
     ready: Signal<bool>,
     mut status: Signal<Option<Value>>,
     mut busy: Signal<bool>,
+    #[props(default = false)] logo: bool,
 ) -> Element {
     let mut animation = use_signal(|| "wave".to_owned());
     let mut color = use_signal(|| "#a855f7".to_owned());
@@ -82,29 +83,38 @@ pub fn RingLight(
     };
     let level = f64::from(brightness_value.unwrap_or(0)) / 100.0;
     let preview_class = format!(
-        "ring-preview ring-preview-{}{}",
+        "ring-preview ring-preview-{}{}{}",
         animation(),
         if busy() && !showing() { " paused" } else { "" },
+        if logo { " ring-preview-logo" } else { "" },
     );
+    let target = if logo { "logo" } else { "ring" };
+    let title = if logo {
+        "Подсветка логотипа"
+    } else {
+        "Верхняя подсветка"
+    };
+    let pixels = if logo { 6 } else { 24 };
 
     rsx! {
         document::Stylesheet { href: asset!("/assets/ring-light.css") }
-        section { class: "ring-editor", aria_label: "Анимация верхней подсветки Миди",
-            h3 { "Верхняя подсветка" }
-            p { class: "ring-help", "Короткие световые анимации на верхней панели колонки." }
+        section { class: "ring-editor", aria_label: title,
+            h3 { "{title}" }
+            p { class: "ring-help", if logo { "Отдельные анимации шести RGB-светодиодов логотипа Алисы." } else { "Короткие световые анимации на верхней панели колонки." } }
             div { class: "ring-layout",
                 figure { class: preview_class, style: "--ring-color:{preview_color};--ring-level:{level}",
-                    svg { view_box: "0 0 200 200", role: "img", "aria-label": "Предпросмотр верхней подсветки", "focusable": "false",
+                    svg { view_box: "0 0 200 200", role: "img", "aria-label": "Предпросмотр: {title}", "focusable": "false",
                         rect { class: "ring-face", x: "12", y: "12", width: "176", height: "176", rx: "58" }
                         circle { class: "ring-center", cx: "100", cy: "100", r: "14" }
                         path { class: "ring-center-mark", d: "M94 103 L100 94 L106 103 Z" }
-                        for index in 0..24 {
+                        for index in 0..pixels {
                             {
-                                let angle = (f64::from(index) * 15.0 - 90.0).to_radians();
-                                let x = 100.0 + 72.0 * angle.cos();
-                                let y = 100.0 + 72.0 * angle.sin();
+                                let angle = (f64::from(index) * 360.0 / f64::from(pixels) - 90.0).to_radians();
+                                let radius = if logo { 30.0 } else { 72.0 };
+                                let x = 100.0 + radius * angle.cos();
+                                let y = 100.0 + radius * angle.sin();
                                 let tint = if animation() == "rainbow" {
-                                    format!("hsl({} 85% 55%)", index * 15)
+                                    format!("hsl({} 85% 55%)", index * 360 / pixels)
                                 } else {
                                     "var(--ring-color)".to_owned()
                                 };
@@ -127,25 +137,25 @@ pub fn RingLight(
                         }
                     }
                     if animation() != "rainbow" {
-                        label { class: "form-field ring-color", r#for: "ring-color", span { "Цвет" }
+                        label { class: "form-field ring-color", r#for: "{target}-color", span { "Цвет" }
                             span { class: "ring-color-value",
-                                input { id: "ring-color", r#type: "color", value: "{color}", disabled: busy(), oninput: move |event| { color.set(event.value()); feedback.set(None); } }
+                                input { id: "{target}-color", r#type: "color", value: "{color}", disabled: busy(), oninput: move |event| { color.set(event.value()); feedback.set(None); } }
                                 span { "{color}" }
                             }
                         }
                     }
                     div { class: "ring-options",
-                        label { class: "form-field", r#for: "ring-brightness", span { "Яркость, %" }
-                            input { id: "ring-brightness", r#type: "text", inputmode: "numeric", value: "{brightness}", disabled: busy(), aria_invalid: brightness_value.is_none(), oninput: move |event| { brightness.set(event.value()); feedback.set(None); } }
+                        label { class: "form-field", r#for: "{target}-brightness", span { "Яркость, %" }
+                            input { id: "{target}-brightness", r#type: "text", inputmode: "numeric", value: "{brightness}", disabled: busy(), aria_invalid: brightness_value.is_none(), oninput: move |event| { brightness.set(event.value()); feedback.set(None); } }
                         }
-                        label { class: "form-field", r#for: "ring-duration", span { "Длительность, с" }
-                            input { id: "ring-duration", r#type: "text", inputmode: "numeric", value: "{duration}", disabled: busy(), aria_invalid: duration_value.is_none(), oninput: move |event| { duration.set(event.value()); feedback.set(None); } }
+                        label { class: "form-field", r#for: "{target}-duration", span { "Длительность, с" }
+                            input { id: "{target}-duration", r#type: "text", inputmode: "numeric", value: "{duration}", disabled: busy(), aria_invalid: duration_value.is_none(), oninput: move |event| { duration.set(event.value()); feedback.set(None); } }
                         }
                     }
                     button { class: "button primary ring-show", disabled: !ready() || busy() || !valid, onclick: move |_| {
                         if !ready() || busy() || !valid { return; }
                         let command = json!({
-                            "type":"ring_animation", "animation":animation(), "color":color(),
+                            "type":"ring_animation", "target":target, "animation":animation(), "color":color(),
                             "brightness":brightness_value.unwrap(), "duration_ms":duration_value.unwrap() * 1_000,
                         });
                         status.set(None); feedback.set(None); showing.set(true); busy.set(true); send(bridge, command);

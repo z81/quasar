@@ -94,6 +94,7 @@ pub enum Panel {
     Settings,
     DeviceAccess,
     MidiDisplay,
+    SmartHome,
     Access,
 }
 
@@ -109,6 +110,7 @@ impl Panel {
             Self::Settings => "Настройки",
             Self::DeviceAccess => "Терминал и файлы",
             Self::MidiDisplay => "Своя Миди",
+            Self::SmartHome => "Умный дом",
             Self::Access => "Доступ",
         }
     }

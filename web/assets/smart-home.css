@@ -1,0 +1,25 @@
+.smart-home-page { display: grid; gap: 20px; }
+.smart-home-card { padding: 24px; min-width: 0; }
+.smart-home-card h2 { margin: 8px 0 12px; color: var(--text); font-size: 20px; }
+.smart-home-help { margin: 12px 0; color: var(--secondary); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.smart-home-protocols, .smart-home-network { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.smart-home-protocol { display: grid; gap: 8px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); }
+.smart-home-protocol strong { color: var(--text); font-size: 14px; }
+.smart-home-protocol span { color: var(--secondary); font-size: 12px; }
+.smart-home-tabs, .smart-home-actions { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+.smart-home-tabs .active { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent-text); }
+.smart-home-session { margin-top: 20px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-soft); color: var(--text); }
+.smart-home-session p { color: var(--secondary); font-size: 13px; line-height: 1.6; }
+.smart-home-device { display: grid; gap: 8px; margin-top: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--surface); }
+.smart-home-device-title { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.smart-home-device-title span, .smart-home-device small { color: var(--secondary); font-size: 12px; overflow-wrap: anywhere; }
+.smart-home-device .smart-home-help, .smart-home-device .smart-home-actions { margin: 0; }
+.smart-home-device .button { width: fit-content; }
+.smart-home-card input { color: var(--text); background: var(--surface); border: 1px solid var(--line); }
+.smart-home-card input::placeholder { color: var(--muted); }
+.smart-home-card :is(button, input):focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 640px) {
+    .smart-home-card { padding: 16px; }
+    .smart-home-protocols, .smart-home-network { grid-template-columns: minmax(0, 1fr); }
+    .smart-home-card input { font-size: 16px; }
+}

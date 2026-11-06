@@ -60,6 +60,7 @@ pub struct UniproxyContext {
     pub remote: Arc<crate::remote::RemoteServers>,
     pub weather: Arc<crate::weather::WeatherService>,
     pub schedules: Arc<crate::schedules::Scheduler>,
+    pub speakers: Arc<crate::speaker::SpeakerService>,
     /// MCP servers: their tools as functions, their live context in the state
     pub mcp: Arc<Mcp>,
     pub cache: ResponseCache,
@@ -173,6 +174,7 @@ async fn next_endpoint(voice_input: &mut Option<VoiceInput>) -> Endpoint {
 
 /// A VoiceInput being recorded: the audio of its stream until the end of the utterance
 struct VoiceInput {
+    enrollment_token: Option<String>,
     context: Arc<UniproxyContext>,
     stream_id: i64,
     started_at: Instant,
@@ -295,7 +297,7 @@ impl Connection {
         };
         let expects_callback = !matches!(
             &command,
-            StationCommand::Directives { .. } | StationCommand::RefreshPlayer
+            StationCommand::Directives { .. } | StationCommand::RefreshPlayer | StationCommand::RefreshSmartHome
         );
         let pushed = match command {
             // TS pushEvent: the station sends the frame back as a TextInput, answered by the agent
@@ -317,6 +319,10 @@ impl Connection {
             StationCommand::Directives { directives } => directives,
             StationCommand::RefreshPlayer => {
                 report(self.outbox.send(crate::player::refresh_message()));
+                return;
+            }
+            StationCommand::RefreshSmartHome => {
+                report(self.outbox.send(crate::smart_home::refresh_message()));
                 return;
             }
             StationCommand::Tracked { .. } => return,
@@ -368,6 +374,9 @@ impl Connection {
     fn handle_client_message(&mut self, message: TClientMessage) {
         match message.message {
             Some(t_client_message::Message::Event(event)) => {
+                if self.registry.is_current(&self.device_id, self.connection_id) {
+                    self.registry.smart_home.observe(&self.device_id, self.connection_id, &event);
+                }
                 let header = event.header.unwrap_or_default();
                 match event.event {
                     Some(ClientEvent::VoiceInput(request)) => self.handle_voice_input(header, request),
@@ -375,6 +384,9 @@ impl Connection {
                     Some(ClientEvent::LogSpotter(_)) => report(self.outbox.log_ack(&header.message_id)),
                     Some(ClientEvent::MatchedUser(request)) => self.handle_matched_user(&request),
                     Some(ClientEvent::CapabilityUpdateState(event)) if self.registry.is_current(&self.device_id, self.connection_id) => {
+                        if let Some(capability) = crate::sound::capability_update(&event) {
+                            self.registry.report_sound_capability(&self.device_id, self.connection_id, &event.endpoint_id, capability);
+                        }
                         if let Some(capability) = crate::display::capability_update(&event) {
                             self.registry.report_display_capability(&self.device_id, self.connection_id, &event.endpoint_id, capability);
                         }
@@ -415,7 +427,10 @@ impl Connection {
         tracing::info!("voice input stream {stream_id} started (dialog {dialog_id})");
 
         self.biometry = BiometrySlot::default();
+        let enrollment_token = self.context.speakers.enrollment_token(&self.device_id);
+        let enrolling = enrollment_token.is_some();
         self.voice_input = Some(VoiceInput {
+            enrollment_token,
             context: self.context.clone(),
             stream_id,
             started_at: Instant::now(),
@@ -432,8 +447,8 @@ impl Connection {
             biometry: self.biometry.clone(),
             ogg: Vec::new(),
             truncated: false,
-            recognition: self.context.gigastt.as_ref().map(Gigastt::start),
-            live_context: self.context.mcp.live_context(),
+            recognition: (!enrolling).then(|| self.context.gigastt.as_ref().map(Gigastt::start)).flatten(),
+            live_context: (!enrolling).then(|| self.context.mcp.live_context()).flatten(),
         });
     }
 
@@ -489,6 +504,7 @@ impl Connection {
             request.context = input.context;
             request.live_context = input.live_context;
             let utterance = Utterance {
+                enrollment_token: input.enrollment_token,
                 ogg: input.ogg,
                 biometry: input.biometry,
                 recognition: input.recognition,
@@ -532,6 +548,7 @@ impl Connection {
         request.context = input.context;
         request.live_context = input.live_context;
         let utterance = Utterance {
+            enrollment_token: input.enrollment_token,
             ogg: input.ogg,
             biometry: input.biometry,
             recognition: input.recognition,

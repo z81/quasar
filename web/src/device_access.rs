@@ -197,6 +197,7 @@ fn Session(
             match mode {
                 AccessMode::Display => rsx! {
                     crate::ring_light::RingLight { bridge, ready: shell_ready, status: display_status, busy: display_busy }
+                    crate::ring_light::RingLight { bridge, ready: shell_ready, status: display_status, busy: display_busy, logo: true }
                     crate::midi_display::MidiDisplay { bridge, ready: shell_ready, status: display_status, busy: display_busy }
                 },
                 AccessMode::Files if shell_ready() => rsx! { files::FileBrowser { bridge, data: file_state } },

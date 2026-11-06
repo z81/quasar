@@ -72,6 +72,7 @@ pub fn definitions() -> Vec<SettingDefinition> {
         field("PROCESSOR_CACHE_SIZE", "Кэш ответов", "Максимальное число ответов в кэше. Ноль отключает кэш.", "processor", "integer", "1000").range(0., 100_000.),
         field("STT_PROVIDER", "Распознавание речи", "GigaAM распознаёт речь локально; OpenRouter используется при сбое, если задан ключ.", "stt", "select", "openrouter").options(&["openrouter", "gigaam"]),
         field("GIGASTT_URL", "Адрес GigaAM", "Адрес gigastt: http:// или ws://, например http://gigastt:9876.", "stt", "text", ""),
+        field("SPEAKER_EMBEDDING_URL", "Распознавание домашних голосов", "Адрес локального сервиса speaker-embedding, например http://speaker-embedding:8091. Пустое значение отключает распознавание. Профили настраиваются отдельно.", "stt", "text", ""),
         field("GIGASTT_MIN_SILENCE_MS", "Пауза после речи, мс", "Сколько тишины ждать, прежде чем считать фразу законченной.", "stt", "integer", "800").range(1., 60_000.),
         field("STT_END_OF_SPEECH", "Окончание фразы", "Автоматически: для GigaAM — сервер, иначе — колонка.", "stt", "select", "").options(&["", "server", "station"]),
         field("OPENROUTER_STT_MODEL", "Модель распознавания OpenRouter", "Основное или резервное распознавание речи.", "stt", "text", "openai/whisper-large-v3"),

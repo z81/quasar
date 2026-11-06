@@ -13,6 +13,9 @@ mod ring_light;
 mod schedules;
 mod server_settings;
 mod settings;
+mod smart_home;
+mod speaker_profiles;
+mod sound_settings;
 mod sidebar;
 mod state;
 mod station;
@@ -125,7 +128,7 @@ fn App() -> Element {
                     div { class: "page-heading",
                         div {
                             div { class: "eyebrow", "ВАША АЛИСА. ВАШИ ПРАВИЛА." }
-                            h1 { match panel { Panel::Control => "Всё под контролем.", Panel::History => "История команд.", Panel::Advanced => "Прямой доступ.", Panel::Favorites => "Всегда под рукой.", Panel::Schedules => "Будильники и напоминания.", Panel::Timers => "Время пошло.", Panel::Settings => "На ваш лад.", Panel::Access => "Только для своих.", Panel::DeviceAccess => "Терминал и файлы.", Panel::MidiDisplay => "Своя Миди." } }
+                            h1 { match panel { Panel::Control => "Всё под контролем.", Panel::History => "История команд.", Panel::Advanced => "Прямой доступ.", Panel::Favorites => "Всегда под рукой.", Panel::Schedules => "Будильники и напоминания.", Panel::Timers => "Время пошло.", Panel::Settings => "На ваш лад.", Panel::Access => "Только для своих.", Panel::DeviceAccess => "Терминал и файлы.", Panel::MidiDisplay => "Своя Миди.", Panel::SmartHome => "Умный дом." } }
                             p { match panel {
                                 Panel::Control => "Скажите, что нужно сделать. Остальное — за Алисой.",
                                 Panel::History => "Запросы, ответы Алисы и результаты обработки.",
@@ -137,6 +140,7 @@ fn App() -> Element {
                                 Panel::Access => "Вход в пульт и ключи для ваших интеграций.",
                                 Panel::DeviceAccess => "Терминал и файлы выбранной колонки через ADB.",
                                 Panel::MidiDisplay => "Свои надписи, рисунки и анимации дисплея и верхней подсветки Миди.",
+                                Panel::SmartHome => "Устройства Zigbee и Matter, подключённые к выбранной колонке.",
                             } }
                         }
                         button { class: "button secondary refresh-button", disabled: (state.loading)(), onclick: move |_| { state.loading.set(true); spawn(api::refresh(state)); spawn(weather::refresh(state)); },
@@ -169,6 +173,7 @@ fn App() -> Element {
                         Panel::Access => rsx! { access::Access { state } },
                         Panel::DeviceAccess => rsx! { device_access::DeviceAccessPage { state } },
                         Panel::MidiDisplay => rsx! { device_access::DeviceAccessPage { state, mode: device_access::AccessMode::Display } },
+                        Panel::SmartHome => rsx! { smart_home::SmartHomePage { state } },
                         Panel::Advanced => rsx! {
                             div { class: "control-grid", composer::Advanced { state } station::StationCard { state } }
                         },

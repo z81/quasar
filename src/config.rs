@@ -177,6 +177,8 @@ pub struct Config {
     pub stt_provider: SttProvider,
     /// the gigastt server's HTTP address (STT_PROVIDER=gigaam), e.g. http://gigastt:9876
     pub gigastt_url: Option<String>,
+    /// Optional local ECAPA embedding service; empty disables household recognition.
+    pub speaker_embedding_url: Option<String>,
     pub end_of_speech: EndOfSpeech,
     /// the trailing silence after which an utterance ends: gigastt's VAD's
     /// per-session min_silence_ms; without --vad the silence after the latest

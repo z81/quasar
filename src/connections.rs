@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 #[derive(Clone, Debug)]
 pub enum StationCommand {
     RefreshPlayer,
+    RefreshSmartHome,
     /// Management command whose result is recorded in persistent history.
     Tracked {
         feedback: crate::control::CommandFeedback,
@@ -39,10 +40,12 @@ pub struct ConnectionRegistry {
     connections: Arc<Mutex<HashMap<String, DeviceConnections>>>,
     next_id: Arc<AtomicU64>,
     pub player: crate::player::PlayerRegistry,
+    pub smart_home: crate::smart_home::Registry,
     timezones: Arc<Mutex<HashMap<String, String>>>,
     reported_timezones: Arc<Mutex<HashMap<String, String>>>,
     alarm_support: Arc<Mutex<HashMap<String, bool>>>,
     display_capabilities: Arc<Mutex<HashMap<u64, crate::display::DisplayCapability>>>,
+    sound_capabilities: Arc<Mutex<HashMap<u64, crate::sound::SoundCapability>>>,
 }
 
 impl ConnectionRegistry {
@@ -108,6 +111,25 @@ impl ConnectionRegistry {
             .is_some_and(|(id, sender)| *id == connection_id && sender.send(command).is_ok())
     }
 
+    pub fn report_sound_capability(&self, device_id: &str, connection_id: u64, endpoint_id: &str,
+        update: crate::proto::n_alice::TEqualizerCapability) {
+        let connections = self.connections.lock().unwrap();
+        let current = connections.get(device_id)
+            .and_then(|targets| targets.iter().filter(|(_, sender)| !sender.is_closed()).map(|(id, _)| *id).max());
+        if current == Some(connection_id) {
+            self.sound_capabilities.lock().unwrap().entry(connection_id)
+                .or_default().update(endpoint_id, update);
+        }
+    }
+
+    pub fn sound_capability(&self, device_id: &str) -> Option<(u64, crate::sound::SoundCapability)> {
+        let connections = self.connections.lock().unwrap();
+        let connection_id = connections.get(device_id)?
+            .iter().filter(|(_, sender)| !sender.is_closed()).map(|(id, _)| *id).max()?;
+        self.sound_capabilities.lock().unwrap().get(&connection_id).cloned()
+            .map(|capability| (connection_id, capability))
+    }
+
     pub fn is_current(&self, duid: &str, connection_id: u64) -> bool {
         self.connections.lock().unwrap().get(duid)
             .and_then(|targets| targets.iter().filter(|(_, sender)| !sender.is_closed()).map(|(id, _)| *id).max())
@@ -153,6 +175,9 @@ impl ConnectionRegistry {
             }
         }
         self.display_capabilities.lock().unwrap().remove(&connection_id);
+        self.sound_capabilities.lock().unwrap().remove(&connection_id);
+        drop(connections);
+        self.smart_home.disconnected(device_id, connection_id);
     }
 
     /// Sends the command to every connection of one device or of all devices;

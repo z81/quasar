@@ -40,6 +40,12 @@ pub fn classify(request: &TAliceRequestProto) -> TextInputKind {
         return TextInputKind::Unknown("no event in the request".to_string());
     };
     let is_server_action = event.r#type == Some(EEventType::ServerAction as i32);
+    // The native IoT observer handles these callbacks. Their payload can
+    // contain commissioning credentials and network keys, so never format it
+    // into the generic unknown-event log.
+    if is_server_action && event.name.as_deref() == Some("@@mm_typed_callback") {
+        return TextInputKind::Unknown("typed callback".to_owned());
+    }
     match &event.payload_type {
         Some(PayloadType::Payload(payload)) if is_server_action => {
             classify_payload(&struct_to_json(payload))
@@ -80,7 +86,19 @@ fn classify_payload(payload: &Value) -> TextInputKind {
         payload.pointer(pointer).and_then(Value::as_str).filter(|text| !text.is_empty()).map(str::to_string)
     };
 
-    if frame("music_play_semantic_frame") {
+    if [
+        "endpoint_events_batch_semantic_frame",
+        "save_iot_networks_semantic_frame",
+        "restore_iot_networks_semantic_frame",
+        "iot_discovery_start_semantic_frame",
+        "iot_discovery_failure_semantic_frame",
+        "start_iot_tuya_broadcast_semantic_frame",
+    ]
+    .into_iter()
+    .any(frame)
+    {
+        TextInputKind::Unknown("native IoT event".to_owned())
+    } else if frame("music_play_semantic_frame") {
         TextInputKind::PlayButton
     } else if let Some(event) = text("/typed_semantic_frame/external_event_semantic_frame/event") {
         TextInputKind::ExternalEvent(event)
@@ -109,6 +127,13 @@ fn classify_semantic_frame(raw: &[u8]) -> TextInputKind {
             Some(
                 TypedFrame::MusicPlaySemanticFrame(_) | TypedFrame::PlayerContinueSemanticFrame(_),
             ) => TextInputKind::PlayButton,
+            Some(TypedFrame::EndpointEventsBatchSemanticFrame(_)
+                | TypedFrame::SaveIotNetworksSemanticFrame(_)
+                | TypedFrame::RestoreIotNetworksSemanticFrame(_)
+                | TypedFrame::IoTDiscoveryStartSemanticFrame(_)
+                | TypedFrame::IoTDiscoveryFailureSemanticFrame(_)
+                | TypedFrame::StartIotTuyaBroadcastSemanticFrame(_)) =>
+                TextInputKind::Unknown("native IoT event".to_owned()),
             other => TextInputKind::Unknown(format!("semantic frame {other:?}")),
         },
         Err(error) => TextInputKind::Unknown(format!("undecodable semantic frame: {error}")),

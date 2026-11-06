@@ -1,10 +1,19 @@
-//! Short Cucumber ring overlays through its 24-pixel BGR framebuffer.
+//! Short Cucumber ring and logo overlays through their BGR framebuffers.
 //! Writing individual LED brightness files can detach the stock LED triggers;
 //! framebuffer writes preserve them and let native indication take over.
 
 use std::fmt::Write;
 
+#[derive(Clone, Copy, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Target {
+    #[default]
+    Ring,
+    Logo,
+}
+
 pub(super) fn script(
+    target: Target,
     animation: &str,
     color: &str,
     brightness: u8,
@@ -26,22 +35,27 @@ pub(super) fn script(
         .into_iter()
         .map(|offset| u8::from_str_radix(&color[offset..offset + 2], 16).unwrap())
         .collect();
+    let (name, framebuffer, pixels, banks) = match target {
+        Target::Ring => ("ring", 0, 24, "ringA ringB"),
+        Target::Logo => ("logo", 1, 6, "logo"),
+    };
     let count = duration_ms / 100;
     let mut frames = String::new();
     for tick in 0..count {
-        for pixel in 0..24 {
+        for pixel in 0..pixels {
             let (channels, level) = match animation {
-                "rainbow" => (rainbow((pixel * 15 + tick * 9) % 360), 1.0),
+                "rainbow" => (rainbow((pixel * 360 / pixels + tick * 9) % 360), 1.0),
                 "pulse" => (
                     [rgb[0], rgb[1], rgb[2]],
                     0.15 + 0.85 * (1.0 - (tick as f64 * std::f64::consts::TAU / 20.0).cos()) / 2.0,
                 ),
                 _ => {
-                    let distance = (tick + 24 - pixel) % 24;
+                    let distance = (tick + pixels - pixel) % pixels;
+                    let trail = pixels / 3;
                     (
                         [rgb[0], rgb[1], rgb[2]],
-                        if distance < 8 {
-                            (8 - distance) as f64 / 8.0
+                        if distance < trail {
+                            (trail - distance) as f64 / trail as f64
                         } else {
                             0.0
                         },
@@ -58,6 +72,18 @@ pub(super) fn script(
         frames.push('\n');
     }
     Ok(SCRIPT
+        .replace("@NAME@", name)
+        .replace("@FB@", &framebuffer.to_string())
+        .replace("@PIXELS@", &pixels.to_string())
+        .replace("@BYTES@", &(pixels * 3).to_string())
+        .replace(
+            "@INDICES@",
+            &(0..pixels)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+        .replace("@BANKS@", banks)
         .replace("@FRAMES@", &frames)
         .replace("@COUNT@", &count.to_string())
         .replace("@DURATION_CS@", &(duration_ms / 10).to_string()))
@@ -76,25 +102,25 @@ fn rainbow(hue: u64) -> [u8; 3] {
     }
 }
 
-const SCRIPT: &str = r#"fb=/dev/fb0
-root=/sys/class/graphics/fb0
+const SCRIPT: &str = r#"fb=/dev/fb@FB@
+root=/sys/class/graphics/fb@FB@
 leds=/sys/class/leds
-lock=/tmp/quasar-ring-overlay.lock
+lock=/tmp/quasar-@NAME@-overlay.lock
 [ -c "$fb" ] && [ -r "$fb" ] && [ -w "$fb" ] || exit 2
-for pair in name:ring virtual_size:24,1 bits_per_pixel:24 stride:72; do
+for pair in name:@NAME@ virtual_size:@PIXELS@,1 bits_per_pixel:24 stride:@BYTES@; do
  IFS= read -r value < "$root/${pair%%:*}" || exit 2
  [ "$value" = "${pair#*:}" ] || exit 2
 done
 format=$(fbset -fb "$fb" 2>/dev/null | awk '$1 == "rgba" {print $2}')
 [ "$format" = 8/16,8/8,8/0,0/0 ] || exit 2
-for i in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23; do
+for i in @INDICES@; do
  for color in red green blue; do
-  IFS= read -r trigger < "$leds/cucumber:$color:ring$i/trigger" || exit 2
-  case "$trigger" in *'[ledfb-ring]'*) : ;; *) exit 3 ;; esac
+  IFS= read -r trigger < "$leds/cucumber:$color:@NAME@$i/trigger" || exit 2
+  case "$trigger" in *'[ledfb-@NAME@]'*) : ;; *) exit 3 ;; esac
  done
 done
 native_idle() {
- for bank in ringA ringB; do
+ for bank in @BANKS@; do
   IFS= read -r value < "$leds/cucumber:$bank:sync/brightness" || return 1
   [ "$value" = 0 ] || return 1
  done
@@ -114,8 +140,8 @@ stage=''
 owned=0
 outcome=completed
 read_frame() {
- dd if="$fb" of="$stage/current" bs=72 count=1 2>/dev/null || return 1
- [ "$(wc -c < "$stage/current")" -eq 72 ]
+ dd if="$fb" of="$stage/current" bs=@BYTES@ count=1 2>/dev/null || return 1
+ [ "$(wc -c < "$stage/current")" -eq @BYTES@ ]
 }
 cleanup() {
  result=$?
@@ -138,7 +164,7 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'outcome=interrupted; exit 0' HUP INT TERM
-stage=$(mktemp -d /tmp/quasar-ring.XXXXXX) || exit 5
+stage=$(mktemp -d /tmp/quasar-@NAME@.XXXXXX) || exit 5
 read_frame || exit 5
 cp "$stage/current" "$stage/original" || exit 5
 cp "$stage/current" "$stage/last" || exit 5
@@ -156,7 +182,7 @@ while IFS= read -r frame; do
   exit 0
  fi
  printf '%b' "$frame" > "$stage/next" || exit 6
- [ "$(wc -c < "$stage/next")" -eq 72 ] || exit 6
+ [ "$(wc -c < "$stage/next")" -eq @BYTES@ ] || exit 6
  # Keep the expected frame before writing, including for a signal on write.
  cp "$stage/next" "$stage/last" || exit 6
  owned=1

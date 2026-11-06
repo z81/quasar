@@ -17,6 +17,7 @@ pub struct Runtime {
     current: RwLock<Arc<UniproxyContext>>,
     weather: Arc<WeatherService>,
     schedules: Arc<Scheduler>,
+    speakers: Arc<crate::speaker::SpeakerService>,
 }
 
 impl Runtime {
@@ -24,8 +25,9 @@ impl Runtime {
         config: Config,
         weather: Arc<WeatherService>,
         schedules: Arc<Scheduler>,
+        speakers: Arc<crate::speaker::SpeakerService>,
     ) -> Result<Arc<Self>> {
-        let prepared = prepare(config, weather.clone(), schedules.clone(), None).await?;
+        let prepared = prepare(config, weather.clone(), schedules.clone(), speakers.clone(), None).await?;
         crate::logging::apply(&prepared.config.log_filter);
         crate::time_zone::set_default(prepared.config.timezone.as_deref());
         prepared.mcp.start();
@@ -33,6 +35,7 @@ impl Runtime {
             current: RwLock::new(prepared),
             weather,
             schedules,
+            speakers,
         }))
     }
 
@@ -51,6 +54,7 @@ impl Runtime {
             config,
             self.weather.clone(),
             self.schedules.clone(),
+            self.speakers.clone(),
             Some(&current),
         )
         .await
@@ -77,6 +81,7 @@ async fn prepare(
     config: Config,
     weather: Arc<WeatherService>,
     schedules: Arc<Scheduler>,
+    speakers: Arc<crate::speaker::SpeakerService>,
     previous: Option<&UniproxyContext>,
 ) -> Result<Arc<UniproxyContext>> {
     let openrouter = crate::openrouter::OpenRouter::new(
@@ -168,6 +173,7 @@ async fn prepare(
         remote,
         weather,
         schedules,
+        speakers,
         gigastt,
         piper,
         updates,

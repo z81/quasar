@@ -10,6 +10,7 @@
 .ring-led-base { fill: var(--line); }
 .ring-led { opacity: var(--ring-level); }
 .ring-preview-wave .ring-led { animation: ring-wave 2.4s linear infinite; }
+.ring-preview-logo.ring-preview-wave .ring-led { animation-duration: .6s; }
 .ring-preview-pulse .ring-led { animation: ring-pulse 2s ease-in-out infinite; }
 .ring-preview-rainbow .ring-led { animation: ring-rainbow 4s linear infinite; }
 .ring-preview.paused .ring-led { animation-play-state: paused; }

@@ -112,6 +112,8 @@ enum ClientMessage {
         duration_ms: u64,
     },
     RingAnimation {
+        #[serde(default)]
+        target: ring::Target,
         animation: String,
         color: String,
         brightness: u8,

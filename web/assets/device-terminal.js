@@ -50,9 +50,15 @@ export async function createTerminal(config, report) {
   });
   const theme = name => {
     const dark = name === 'dark';
-    terminal.options.theme = dark
-      ? { background: '#171916', foreground: '#e7e9e2', cursor: '#bcd4a5', selectionBackground: '#53634a', black: '#171916', brightBlack: '#94998d' }
-      : { background: '#f6f7f3', foreground: '#292d25', cursor: '#435c33', selectionBackground: '#d6e1c9', black: '#292d25', brightBlack: '#626a59', white: '#65705c', brightWhite: '#292d25', yellow: '#8b6200', brightYellow: '#8b6200', green: '#377228', brightGreen: '#377228', cyan: '#14767a', brightCyan: '#14767a' };
+    const palette = getComputedStyle(element);
+    const color = token => palette.getPropertyValue(token).trim();
+    terminal.options.theme = {
+      ...(dark
+        ? { black: '#181322', brightBlack: '#a99bbd', green: '#8ddbb7', brightGreen: '#a6edcd', yellow: '#e8cb8f', brightYellow: '#f2dba8', blue: '#a6baff', brightBlue: '#c0ccff', magenta: '#c6a1ff', brightMagenta: '#dfbbff', cyan: '#89d7e8', brightCyan: '#b1ebf5' }
+        : { black: '#2c2540', brightBlack: '#716580', white: '#716580', brightWhite: '#2c2540', yellow: '#806000', brightYellow: '#806000', green: '#27734d', brightGreen: '#27734d', blue: '#435ab4', brightBlue: '#435ab4', magenta: '#8b3f9e', brightMagenta: '#8b3f9e', cyan: '#1b707b', brightCyan: '#1b707b' }),
+      background: color('--terminal-bg'), foreground: color('--terminal-fg'),
+      cursor: color('--terminal-cursor'), selectionBackground: color('--terminal-selection'),
+    };
   };
   theme(config.theme);
   resize();

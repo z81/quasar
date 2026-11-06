@@ -4,8 +4,9 @@
 use prost::Message;
 use serde_json::{json, Value};
 
-use crate::proto::n_alice::n_alice_api::TCapabilityUpdateState;
+use crate::proto::n_alice::n_alice_api::{TCapabilityUpdateState, TEnvironmentState};
 use crate::proto::n_alice::t_capability::ECapabilityType;
+use crate::proto::n_alice::t_endpoint::{EAccessType, EEndpointType};
 use crate::proto::n_alice::TEqualizerCapability;
 
 pub const BANDS: [(u32, u32); 5] = [
@@ -104,6 +105,57 @@ pub fn capability_update(event: &TCapabilityUpdateState) -> Option<TEqualizerCap
                 || capability.parameters.is_some()
                 || capability.state.is_some()
         })
+}
+
+/// GetDeviceState can return the initial capability only in its environment
+/// snapshot. Restrict it to this station's own/embedded speaker endpoint;
+/// another speaker in the household must not confirm these settings.
+pub fn environment_capability<'a>(
+    environment: &'a TEnvironmentState,
+    duid: &str,
+) -> Option<(&'a str, TEqualizerCapability)> {
+    let mut reported = environment
+        .endpoints
+        .iter()
+        .take(256)
+        .filter_map(|endpoint| {
+            let own = endpoint.id == duid
+                || endpoint.meta.as_ref().is_some_and(|meta| {
+                    meta.r#type == EEndpointType::SpeakerEndpointType as i32
+                        && meta.access_type == EAccessType::Embedded as i32
+                });
+            if !own {
+                return None;
+            }
+            let raw = endpoint
+                .any_capabilities
+                .iter()
+                .find(|holder| {
+                    holder.capability_type == ECapabilityType::EqualizerCapabilityType as i32
+                        && !holder.raw_capability.is_empty()
+                })
+                .map(|holder| holder.raw_capability.as_slice())
+                .or_else(|| {
+                    endpoint
+                        .capabilities
+                        .iter()
+                        .find(|capability| {
+                            capability.type_url.rsplit('/').next()
+                                == Some("NAlice.TEqualizerCapability")
+                                && !capability.value.is_empty()
+                        })
+                        .map(|capability| capability.value.as_slice())
+                })?;
+            let capability = TEqualizerCapability::decode(raw).ok()?;
+            (capability.state.is_some()
+                || capability.parameters.is_some()
+                || capability.meta.is_some())
+            .then_some((endpoint.id.as_str(), capability))
+        });
+    let capability = reported.next()?;
+    // A snapshot with multiple embedded speakers is ambiguous; wait for a
+    // targeted state update instead of displaying the wrong speaker's state.
+    reported.next().is_none().then_some(capability)
 }
 
 pub fn default_equalizer() -> Value {

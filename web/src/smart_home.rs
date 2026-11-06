@@ -140,10 +140,10 @@ fn SmartHome(state: ControlState, duid: String) -> Element {
                 },
                     if protocol() == "matter" {
                         p { class: "smart-home-help", "Используйте Matter over Wi-Fi, сеть 2,4 ГГц и код с устройства. Включите на устройстве режим подключения. Для добавления из другого дома нужен новый код общего доступа." }
-                        label { class: "form-field", span { "Код Matter или содержимое QR-кода" } input { value: "{setup_code}", autocomplete: "off", spellcheck: "false", placeholder: "11 цифр или MT:…", disabled: busy() || active, oninput: move |event| setup_code.set(event.value()) } }
+                        label { class: "form-field", span { "Код Matter или содержимое QR-кода" } input { value: "{setup_code}", required: true, maxlength: "256", autocomplete: "off", spellcheck: "false", placeholder: "11 или 21 цифра, либо MT:…", disabled: busy() || active, oninput: move |event| setup_code.set(event.value()) } }
                         div { class: "smart-home-network",
-                            label { class: "form-field", span { "Сеть Wi-Fi (SSID)" } input { value: "{ssid}", autocomplete: "off", spellcheck: "false", disabled: busy() || active, oninput: move |event| ssid.set(event.value()) } }
-                            label { class: "form-field", span { "Пароль Wi-Fi" } input { r#type: "password", value: "{password}", autocomplete: "new-password", disabled: busy() || active, oninput: move |event| password.set(event.value()) } }
+                            label { class: "form-field", span { "Сеть Wi-Fi (SSID)" } input { value: "{ssid}", required: true, maxlength: "32", autocomplete: "off", spellcheck: "false", disabled: busy() || active, oninput: move |event| ssid.set(event.value()) } }
+                            label { class: "form-field", span { "Пароль Wi-Fi" } input { r#type: "password", value: "{password}", maxlength: "64", autocomplete: "new-password", disabled: busy() || active, oninput: move |event| password.set(event.value()) } }
                         }
                         p { class: "smart-home-help", "Код и пароль передаются только в команду подключения, без сохранения в настройках и истории." }
                     } else {

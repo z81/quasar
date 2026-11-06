@@ -17,6 +17,7 @@ use crate::stations::StationSummary;
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SoundAction {
+    Refresh,
     Apply {
         enabled: bool,
         room_correction: bool,
@@ -47,9 +48,20 @@ pub async fn update(
             "Эти настройки звука проверены только для Станции Миди",
         );
     }
+    if matches!(input, SoundAction::Refresh) {
+        return if state
+            .registry
+            .send_one(&duid, StationCommand::RefreshSmartHome)
+        {
+            (StatusCode::ACCEPTED, Json(json!({"status":"queued"}))).into_response()
+        } else {
+            error(StatusCode::CONFLICT, "Колонка не подключена")
+        };
+    }
     let mut config = station.quasar_config.clone();
     let previous = config["deviceConfig"].get("equalizer").cloned();
     match input {
+        SoundAction::Refresh => unreachable!("refresh was handled before config changes"),
         SoundAction::Apply {
             enabled,
             room_correction,
@@ -110,6 +122,17 @@ pub async fn update(
                     directives: vec![super::raw_directive::push_update_config()],
                 },
             );
+            if delivered {
+                // Config fetch is asynchronous. One delayed read-only snapshot
+                // refreshes firmware state without polling the station on every
+                // UI status request or interpreting dispatch as an ACK.
+                let registry = state.registry.clone();
+                let duid = duid.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                    registry.send_one(&duid, StationCommand::RefreshSmartHome);
+                });
+            }
             Json(json!({"status":"saved","notified":delivered,"sound":snapshot(&state,&station)}))
                 .into_response()
         }

@@ -401,6 +401,12 @@ impl Connection {
                     }
                     Some(ClientEvent::SyncPushResponse(response)) => {
                         if let Some(crate::proto::n_alice::n_alice_api::t_sync_response::Response::GetDeviceStateResponse(response)) = response.sync_response.and_then(|response| response.response) {
+                            if self.registry.is_current(&self.device_id, self.connection_id) {
+                                if let Some((endpoint_id, capability)) = response.environment_state.as_ref()
+                                    .and_then(|environment| crate::sound::environment_capability(environment, &self.device_id)) {
+                                    self.registry.report_sound_capability(&self.device_id, self.connection_id, endpoint_id, capability);
+                                }
+                            }
                             if let Some(state)=response.device_state { self.registry.player.observe_state(&self.device_id, &state); }
                         }
                     }

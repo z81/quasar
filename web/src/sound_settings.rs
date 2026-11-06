@@ -88,6 +88,24 @@ async fn refresh(state: ControlState, duid: &str, mut editor: Editor) {
     editor.loading.set(false);
 }
 
+async fn request_refresh(state: ControlState, duid: &str, mut editor: Editor) {
+    if !state.allowed() || *editor.loading.peek() || *editor.busy.peek() {
+        return;
+    }
+    editor.loading.set(true);
+    let revision = *editor.revision.peek();
+    let url = format!("/devices/{}/sound", api::encoded(duid));
+    let result = api::mutate(state, "PUT", &url, Some(&json!({"action":"refresh"}))).await;
+    editor.loading.set(false);
+    if *editor.revision.peek() != revision || *editor.busy.peek() {
+        return;
+    }
+    if let Err(error) = result {
+        editor.feedback.set(Some((false, error)));
+    }
+    refresh(state, duid, editor).await;
+}
+
 async fn save(state: ControlState, duid: String, body: serde_json::Value, mut editor: Editor) {
     if *editor.busy.peek() {
         return;
@@ -149,8 +167,19 @@ pub fn SoundSettings(state: ControlState, duid: String) -> Element {
     use_future(move || {
         let duid = polling_duid.clone();
         async move {
+            let mut requested = false;
             loop {
                 refresh(state, &duid, editor).await;
+                if !requested
+                    && editor
+                        .status
+                        .peek()
+                        .as_ref()
+                        .is_some_and(|status| status.supported && status.connected)
+                {
+                    requested = true;
+                    request_refresh(state, &duid, editor).await;
+                }
                 TimeoutFuture::new(6_000).await;
             }
         }
@@ -168,7 +197,7 @@ pub fn SoundSettings(state: ControlState, duid: String) -> Element {
             div { class: "card-heading",
                 span { class: "card-kicker", Icon { name: "speaker", size: 16 } "ЗВУК" }
                 button { class: "text-button", disabled: busy || (editor.loading)(), onclick: move |_| {
-                    let duid = refresh_duid.clone(); spawn(async move { refresh(state, &duid, editor).await; });
+                    let duid = refresh_duid.clone(); spawn(async move { request_refresh(state, &duid, editor).await; });
                 }, Icon { name: "refresh", size: 14 } "Обновить" }
             }
             h2 { "Эквалайзер и Room Correction" }

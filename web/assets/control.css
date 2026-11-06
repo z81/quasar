@@ -87,6 +87,7 @@ h1 { font-size: 34px; letter-spacing: -1.35px; line-height: 1.2; font-weight: 65
 .card-kicker { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 9px; letter-spacing: 1.1px; font-weight: 650; }
 .composer .card-kicker svg { color: var(--accent); }
 .subtle-pill { border: 1px solid var(--line); border-radius: 5px; font-size: 9px; color: var(--muted); padding: 3px 6px; white-space: nowrap; }
+.speaker-profiles .subtle-pill { display: inline-block; white-space: normal; }
 .composer h2 { margin-top: 22px; font-size: 20px; letter-spacing: -.55px; font-weight: 600; }
 .mode-tabs { display: flex; gap: 4px; margin-top: 20px; margin-bottom: 14px; width: fit-content; padding: 4px; border-radius: 8px; background: var(--surface-soft); }
 .mode-tab { min-height: 30px; padding: 6px 14px; font-size: 11px; border: 0; background: transparent; color: var(--secondary); border-radius: 5px; }

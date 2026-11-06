@@ -85,7 +85,7 @@ fn SpeakerPanel(state: ControlState, duid: String) -> Element {
         .any(|d| d.duid == duid && d.connected == Some(true));
     let start_duid = duid.clone();
     rsx! {
-        div { class: "station-settings-stack",
+        div { class: "station-settings-stack speaker-profiles",
             section { class: "card settings-card",
                 div { class: "card-heading", span { class: "card-kicker", Icon { name: "speaker", size: 16 } "ДОМАШНИЕ ГОЛОСА" }
                     span { class: "subtle-pill", if available { "Сервис доступен" } else if snapshot.is_none() { "Проверяем…" } else { "Без распознавания" } }

@@ -1,4 +1,7 @@
 mod access;
+mod animation_timeline;
+mod automations;
+mod device_tools;
 mod api;
 mod composer;
 mod device_access;
@@ -9,6 +12,9 @@ mod favorites;
 mod history;
 mod icons;
 mod midi_display;
+mod maintenance;
+mod packages;
+mod system_sounds;
 mod player;
 mod ring_light;
 mod schedules;
@@ -125,6 +131,8 @@ fn App() -> Element {
     let panel = (state.panel)();
     rsx! {
         document::Title { "Quasar — пульт управления" }
+        document::Link { rel: "manifest", href: "/ui/app.webmanifest" }
+        document::Script { r#type: "module", src: asset!("/assets/pwa.js") }
         document::Stylesheet { href: asset!("/assets/control.css") }
         div { class: if state.allowed() { "app" } else { "app auth-app" }, "data-theme": (state.theme)().name(),
             if !state.allowed() { access::LoginGate { state } } else {
@@ -151,6 +159,9 @@ fn App() -> Element {
                                 Panel::DeviceAccess => "Терминал и файлы выбранной колонки через ADB.",
                                 Panel::MidiDisplay => "Свои надписи, рисунки и анимации дисплея и верхней подсветки Миди.",
                                 Panel::SmartHome => "Устройства Zigbee и Matter, подключённые к выбранной колонке.",
+                                Panel::Automations => "Сценарии на сервере и автономные будильники на колонке.",
+                                Panel::DeviceTools => "Состояние системы, история показателей, журналы и Bluetooth.",
+                                Panel::Maintenance => "Пакеты, службы, системные звуки и резервные копии.",
                             } }
                         }
                         button { class: "button secondary refresh-button", aria_label: "Обновить данные", disabled: (state.loading)(), onclick: move |_| { state.loading.set(true); spawn(api::refresh(state)); spawn(weather::refresh(state)); },
@@ -186,6 +197,9 @@ fn App() -> Element {
                         Panel::DeviceAccess => rsx! { device_access::DeviceAccessPage { state } },
                         Panel::MidiDisplay => rsx! { device_access::DeviceAccessPage { state, mode: device_access::AccessMode::Display } },
                         Panel::SmartHome => rsx! { smart_home::SmartHomePage { state } },
+                        Panel::Automations => rsx! { automations::AutomationsPage { state } },
+                        Panel::DeviceTools => rsx! { device_tools::DeviceToolsPage { state } },
+                        Panel::Maintenance => rsx! { maintenance::MaintenancePage { state } },
                         Panel::Advanced => rsx! {
                             div { class: "control-grid", composer::Advanced { state } station::StationCard { state } }
                         },

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use futures_util::StreamExt;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::agent::{FunctionDefinition, FunctionKind};
 
@@ -84,13 +84,104 @@ impl RemoteServers {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("no remote server owns function '{name}'"))?;
         // like TS: a call without arguments sends an empty object, not null
-        let arguments = arguments.clone().filter(|arguments| !arguments.is_null()).unwrap_or_else(|| json!({}));
-        self.call_function(&owner, session_id, metadata, name, &arguments).await
+        let arguments = arguments
+            .clone()
+            .filter(|arguments| !arguments.is_null())
+            .unwrap_or_else(|| json!({}));
+        self.call_function(&owner, session_id, metadata, name, &arguments)
+            .await
     }
 
     /// Whether a function server offers `name`
     pub fn owns(&self, name: &str) -> bool {
-        self.owners.read().unwrap_or_else(std::sync::PoisonError::into_inner).contains_key(name)
+        self.owners
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(name)
+    }
+
+    /// Rich player operations go only to a configured bridge which explicitly
+    /// confirms the selected station. A mutation is sent once and never retried.
+    pub(crate) async fn player_music(
+        &self,
+        duid: &str,
+        query: &HashMap<String, String>,
+        body: Option<&Value>,
+    ) -> Result<Value, (axum::http::StatusCode, String)> {
+        use axum::http::StatusCode;
+        for state_url in &self.state_urls {
+            let Ok(base) = reqwest::Url::parse(state_url) else {
+                continue;
+            };
+            let Ok(mut url) = base.join("music") else {
+                continue;
+            };
+            url.set_query(base.query());
+            url.query_pairs_mut().append_pair("duid", duid);
+            let mut identity_url = url.clone();
+            identity_url.query_pairs_mut().append_pair("op", "identity");
+            let Ok(identity) = self.client.get(identity_url).send().await else {
+                continue;
+            };
+            if !identity.status().is_success() {
+                continue;
+            }
+            let Ok(identity) = identity.json::<Value>().await else {
+                continue;
+            };
+            if identity["duid"].as_str() != Some(duid) {
+                continue;
+            }
+            for (key, value) in query {
+                url.query_pairs_mut().append_pair(key, value);
+            }
+            let request = match body {
+                Some(body) => self.client.post(url).json(body),
+                None => self.client.get(url),
+            };
+            let mut response = request.send().await.map_err(|_| (
+                StatusCode::BAD_GATEWAY,
+                "Музыкальный мост недоступен. Результат команды неизвестен; проверьте плеер перед повтором.".into(),
+            ))?;
+            let status = response.status();
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(|_| {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    "Ответ музыкального моста прервался".into(),
+                )
+            })? {
+                if bytes.len() + chunk.len() > 1024 * 1024 {
+                    return Err((
+                        StatusCode::BAD_GATEWAY,
+                        "Слишком большой ответ музыкального моста".into(),
+                    ));
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    "Непонятный ответ музыкального моста".into(),
+                )
+            })?;
+            if !status.is_success() {
+                return Err((
+                    StatusCode::CONFLICT,
+                    value["error"]
+                        .as_str()
+                        .unwrap_or("Spotify не выполнил запрос")
+                        .chars()
+                        .take(1000)
+                        .collect(),
+                ));
+            }
+            return Ok(value);
+        }
+        Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Для этой колонки не подключён музыкальный мост с расширенным плеером".into(),
+        ))
     }
 
     /// Cover keys originate in bridge events. Only configured state servers
@@ -112,7 +203,12 @@ impl RemoteServers {
         None
     }
 
-    async fn fetch_player_cover(&self, state_url: &str, duid: &str, key: &str) -> Option<PlayerCover> {
+    async fn fetch_player_cover(
+        &self,
+        state_url: &str,
+        duid: &str,
+        key: &str,
+    ) -> Option<PlayerCover> {
         const MAX_BYTES: usize = 2 * 1024 * 1024;
         let base = reqwest::Url::parse(state_url).ok()?;
         let mut url = base.join(&format!("cover/{key}")).ok()?;
@@ -135,7 +231,10 @@ impl RemoteServers {
             .next()?
             .trim()
             .to_owned();
-        if !matches!(content_type.as_str(), "image/jpeg" | "image/png" | "image/webp") {
+        if !matches!(
+            content_type.as_str(),
+            "image/jpeg" | "image/png" | "image/webp"
+        ) {
             return None;
         }
         let mut body = Vec::new();
@@ -211,7 +310,11 @@ impl RemoteServers {
 
     /// Collects the per-turn state entries of all state servers (queried
     /// concurrently; on duplicate keys the first server wins, as in TS)
-    pub async fn state(&self, session_id: &str, metadata: &Value) -> HashMap<String, (String, String)> {
+    pub async fn state(
+        &self,
+        session_id: &str,
+        metadata: &Value,
+    ) -> HashMap<String, (String, String)> {
         let body = &json!({ "metadata": metadata, "sessionId": session_id });
         let fetches = self.state_urls.iter().map(|url| async move {
             let fetch = async {

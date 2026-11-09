@@ -2,9 +2,10 @@
 //! shell connections to the rooted station.
 
 mod adb;
-mod display;
-mod ring;
+pub(crate) mod display;
+pub(crate) mod ring;
 mod shell;
+pub(crate) mod operations;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -111,6 +112,10 @@ enum ClientMessage {
         brightness: u8,
         duration_ms: u64,
     },
+    DisplaySequence {
+        frames: Vec<display::AnimationFrame>,
+        repeat: u8,
+    },
     RingAnimation {
         #[serde(default)]
         target: ring::Target,
@@ -125,7 +130,7 @@ impl ClientMessage {
     fn is_display(&self) -> bool {
         matches!(
             self,
-            Self::DisplayText { .. } | Self::DisplayAnimation { .. } | Self::DisplayFrame { .. }
+            Self::DisplayText { .. } | Self::DisplayAnimation { .. } | Self::DisplayFrame { .. } | Self::DisplaySequence { .. }
         )
     }
 }
@@ -364,7 +369,7 @@ async fn session(
                             }
                         }
                     }
-                    command @ (ClientMessage::List { .. } | ClientMessage::Read { .. } | ClientMessage::Write { .. } | ClientMessage::DisplayText { .. } | ClientMessage::DisplayAnimation { .. } | ClientMessage::DisplayFrame { .. } | ClientMessage::RingAnimation { .. }) if shell_ready => {
+                    command @ (ClientMessage::List { .. } | ClientMessage::Read { .. } | ClientMessage::Write { .. } | ClientMessage::DisplayText { .. } | ClientMessage::DisplayAnimation { .. } | ClientMessage::DisplayFrame { .. } | ClientMessage::DisplaySequence { .. } | ClientMessage::RingAnimation { .. }) if shell_ready => {
                         // Revocation is also checked immediately before each file operation.
                         if crate::auth::require_device_access(&state.auth, &headers).await.is_err() { break; }
                         let display = command.is_display();

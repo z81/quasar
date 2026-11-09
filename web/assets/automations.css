@@ -1,0 +1,13 @@
+.automations-page { display: grid; gap: 16px; }
+.automation-fields { display: grid; gap: 16px; padding: 0; margin: 0; border: 0; min-width: 0; }
+.automation-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0; }
+.automation-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; }
+.automation-node { padding: 16px; margin: 12px 0; border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+.automation-node-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.automation-node-header strong { flex: 1; overflow-wrap: anywhere; }
+.automation-history { padding: 12px 0; border-top: 1px solid var(--line); }
+.automation-history summary, .automation-connection summary { cursor: pointer; color: var(--text); overflow-wrap: anywhere; }
+.automation-log { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--secondary); font-size: 12px; max-height: 240px; overflow: auto; }
+.automation-days { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
+.automation-days label { display: flex; align-items: center; gap: 4px; color: var(--text); }
+.automations-page select { max-width: 100%; }

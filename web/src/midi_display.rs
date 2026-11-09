@@ -70,6 +70,7 @@ pub fn MidiDisplay(
     let mut tick = use_signal(|| 0_usize);
     let mut showing = use_signal(|| false);
     let mut feedback = use_signal(|| None::<(bool, String)>);
+    let preview_duid = duid.clone();
     use_effect(move || {
         let draft = DisplayDraft {
             mode: mode(),
@@ -82,12 +83,12 @@ pub fn MidiDisplay(
         let changed = state
             .station_previews
             .peek()
-            .get(&duid)
+            .get(&preview_duid)
             .map(|preview| preview.display != draft)
             .unwrap_or(true);
         if changed {
             state.station_previews.with_mut(|previews| {
-                previews.entry(duid.clone()).or_default().display = draft;
+                previews.entry(preview_duid.clone()).or_default().display = draft;
             });
         }
     });
@@ -221,6 +222,7 @@ pub fn MidiDisplay(
             if !duration_valid { p { class: "form-feedback failure", "Длительность — от 1 до 15 целых секунд. Для длинной надписи увеличьте время показа." } }
             p { class: "midi-editor-help", "После показа предыдущее состояние восстанавливается. Если штатный экран сменит содержимое, показ завершится раньше. Растровые картинки и GIF этот дисплей не поддерживает." }
             if let Some((success, message)) = feedback() { p { class: if success { "form-feedback success" } else { "form-feedback failure" }, role: "status", "{message}" } }
+            crate::animation_timeline::AnimationTimeline { state, duid, bridge, ready, busy, status }
         }
     }
 }

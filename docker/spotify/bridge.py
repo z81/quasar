@@ -60,6 +60,7 @@ import base64
 import collections
 import hashlib
 import html
+import re
 import http.server
 import json
 import logging
@@ -118,7 +119,7 @@ AIRPLAY_QUIET = 3
 # Mac's volume key (AirPlay's -30 to 0 dB in 16 presses, the step a little under one)
 SPOTIFY_VOLUME_STEP = 65535 / 10
 AIRPLAY_VOLUME_STEP = 1.8
-SCOPES = "user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private"
+SCOPES = "user-read-playback-state user-modify-playback-state user-read-currently-playing playlist-read-private user-library-read user-library-modify"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("spotify-bridge")
@@ -136,7 +137,10 @@ def http_json(method, url, body=None, headers=None, form=None, proxy=None, timeo
     request = urllib.request.Request(url, data=data, headers=all_headers, method=method)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy} if proxy else {}))
     with opener.open(request, timeout=timeout) as response:
-        text = response.read().decode()
+        data = response.read(2 * 1024 * 1024 + 1)
+        if len(data) > 2 * 1024 * 1024:
+            raise ValueError("JSON response too large")
+        text = data.decode()
     try:
         return json.loads(text)
     except ValueError:
@@ -384,6 +388,7 @@ class Bridge:
         self.airplay = None
         self.spotify_volume = VolumeSteps(SPOTIFY_VOLUME_STEP)
         self.airplay_volume = VolumeSteps(AIRPLAY_VOLUME_STEP)
+        self.music = MusicService(self)
 
     # librespot
 
@@ -701,10 +706,15 @@ class Bridge:
 
     def on_event(self, fields):
         event = fields.get("PLAYER_EVENT", "")
-        if event in ("position_correction", "preloading", "preload_next", "play_request_id_changed", "sink"):
+        if event in ("preloading", "preload_next", "play_request_id_changed", "sink"):
             return
         with self.lock:
-            self.events.append(f"{time.strftime('%H:%M:%S')} {event}")
+            if event != "position_correction":
+                self.events.append(f"{time.strftime('%H:%M:%S')} {event}")
+            if self.track and self.state == "playing" and event == "paused" and "POSITION_MS" not in fields:
+                self.track["position_ms"] = (self.track.get("position_ms") or 0) + max(
+                    0, int((time.monotonic() - self.track.get("position_at", time.monotonic())) * 1000))
+                self.track["position_at"] = time.monotonic()
             if event == "track_changed":
                 artists = ", ".join(filter(None, fields.get("ARTISTS", "").split("\n")))
                 cover = album_cover(fields.get("COVERS", ""))
@@ -713,6 +723,8 @@ class Bridge:
                     "artists": artists, "uri": fields.get("URI", ""),
                     "album": fields.get("ALBUM", "").strip() or None,
                     "cover_url": cover, "cover_key": self.covers.remember(cover),
+                    "duration_ms": integer_ms(fields.get("DURATION_MS")),
+                    "position_ms": 0, "position_at": time.monotonic(),
                 }
             elif event == "playing":
                 self.state = "playing"
@@ -738,6 +750,11 @@ class Bridge:
                 self.spotify_volume.forget()
                 if event == "session_connected":
                     self.track = None
+            if self.track:
+                position = integer_ms(fields.get("POSITION_MS"))
+                if position is not None:
+                    self.track["position_ms"] = position
+                    self.track["position_at"] = time.monotonic()
             volume = fields.get("VOLUME", "") if event == "volume_changed" else ""
             volume_steps = self.spotify_volume.follow(int(volume)) if volume.isdigit() else 0
             if event in ("playing", "paused", "stopped", "session_disconnected"):
@@ -748,7 +765,8 @@ class Bridge:
             if restart:
                 self.jumped = False
             self.lock.notify_all()
-        log.info("librespot event %s", event)
+        if event != "position_correction":
+            log.info("librespot event %s", event)
         if volume_steps:
             self.station.change_volume(volume_steps)
         if state == "playing" and event in ("playing", "seeked") and (restart or not (self.station.playing and self.listening())):
@@ -877,7 +895,9 @@ class Bridge:
 
 
 class SpotifyError(Exception):
-    pass
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 class SpotifyApi:
@@ -887,10 +907,11 @@ class SpotifyApi:
     api = "https://api.spotify.com/v1"
 
     def __init__(self):
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.tokens = json.loads(TOKENS.read_text()) if TOKENS.is_file() else None
         self.state = secrets.token_urlsafe(16)
         self.device = None
+        self.retry_after = 0
 
     def connected(self):
         return bool(self.tokens and self.tokens.get("refresh_token"))
@@ -926,21 +947,32 @@ class SpotifyApi:
             TOKENS.write_text(json.dumps(tokens))
 
     def access_token(self):
-        if not self.connected():
-            raise SpotifyError("управление Spotify не подключено: откройте страницу сервиса и войдите")
-        if time.time() > self.tokens.get("expires_at", 0):
-            self.save(self.token_request({"grant_type": "refresh_token", "refresh_token": self.tokens["refresh_token"]}))
-        return self.tokens["access_token"]
+        with self.lock:
+            if not self.connected():
+                raise SpotifyError("управление Spotify не подключено: откройте страницу сервиса и войдите")
+            if time.time() > self.tokens.get("expires_at", 0):
+                self.save(self.token_request({"grant_type": "refresh_token", "refresh_token": self.tokens["refresh_token"]}))
+            return self.tokens["access_token"]
 
     def request(self, method, path, query=None, body=None):
+        if time.monotonic() < self.retry_after:
+            raise SpotifyError("Spotify ограничил частоту запросов; повторите позже")
         url = f"{self.api}{path}" + (f"?{urllib.parse.urlencode(query)}" if query else "")
         try:
-            return http_json(method, url, body=body, proxy=PROXY, headers={"Authorization": f"Bearer {self.access_token()}"})
+            return http_json(method, url, body=body, proxy=PROXY, timeout=4,
+                             headers={"Authorization": f"Bearer {self.access_token()}"})
         except urllib.error.HTTPError as error:
             detail = error.read().decode()[:200]
+            if error.code == 429:
+                delay = error.headers.get("Retry-After", "30")
+                self.retry_after = time.monotonic() + (int(delay) if delay.isdigit() else 30)
+                raise SpotifyError("Spotify ограничил частоту запросов; повторите позже", 429) from None
+            if error.code in (401, 403):
+                raise SpotifyError("Spotify отказал в доступе: проверьте Premium, доступ аккаунта к приложению "
+                                   "и разрешения; при необходимости подключите Spotify повторно", error.code) from None
             if error.code == 404:
                 self.device = None
-            raise SpotifyError(f"Spotify ответил {error.code}: {detail}") from None
+            raise SpotifyError(f"Spotify ответил {error.code}: {detail}", error.code) from None
         except OSError as error:
             raise SpotifyError(f"Spotify недоступен: {error}") from None
 
@@ -948,10 +980,12 @@ class SpotifyApi:
         if self.device:
             return self.device
         devices = (self.request("GET", "/me/player/devices") or {}).get("devices", [])
-        for device in devices:
-            if device.get("name") == NAME:
-                self.device = device["id"]
-                return self.device
+        matches = [device for device in devices if device.get("name") == NAME and device.get("id")]
+        if len(matches) > 1:
+            raise SpotifyError(f"В Spotify несколько устройств «{NAME}». Задайте колонке уникальное имя, чтобы не управлять другим устройством.")
+        if matches:
+            self.device = matches[0]["id"]
+            return self.device
         raise SpotifyError(f"колонки «{NAME}» нет среди устройств Spotify: librespot не запущен или не вошёл")
 
     def call(self, action, uri=None, kind=None):
@@ -995,6 +1029,288 @@ class SpotifyApi:
         return {"uri": item["uri"], "title": title}
 
 
+def integer_ms(value):
+    try:
+        parsed = int(value)
+        return parsed if 0 <= parsed <= 86400000 else None
+    except (ValueError, TypeError):
+        return None
+
+
+def music_track(item):
+    """Only documented catalog fields; no credentials or untrusted URL passthrough."""
+    if not isinstance(item, dict):
+        return None
+    uri = item.get("uri", "")
+    if not re.fullmatch(r"spotify:track:[A-Za-z0-9]{22}", uri):
+        return None
+    return {"uri": uri, "name": item.get("name", ""),
+            "artists": ", ".join(artist.get("name", "") for artist in item.get("artists", [])),
+            "album": (item.get("album") or {}).get("name", ""),
+            "duration_ms": integer_ms(item.get("duration_ms")),
+            "url": "https://open.spotify.com/track/" + uri.rsplit(":", 1)[1]}
+
+
+class MusicService:
+    """Dashboard reads/actions; no network calls from librespot's event callback.
+
+    API requests, cache and lyrics use their own lock, never the PCM/playback lock.
+    Spotify queue/state are account-wide, so verify the active device before use.
+    """
+
+    def __init__(self, owner):
+        self.owner = owner
+        self.lock = threading.RLock()
+        self.cache = collections.OrderedDict()
+        self.lyrics_retry_after = 0
+
+    def cached(self, key, seconds, fetch):
+        with self.lock:
+            entry = self.cache.get(key)
+            if entry and entry[0] > time.monotonic():
+                if isinstance(entry[1], Exception):
+                    raise entry[1]
+                return entry[1]
+            try:
+                value = fetch()
+            except SpotifyError as error:
+                self.cache[key] = (time.monotonic() + 15, error)
+                while len(self.cache) > 64:
+                    self.cache.popitem(last=False)
+                raise
+            self.cache[key] = (time.monotonic() + seconds, value)
+            self.cache.move_to_end(key)
+            while len(self.cache) > 64:
+                self.cache.popitem(last=False)
+            return value
+
+    def authorization(self):
+        api = self.owner.api
+        scopes = set((api.tokens or {}).get("scope", "").split()) if api else set()
+        missing = sorted(set(SCOPES.split()) - scopes)
+        return {"configured": bool(api), "connected": bool(api and api.connected()),
+                "missing_scopes": missing, "reconnect_required": bool(missing),
+                "authorize_url": api.authorize_url() if api else None,
+                "redirect_uri": REDIRECT_URI if api else None}
+
+    def require_api(self, scope=None):
+        api = self.owner.api
+        if not api or not api.connected():
+            raise SpotifyError("Подключите управление Spotify в этом плеере. Нужен аккаунт Premium и доступ к приложению.")
+        if scope and scope not in (api.tokens or {}).get("scope", "").split():
+            raise SpotifyError("Для этой функции нужно повторно подключить Spotify и разрешить доступ к медиатеке.")
+        return api
+
+    def local(self):
+        with self.owner.lock:
+            track = dict(self.owner.track or {})
+            active = self.owner.airplay != "playing" and self.owner.state != "stopped"
+            playing = active and self.owner.state == "playing"
+            position_clock = time.monotonic()
+            if self.owner.listener and self.owner.listener.stalled:
+                playing = False
+                position_clock = self.owner.listener.stalled_at or track.get("position_at", position_clock)
+            if not active or not track:
+                return {"track": None, "position_ms": None, "duration_ms": None, "playing": False,
+                        "source": "AirPlay" if self.owner.airplay == "playing" else "Spotify"}
+            position = track.get("position_ms")
+            duration = track.get("duration_ms")
+            if position is not None and self.owner.state == "playing":
+                position += max(0, int((position_clock - track.get("position_at", position_clock)) * 1000))
+            if position is not None and duration is not None:
+                position = min(position, duration)
+            uri = track.get("uri", "")
+            return {"track": {"uri": uri, "name": track.get("name", ""), "artists": track.get("artists", ""),
+                              "album": track.get("album") or "", "duration_ms": duration,
+                              "url": "https://open.spotify.com/track/" + uri.rsplit(":", 1)[-1]
+                              if re.fullmatch(r"spotify:track:[A-Za-z0-9]{22}", uri) else None},
+                    "position_ms": position, "duration_ms": duration, "playing": playing, "source": "Spotify"}
+
+    def playback(self, fresh=False):
+        api = self.require_api()
+        fetch = lambda: api.request("GET", "/me/player") or {}
+        value = fetch() if fresh else self.cached("playback", 5, fetch)
+        device = value.get("device") or {}
+        if not device.get("id") or device["id"] != api.device_id():
+            raise SpotifyError("Spotify сейчас не воспроизводится на выбранной колонке. Выберите её в Spotify Connect или включите найденный трек.")
+        return value
+
+    def read(self, operation, query):
+        if operation == "identity":
+            return {"duid": STATION_ID}
+        if operation == "status":
+            result = self.local()
+            result.update({"authorization": self.authorization(), "capabilities": {}, "shuffle": None, "repeat": None})
+            if result["source"] == "AirPlay":
+                result["message"] = "Воспроизведением AirPlay управляет устройство-отправитель."
+                return result
+            try:
+                playback = self.playback()
+                blocked = (playback.get("actions") or {}).get("disallows") or playback.get("actions") or {}
+                restricted = (playback.get("device") or {}).get("is_restricted", False)
+                can = not restricted
+                result["capabilities"] = {"seek": can and bool(result["track"]) and not blocked.get("seeking", False),
+                                          "shuffle": can and not blocked.get("toggling_shuffle", False),
+                                          "repeat": can and not blocked.get("toggling_repeat_context", False),
+                                          "queue": can}
+                result["shuffle"] = playback.get("shuffle_state")
+                result["repeat"] = playback.get("repeat_state")
+                # Never resurrect a stopped stream from Spotify's account-wide
+                # last-played item; title and timing originate in this bridge.
+                if restricted:
+                    result["message"] = "Spotify пометил это устройство как ограниченное: управление Web API недоступно."
+            except SpotifyError as error:
+                result["message"] = str(error)
+            return result
+        if operation == "search":
+            api = self.require_api()
+            term = query.get("q", "").strip()
+            if not 1 <= len(term) <= 200:
+                raise SpotifyError("Введите название трека или исполнителя (до 200 символов).")
+            value = self.cached(("search", term), 60,
+                                lambda: api.request("GET", "/search", {"q": term, "type": "track", "limit": 10})) or {}
+            return {"tracks": [track for item in (value.get("tracks") or {}).get("items", [])
+                               if (track := music_track(item))]}
+        if operation == "lyrics":
+            return self.lyrics()
+        if operation == "queue":
+            self.playback()
+            value = self.cached("queue", 10, lambda: self.require_api().request("GET", "/me/player/queue")) or {}
+            return {"tracks": [track for item in value.get("queue", [])[:50] if (track := music_track(item))],
+                    "message": "Spotify отдаёт ближайшую часть очереди. Перестановка и удаление через Web API не поддерживаются."}
+        if operation == "saved":
+            uri = self.track_uri(query.get("uri"))
+            api = self.require_api("user-library-read")
+            answer = self.cached(("saved", uri), 30, lambda: api.request("GET", "/me/library/contains", {"uris": uri}))
+            return {"saved": answer[0] if isinstance(answer, list) and answer else None}
+        if operation in ("artist", "related"):
+            playback = self.playback()
+            item = playback.get("item") or {}
+            api = self.require_api()
+            if operation == "related":
+                track_id = self.track_uri(item.get("uri")).split(":")[-1]
+                try:
+                    value = self.cached(("related", track_id), 300,
+                                        lambda: api.request("GET", "/recommendations", {"seed_tracks": track_id, "limit": 10})) or {}
+                    return {"tracks": [track for item in value.get("tracks", []) if (track := music_track(item))]}
+                except SpotifyError as error:
+                    if error.status in (403, 404):
+                        raise SpotifyError("Spotify не предоставляет рекомендации этому приложению: endpoint закрыт для новых/Development Mode приложений. Поиск треков остаётся доступен.") from None
+                    raise
+            artists = item.get("artists") or []
+            artist_id = artists[0].get("id", "") if artists else ""
+            if not re.fullmatch(r"[A-Za-z0-9]{22}", artist_id):
+                raise SpotifyError("Spotify не передал исполнителя для текущего трека.")
+            value = self.cached(("artist", artist_id), 300, lambda: api.request("GET", f"/artists/{artist_id}")) or {}
+            return {"name": value.get("name"), "genres": value.get("genres") or [],
+                    "followers": (value.get("followers") or {}).get("total"),
+                    "url": f"https://open.spotify.com/artist/{artist_id}",
+                    "message": "Spotify не предоставляет биографию. Жанры и число слушателей могут отсутствовать в вашем режиме API."}
+        raise SpotifyError("Неизвестный запрос музыки")
+
+    @staticmethod
+    def track_uri(value):
+        if not isinstance(value, str) or not re.fullmatch(r"spotify:track:[A-Za-z0-9]{22}", value):
+            raise SpotifyError("Нужен Spotify URI трека")
+        return value
+
+    def action(self, body):
+        action = body.get("action")
+        if action == "authorize":
+            if not self.owner.api:
+                raise SpotifyError("Spotify API не настроен: используются существующие SPOTIFY_CLIENT_ID и SPOTIFY_CLIENT_SECRET.")
+            url = body.get("url")
+            if not isinstance(url, str) or len(url) > 8192:
+                raise SpotifyError("Вставьте адрес перенаправления после входа в Spotify.")
+            self.owner.api.finish_authorization(url)
+        else:
+            api = self.require_api()
+            if action == "save":
+                self.require_api("user-library-modify")
+                uri = self.track_uri(body.get("uri"))
+                if not isinstance(body.get("saved"), bool):
+                    raise SpotifyError("Укажите состояние любимого трека")
+                api.request("PUT" if body["saved"] else "DELETE", "/me/library", {"uris": uri})
+            elif action == "play":
+                api.call("play", self.track_uri(body.get("uri")), "track")
+            elif action in ("seek", "shuffle", "repeat", "queue_add"):
+                playback = self.playback(fresh=True)
+                if (playback.get("device") or {}).get("is_restricted"):
+                    raise SpotifyError("Spotify запретил управление этим устройством")
+                blocked = (playback.get("actions") or {}).get("disallows") or playback.get("actions") or {}
+                restriction = {"seek": "seeking", "shuffle": "toggling_shuffle", "repeat":
+                               "toggling_repeat_track" if body.get("mode") == "track" else "toggling_repeat_context"}.get(action)
+                if restriction and blocked.get(restriction):
+                    raise SpotifyError("Spotify временно запретил это действие для текущего трека")
+                expected = body.get("expected_uri")
+                if expected and expected != (playback.get("item") or {}).get("uri"):
+                    raise SpotifyError("Трек сменился. Дождитесь обновления плеера и повторите действие.")
+                query = {"device_id": api.device_id()}
+                if action == "seek":
+                    position = body.get("position_ms")
+                    duration = (playback.get("item") or {}).get("duration_ms", 0)
+                    if isinstance(position, bool) or not isinstance(position, int) or not 0 <= position <= duration:
+                        raise SpotifyError("Позиция должна находиться внутри текущего трека")
+                    query["position_ms"] = position
+                    api.request("PUT", "/me/player/seek", query)
+                elif action == "shuffle":
+                    if not isinstance(body.get("enabled"), bool):
+                        raise SpotifyError("Укажите состояние случайного порядка")
+                    query["state"] = str(body["enabled"]).lower()
+                    api.request("PUT", "/me/player/shuffle", query)
+                elif action == "repeat":
+                    if body.get("mode") not in ("off", "track", "context"):
+                        raise SpotifyError("Неизвестный режим повтора")
+                    query["state"] = body["mode"]
+                    api.request("PUT", "/me/player/repeat", query)
+                else:
+                    query["uri"] = self.track_uri(body.get("uri"))
+                    api.request("POST", "/me/player/queue", query)
+            else:
+                raise SpotifyError("Неизвестное действие музыки")
+        with self.lock:
+            self.cache.clear()
+        return {"ok": True, "message": "Spotify принял запрос"}
+
+    def lyrics(self):
+        local = self.local()
+        track = local["track"]
+        if not track:
+            raise SpotifyError("Выберите трек Spotify для поиска текста")
+        key = ("lyrics", track["name"], track["artists"], track["album"], track["duration_ms"])
+        def fetch():
+            if time.monotonic() < self.lyrics_retry_after:
+                raise SpotifyError("LRCLIB ограничил запросы. Повторите позже.")
+            query = {"track_name": track["name"], "artist_name": track["artists"], "album_name": track["album"]}
+            if track["duration_ms"] is not None:
+                query["duration"] = round(track["duration_ms"] / 1000)
+            url = "https://lrclib.net/api/get?" + urllib.parse.urlencode(query)
+            try:
+                value = http_json("GET", url, timeout=5, proxy=PROXY,
+                                  headers={"User-Agent": "alice-server-rs/1.0 (lyrics dashboard)", "Accept": "application/json"}) or {}
+            except urllib.error.HTTPError as error:
+                if error.code == 404:
+                    return {"source": "LRCLIB", "lines": [], "plain": None, "message": "Точный текст этого трека в LRCLIB не найден."}
+                if error.code == 429:
+                    delay = error.headers.get("Retry-After", "60")
+                    self.lyrics_retry_after = time.monotonic() + (int(delay) if delay.isdigit() else 60)
+                raise SpotifyError("LRCLIB временно недоступен. Попробуйте позже.") from None
+            except (OSError, ValueError):
+                raise SpotifyError("Не удалось получить текст из LRCLIB") from None
+            lines = []
+            offset = re.search(r"\[offset:([+-]?\d+)\]", value.get("syncedLyrics") or "")
+            offset_ms = int(offset[1]) if offset else 0
+            for line in (value.get("syncedLyrics") or "").splitlines()[:3000]:
+                text = re.sub(r"\[[^]]+\]", "", line).strip()
+                for minutes, seconds in re.findall(r"\[(\d{1,3}):(\d{2}(?:\.\d{1,3})?)\]", line):
+                    lines.append({"at_ms": max(0, round((int(minutes) * 60 + float(seconds)) * 1000) - offset_ms), "text": text})
+            lines.sort(key=lambda line: line["at_ms"])
+            return {"source": "LRCLIB", "url": "https://lrclib.net", "lines": lines,
+                    "plain": (value.get("plainLyrics") or "")[:100000] or None,
+                    "message": "Инструментальная композиция" if value.get("instrumental") else None}
+        return self.cached(key, 3600, fetch)
+
+
 bridge = None
 
 
@@ -1022,6 +1338,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.reply(200, content_type, body, cache_control="private, max-age=3600, immutable")
         elif path == "/functions":
             self.reply(200, "application/json", json.dumps(bridge.catalog()))
+        elif path == "/music":
+            query = urllib.parse.parse_qs(request.query)
+            if query.get("duid") != [STATION_ID]:
+                return self.reply(404, "application/json", json.dumps({"error": "Колонка не обслуживается этим мостом"}))
+            self.music_reply(lambda: bridge.music.read(query.get("op", ["status"])[0],
+                                                       {key: values[0] for key, values in query.items()}))
         elif path == "/health":
             self.reply(200, "text/plain", "ok")
         elif path == "/":
@@ -1040,9 +1362,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.reply(200, "text/plain; charset=utf-8", result)
 
     def do_POST(self):
-        path = urllib.parse.urlsplit(self.path).path
+        request = urllib.parse.urlsplit(self.path)
+        path = request.path
         if path == "/state":
             self.reply(200, "application/json", json.dumps(bridge.state_entries(), ensure_ascii=False))
+        elif path == "/music":
+            if urllib.parse.parse_qs(request.query).get("duid") != [STATION_ID]:
+                return self.reply(404, "application/json", json.dumps({"error": "Колонка не обслуживается этим мостом"}))
+            if int(self.headers.get("Content-Length") or 0) > 16384:
+                return self.reply(413, "application/json", json.dumps({"error": "Запрос слишком большой"}))
+            self.music_reply(lambda: bridge.music.action(self.json_body()))
         elif path == "/event" and self.client_address[0] in ("127.0.0.1", "::1"):
             bridge.on_event(self.json_body())
             self.reply(200, "text/plain", "ok")
@@ -1060,6 +1389,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.redirect()
         else:
             self.reply(404, "text/plain", "not found")
+
+    def music_reply(self, callback):
+        try:
+            self.reply(200, "application/json; charset=utf-8", json.dumps(callback(), ensure_ascii=False))
+        except SpotifyError as error:
+            self.reply(409, "application/json; charset=utf-8", json.dumps({"error": str(error)}, ensure_ascii=False))
 
     def json_body(self):
         try:
@@ -1108,7 +1443,7 @@ def status_page():
     parts.append(f"<p>Сейчас: {escape(bridge.now_playing())}. Станция {'слушает поток' if listener and not listener.stalled else 'не слушает поток'}.</p>")
     if not bridge.api:
         parts.append("<p>Голосовое управление выключено: задайте SPOTIFY_CLIENT_ID и SPOTIFY_CLIENT_SECRET приложения с developer.spotify.com.</p>")
-    elif not bridge.api.connected():
+    elif not bridge.api.connected() or bridge.music.authorization()["missing_scopes"]:
         parts.append(f"""<h2>Голосовое управление</h2><ol>
 <li>В настройках приложения на developer.spotify.com должен быть Redirect URI <code>{escape(REDIRECT_URI)}</code>.</li>
 <li>Откройте <a href="{escape(bridge.api.authorize_url())}" target="_blank">ссылку</a> и разрешите доступ.</li>

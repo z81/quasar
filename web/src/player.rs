@@ -4,6 +4,8 @@ use crate::api;
 use crate::icons::Icon;
 use crate::state::ControlState;
 
+mod music;
+
 #[component]
 pub fn PlayerCard(state: ControlState) -> Element {
     rsx! { PlayerControls { key: "{state.selected}", state } }
@@ -99,6 +101,7 @@ fn PlayerControls(state: ControlState) -> Element {
             if dirty() && level.is_none() { p { class: "player-note failure", "Введите целое число от 0 до 100." } }
             if let Some(error) = (state.player_error)() { p { class: "player-note failure", "Плеер недоступен: {error}" } }
             else if player.as_ref().is_none_or(|player| player.updated_at.is_none()) { p { class: "player-note", "Ждём состояние от колонки. Недоступные для текущего источника команды отключены." } }
+            music::MusicPanel { state }
         }
     }
 }

@@ -74,6 +74,19 @@ pub(super) async fn handle(
     message: ClientMessage,
 ) -> Result<Value, Error> {
     match message {
+        ClientMessage::DisplaySequence { frames, repeat } => {
+            let script = super::display::sequence_script(&frames, repeat).map_err(Error::Request)?;
+            let (status, output) = execute(connection, &script).await.map_err(|_| Error::Transport)?;
+            if status != 0 {
+                return Err(Error::Request(match status {
+                    2 => "Дисплей Миди недоступен на этой колонке",
+                    3 | 4 => "Дисплей занят; повторите после окончания текущего показа",
+                    7 => "Не удалось подтвердить восстановление состояния дисплея",
+                    _ => "Не удалось показать анимацию",
+                }.into()));
+            }
+            Ok(json!({"type":"display_done","outcome":String::from_utf8_lossy(&output).trim()}))
+        }
         ClientMessage::RingAnimation {
             target,
             animation,

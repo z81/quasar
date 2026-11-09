@@ -14,6 +14,40 @@ const SEGMENTS: [&str; 45] = [
 
 type Frame = [u8; 45];
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct AnimationFrame {
+    pub segments: std::collections::BTreeMap<String, u8>,
+    pub duration_ms: u64,
+}
+
+pub(crate) fn sequence_script(frames: &[AnimationFrame], repeat: u8) -> Result<String, String> {
+    if frames.is_empty() || frames.len() > 60 || !(1..=10).contains(&repeat) {
+        return Err("Нужно от 1 до 60 кадров и от 1 до 10 повторов".into());
+    }
+    let mut values = Vec::new();
+    let mut delays = Vec::new();
+    for _ in 0..repeat {
+        for item in frames {
+            if !(50..=5000).contains(&item.duration_ms) || item.segments.len() > 45 {
+                return Err("Длительность кадра — от 50 до 5000 мс".into());
+            }
+            let mut frame = [0; 45];
+            for (name, intensity) in &item.segments {
+                let index = SEGMENTS.iter().position(|known| *known == name)
+                    .ok_or_else(|| "Неизвестный сегмент дисплея".to_owned())?;
+                frame[index] = *intensity;
+            }
+            values.push(frame);
+            delays.push(item.duration_ms);
+        }
+    }
+    let total: u64 = delays.iter().sum();
+    if !(500..=15000).contains(&total) {
+        return Err("Общее время анимации с повторами — от 500 до 15000 мс".into());
+    }
+    timed_overlay(&values, &delays)
+}
+
 pub(super) fn script(text: &str, brightness: u8, duration_ms: u64) -> Result<String, String> {
     if !text.is_ascii() || !(1..=32).contains(&text.len()) || text.trim().is_empty() {
         return Err("Надпись: от 1 до 32 символов латиницы или цифр, без пустой строки".into());
@@ -131,6 +165,12 @@ fn overlay(frames: &[Frame], brightness: u8, duration_ms: u64) -> Result<String,
             "Для этой надписи или анимации нужно не меньше {minimum} мс"
         ));
     }
+    let count = frames.len() as u64;
+    let delays: Vec<u64> = (0..count).map(|index| duration_ms * (index + 1) / count - duration_ms * index / count).collect();
+    timed_overlay(frames, &delays)
+}
+
+fn timed_overlay(frames: &[Frame], delays: &[u64]) -> Result<String, String> {
     let names = SEGMENTS
         .iter()
         .map(|name| match *name {
@@ -215,14 +255,13 @@ put_frame() {
 }
 "#,
     );
-    let count = frames.len() as u64;
     for (index, frame) in frames.iter().enumerate() {
         let values = frame
             .iter()
             .map(u8::to_string)
             .collect::<Vec<_>>()
             .join(" ");
-        let delay = duration_ms * (index as u64 + 1) / count - duration_ms * index as u64 / count;
+        let delay = delays[index];
         script.push_str(&format!("put_frame {values} || exit 6\n[ \"$stop\" -eq 0 ] || exit 0\nsleep {}.{:03} || [ \"$stop\" -ne 0 ] || exit 6\n", delay / 1000, delay % 1000));
     }
     Ok(script)

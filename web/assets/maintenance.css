@@ -1,0 +1,9 @@
+.maintenance-page { display: grid; gap: 16px; min-width: 0; }
+.maintenance-page > .mode-tabs { flex-wrap: wrap; }
+.backup-list { display: grid; gap: 12px; margin-top: 16px; }
+.backup-item { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 0; border-top: 1px solid var(--line); }
+.backup-item strong { overflow-wrap: anywhere; color: var(--text); }
+.backup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.backup-confirm { border-color: var(--accent); }
+.backup-confirm .form-field { max-width: 320px; }
+@media (max-width: 760px) { .maintenance-page .card-heading { flex-wrap: wrap; gap: 12px; } .backup-actions .button { min-height: 44px; } }

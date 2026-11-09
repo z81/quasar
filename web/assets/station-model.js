@@ -93,15 +93,19 @@ function createModel(root, T) {
   const screen = new T.Mesh(new T.PlaneGeometry(.7, .215), new T.MeshBasicMaterial({ map: display.map, transparent: true, depthWrite: false, toneMapped: false }));
   screen.position.set(0, .12, .492); model.add(screen);
   const layout = JSON.parse(root.dataset.layout).map(segment => ({ ...segment, points: segment.points.split(' ').map(pair => pair.split(',').map(Number)) }));
+  let live = JSON.parse(root.dataset.live || 'null');
   function updateDisplay() {
     const frame = JSON.parse(root.dataset.display), lit = new Set(frame.segments), ctx = display.context;
+    const levels = live?.display_available === true ? live.segments : null;
     ctx.clearRect(0, 0, 300, 92);
-    if (frame.intensity > 0) for (const segment of layout) {
-      if (!lit.has(segment.id)) continue;
+    for (const segment of layout) {
+      const raw = levels ? levels[segment.id] : lit.has(segment.id) ? frame.intensity : 0;
+      const intensity = Number.isFinite(raw) ? clamp(raw, 0, 1) : 0;
+      if (intensity <= 0) continue;
       ctx.save(); ctx.translate(segment.x, segment.y); ctx.beginPath();
       segment.points.forEach(([x, y], index) => index ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath();
-      ctx.fillStyle = `rgba(190,215,255,${frame.intensity * .2})`; ctx.shadowColor = '#b1d1ff'; ctx.shadowBlur = 3; ctx.fill(); ctx.shadowBlur = 0; ctx.clip();
-      ctx.fillStyle = `rgba(225,239,255,${frame.intensity})`;
+      ctx.fillStyle = `rgba(190,215,255,${intensity * .2})`; ctx.shadowColor = '#b1d1ff'; ctx.shadowBlur = 3; ctx.fill(); ctx.shadowBlur = 0; ctx.clip();
+      ctx.fillStyle = `rgba(225,239,255,${intensity})`;
       const xs = segment.points.map(p => p[0]), ys = segment.points.map(p => p[1]);
       for (let y = Math.floor(Math.min(...ys) / 3) * 3; y <= Math.max(...ys); y += 3) {
         for (let x = Math.floor(Math.min(...xs) / 3) * 3; x <= Math.max(...xs); x += 3) { ctx.beginPath(); ctx.arc(x + 1, y + 1, 1.1, 0, Math.PI * 2); ctx.fill(); }
@@ -137,6 +141,19 @@ function createModel(root, T) {
     }
     return level;
   }
+  function liveLights(leds, pixels) {
+    if (!Array.isArray(pixels) || pixels.length !== leds.length || !pixels.every(pixel =>
+      Array.isArray(pixel) && pixel.length === 3 && pixel.every(value => Number.isInteger(value) && value >= 0 && value <= 255))) return false;
+    for (let index = 0; index < leds.length; index++) {
+      const [r, g, b] = pixels[index], led = leds[index];
+      led.material.color.setRGB(r / 255, g / 255, b / 255, T.SRGBColorSpace);
+      if (led.haloMaterial) {
+        led.haloMaterial.color.copy(led.material.color);
+        led.haloMaterial.opacity = Math.max(r, g, b) / 255 * .22;
+      }
+    }
+    return true;
+  }
   function schedule() { if (!disposed && !contextLost && visible && !document.hidden && !raf) raf = requestAnimationFrame(render); }
   function render(now) {
     raf = 0;
@@ -147,9 +164,16 @@ function createModel(root, T) {
     model.rotation.y += (yaw - model.rotation.y) * easing;
     model.rotation.x += (pitch - model.rotation.x) * easing;
     const time = now / 1000;
-    glow.intensity = lights(ring, preview.ring, time) * .5;
-    glow.color.set(/^#[\da-f]{6}$/i.test(preview.ring.color) ? preview.ring.color : '#a855f7');
-    lights(logo, preview.logo, time);
+    if (liveLights(ring, live?.ring)) {
+      glow.color.setRGB(0, 0, 0);
+      for (const led of ring) glow.color.add(led.material.color);
+      glow.color.multiplyScalar(1 / ring.length);
+      glow.intensity = .5;
+    } else {
+      glow.intensity = lights(ring, preview.ring, time) * .5;
+      glow.color.set(/^#[\da-f]{6}$/i.test(preview.ring.color) ? preview.ring.color : '#a855f7');
+    }
+    if (!liveLights(logo, live?.logo)) lights(logo, preview.logo, time);
     renderer.render(scene, camera);
     root.dataset.modelState = 'ready';
     if (!motion.matches || Math.abs(yaw - model.rotation.y) + Math.abs(pitch - model.rotation.x) > .001) schedule();
@@ -160,8 +184,12 @@ function createModel(root, T) {
     renderer.setSize(width, height, false); camera.aspect = width / height; camera.updateProjectionMatrix(); schedule();
   });
   resize.observe(canvas);
-  const attributes = new MutationObserver(() => { preview = JSON.parse(root.dataset.preview); updateDisplay(); schedule(); });
-  attributes.observe(root, { attributes: true, attributeFilter: ['data-preview', 'data-display'] });
+  const attributes = new MutationObserver(() => {
+    preview = JSON.parse(root.dataset.preview);
+    live = JSON.parse(root.dataset.live || 'null');
+    updateDisplay(); schedule();
+  });
+  attributes.observe(root, { attributes: true, attributeFilter: ['data-preview', 'data-display', 'data-live'] });
   const down = event => {
     if (!event.isPrimary || event.button !== 0) return;
     drag = { id: event.pointerId, x: event.clientX, y: event.clientY, yaw, pitch };

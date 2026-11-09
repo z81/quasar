@@ -65,6 +65,7 @@ pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Rout
             get(player_status).post(player_action),
         )
         .route("/devices/{duid}/player/cover/{key}", get(player_cover))
+        .route("/devices/{duid}/player/music", get(crate::player::music).post(crate::player::music_action).layer(axum::Extension(auth.clone())))
         .route(
             "/debug",
             get(|| async { Html(include_str!("api/debug.html")) }),
@@ -72,6 +73,12 @@ pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Rout
         .fallback(|| async { (StatusCode::NOT_FOUND, "NOT_FOUND") })
         .with_state(state.clone())
         .merge(crate::device_access::router(state.clone(), auth.clone()))
+        .merge(crate::animation_presets::router(state.clone(), auth.clone()))
+        .merge(crate::automations::router(state.clone(), auth.clone()))
+        .merge(crate::device_tools::router(state.clone(), auth.clone()))
+        .merge(crate::maintenance::router(state.clone(), auth.clone()))
+        .merge(crate::packages::router(state.clone(), auth.clone()))
+        .merge(crate::system_sounds::router(state.clone(), auth.clone()))
         .merge(crate::control::router(state.control.clone()))
         .layer(axum::middleware::from_fn_with_state(
             auth.clone(),

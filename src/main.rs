@@ -4,10 +4,15 @@
 
 mod agent;
 mod alarm_protocol;
+mod animation_presets;
 mod anthropic;
 mod api;
 mod audio;
 mod auth;
+mod automations;
+mod maintenance;
+mod packages;
+mod system_sounds;
 mod config;
 mod connections;
 mod control;
@@ -17,6 +22,7 @@ mod display;
 mod dnd;
 mod dnd_api;
 mod device_access;
+mod device_tools;
 mod gigastt;
 mod logging;
 mod mcp;

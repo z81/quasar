@@ -26,3 +26,6 @@
   .midi-modes { width: 100%; }
   .midi-modes .mode-tab { flex: 1; padding: 6px 10px; }
 }
+.animation-timeline { min-width: 0; }
+.animation-timeline > .mode-tabs { width: 100%; max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
+.animation-timeline > .mode-tabs > .mode-tab { flex: 0 0 auto; white-space: nowrap; }

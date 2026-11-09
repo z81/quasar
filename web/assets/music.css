@@ -1,0 +1,25 @@
+.music-panel { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); min-width: 0; }
+.music-progress { display: flex; gap: 10px; align-items: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.music-progress input { flex: 1; min-width: 0; accent-color: var(--accent); }
+.music-actions, .music-tabs, .music-track-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.music-actions label { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
+.music-panel select, .music-search input { min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface); }
+.music-panel input::placeholder { color: var(--muted); }
+.music-panel .active, .music-panel button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); border-color: var(--focus); }
+.music-search { display: flex; gap: 8px; margin-top: 12px; }
+.music-search input { flex: 1; width: 0; }
+.music-content { margin-top: 12px; font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+.music-track-list { list-style: none; padding: 0; margin: 0; max-height: 400px; overflow-y: auto; }
+.music-track-list li { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.music-track-copy { display: grid; gap: 4px; }
+.music-track-copy span, .music-track-copy small { color: var(--muted); }
+.music-panel a { color: var(--accent-text); }
+.music-lyrics { max-height: 280px; overflow-y: auto; color: var(--muted); }
+.music-lyrics p { margin: 8px 0; }
+.music-lyrics .current, .music-current-lyric { color: var(--accent-text); font-weight: 600; }
+.music-current-lyric { padding: 12px; background: var(--accent-soft); border-radius: 8px; }
+.music-lyrics.plain { white-space: pre-wrap; }
+.music-auth { margin-top: 16px; font-size: 12px; color: var(--muted); }
+.music-auth summary { cursor: pointer; color: var(--text); }
+.music-auth p { margin: 10px 0; }
+@media (max-width: 480px) { .music-search { flex-wrap: wrap; } .music-search input { flex-basis: 100%; width: 100%; } .music-panel .button { padding: 8px 10px; } }

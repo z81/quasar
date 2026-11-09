@@ -76,6 +76,25 @@ pub(crate) const DISPLAY_EXTRA_POLYGONS: [(&str, &str); 3] = [
     ),
 ];
 
+// Physical locations documented by dimap/yapanel-web's public Cucumber H10
+// observations (docs/support/midi-clock-map.factory-9.json). Simplified shapes.
+pub(crate) const DISPLAY_AUXILIARY_POLYGONS: [(&str, i32, i32, &str); 14] = [
+    ("P1", 29, 26, "0,0 8,0 8,8 0,8"),
+    ("P2", 93, 26, "0,0 8,0 8,8 0,8"),
+    ("P4", 175, 26, "0,0 8,0 8,8 0,8"),
+    ("P5", 239, 26, "0,0 8,0 8,8 0,8"),
+    ("Q1", 29, 58, "0,0 8,0 8,8 0,8"),
+    ("Q2", 93, 58, "0,0 8,0 8,8 0,8"),
+    ("Q4", 175, 58, "0,0 8,0 8,8 0,8"),
+    ("Q5", 239, 58, "0,0 8,0 8,8 0,8"),
+    ("H1", 124, 8, "0,2 2,0 10,0 12,2 10,4 2,4"),
+    ("H2", 148, 8, "0,2 2,0 10,0 12,2 10,4 2,4"),
+    ("M1", 124, 40, "0,2 2,0 10,0 12,2 10,4 2,4"),
+    ("M2", 148, 40, "0,2 2,0 10,0 12,2 10,4 2,4"),
+    ("L1", 124, 72, "0,2 2,0 10,0 12,2 10,4 2,4"),
+    ("L2", 148, 72, "0,2 2,0 10,0 12,2 10,4 2,4"),
+];
+
 pub(crate) fn display_frame(draft: &DisplayDraft, tick: usize) -> DisplayFrame {
     let segments = match draft.mode.as_str() {
         "text" => text_frame(&draft.text, tick),

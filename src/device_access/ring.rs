@@ -6,13 +6,13 @@ use std::fmt::Write;
 
 #[derive(Clone, Copy, Default, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum Target {
+pub(crate) enum Target {
     #[default]
     Ring,
     Logo,
 }
 
-pub(super) fn script(
+pub(crate) fn script(
     target: Target,
     animation: &str,
     color: &str,

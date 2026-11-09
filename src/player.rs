@@ -416,3 +416,81 @@ fn cover_path(duid: &str, key: &str) -> Option<String> {
         .extend(["devices", duid, "player", "cover", key]);
     Some(url.path().to_string())
 }
+
+/// Read-only queries for the dashboard. Tokens stay in the configured bridge.
+pub async fn music(
+    axum::extract::State(state): axum::extract::State<Arc<crate::api::ApiState>>,
+    axum::extract::Path(duid): axum::extract::Path<String>,
+    axum::extract::Query(query): axum::extract::Query<HashMap<String, String>>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let operation = query.get("op").map(String::as_str).unwrap_or("status");
+    if !matches!(
+        operation,
+        "status" | "search" | "queue" | "lyrics" | "artist" | "related" | "saved"
+    ) || query
+        .iter()
+        .any(|(key, value)| !matches!(key.as_str(), "op" | "q" | "uri") || value.len() > 800)
+    {
+        return (
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            axum::Json(json!({"error":"Некорректный запрос музыки"})),
+        )
+            .into_response();
+    }
+    music_response(
+        state
+            .runtime
+            .snapshot()
+            .remote
+            .player_music(&duid, &query, None)
+            .await,
+    )
+}
+
+pub async fn music_action(
+    axum::extract::State(state): axum::extract::State<Arc<crate::api::ApiState>>,
+    axum::extract::Path(duid): axum::extract::Path<String>,
+    axum::extract::Extension(auth): axum::extract::Extension<Arc<crate::auth::AuthManager>>,
+    headers: axum::http::HeaderMap,
+    axum::Json(body): axum::Json<Value>,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    let action = body["action"].as_str().unwrap_or_default();
+    if action == "authorize" {
+        if let Err(response) = crate::auth::require_device_access(&auth, &headers).await {
+            return response;
+        }
+    }
+    if !matches!(
+        action,
+        "authorize" | "save" | "play" | "seek" | "shuffle" | "repeat" | "queue_add"
+    ) || body.to_string().len() > 16384
+    {
+        return music_response(Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Некорректное действие музыки".into(),
+        )));
+    }
+    if !matches!(action, "authorize" | "save") && !state.registry.is_connected(&duid) {
+        return music_response(Err((StatusCode::CONFLICT, "Колонка не подключена".into())));
+    }
+    music_response(
+        state
+            .runtime
+            .snapshot()
+            .remote
+            .player_music(&duid, &HashMap::new(), Some(&body))
+            .await,
+    )
+}
+
+fn music_response(
+    result: Result<Value, (axum::http::StatusCode, String)>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match result {
+        Ok(value) => axum::Json(value).into_response(),
+        Err((status, error)) => (status, axum::Json(json!({"error":error}))).into_response(),
+    }
+}

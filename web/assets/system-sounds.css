@@ -1,0 +1,10 @@
+.system-sounds details summary { cursor: pointer; color: var(--text); }
+.sounds-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; }
+.sounds-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 16px 0; }
+.sounds-actions .form-field { flex: 1; min-width: 180px; margin: 0; }
+.sounds-list { display: grid; gap: 4px; max-height: 360px; overflow-y: auto; }
+.sounds-entry { display: flex; flex-direction: column; gap: 4px; padding: 12px; text-align: left; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; overflow-wrap: anywhere; min-width: 0; }
+.sounds-entry[aria-pressed=true] { border-color: var(--accent); }
+.sounds-entry small { color: var(--secondary); }
+.sounds-editor { padding-top: 16px; margin-top: 16px; border-top: 1px solid var(--line); }
+.system-sounds audio { width: 100%; max-width: 360px; }

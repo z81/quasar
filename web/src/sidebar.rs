@@ -11,6 +11,7 @@ const NAVIGATION_GROUPS: [(&str, &[(Panel, &str)]); 3] = [
             (Panel::Favorites, "star"),
             (Panel::Schedules, "alarm"),
             (Panel::Timers, "timer"),
+            (Panel::Automations, "code"),
             (Panel::History, "history"),
         ],
     ),
@@ -26,6 +27,8 @@ const NAVIGATION_GROUPS: [(&str, &[(Panel, &str)]); 3] = [
         "Инструменты",
         &[
             (Panel::DeviceAccess, "terminal"),
+            (Panel::DeviceTools, "settings"),
+            (Panel::Maintenance, "settings"),
             (Panel::Advanced, "code"),
             (Panel::Access, "lock"),
         ],

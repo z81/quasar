@@ -84,6 +84,7 @@ pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Rout
             auth.clone(),
             crate::auth::require_auth,
         ))
+        .merge(crate::spotify_auth::router(state.clone()))
         .merge(crate::auth::router(auth))
         .merge(crate::control_ui::router())
         .layer(axum::middleware::from_fn(no_cache))

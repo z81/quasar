@@ -457,14 +457,21 @@ pub async fn music_action(
 ) -> axum::response::Response {
     use axum::http::StatusCode;
     let action = body["action"].as_str().unwrap_or_default();
-    if action == "authorize" {
+    if matches!(action, "authorize" | "authorize_start") {
         if let Err(response) = crate::auth::require_device_access(&auth, &headers).await {
             return response;
         }
     }
     if !matches!(
         action,
-        "authorize" | "save" | "play" | "seek" | "shuffle" | "repeat" | "queue_add"
+        "authorize"
+            | "authorize_start"
+            | "save"
+            | "play"
+            | "seek"
+            | "shuffle"
+            | "repeat"
+            | "queue_add"
     ) || body.to_string().len() > 16384
     {
         return music_response(Err((
@@ -472,7 +479,9 @@ pub async fn music_action(
             "Некорректное действие музыки".into(),
         )));
     }
-    if !matches!(action, "authorize" | "save") && !state.registry.is_connected(&duid) {
+    if !matches!(action, "authorize" | "authorize_start" | "save")
+        && !state.registry.is_connected(&duid)
+    {
         return music_response(Err((StatusCode::CONFLICT, "Колонка не подключена".into())));
     }
     music_response(

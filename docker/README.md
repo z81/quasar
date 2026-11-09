@@ -279,7 +279,7 @@ docker run -d --name spotify --network alice --restart unless-stopped \
 | `SPOTIFY_NAME` | `Алиса` | Имя колонки в Spotify |
 | `SPOTIFY_PROXY` | — | HTTP-прокси для librespot и Web API, если Spotify недоступен напрямую |
 | `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` | — | Приложение с developer.spotify.com для [голосового управления](#голосовое-управление) |
-| `SPOTIFY_REDIRECT_URI` | `http://127.0.0.1:8888/callback` | Redirect URI этого приложения |
+| `SPOTIFY_REDIRECT_URI` | `http://127.0.0.1:8888/callback` | Redirect URI приложения: для автоматического возврата задайте `https://<адрес-пульта>/spotify/callback`; loopback оставлен для ручной локальной настройки |
 | `MP3_BITRATE` | `256k` | Битрейт потока |
 | `AIRPLAY_FIFO_PATH` | — | Именованный канал со звуком [AirPlay](#airplay). Без него AirPlay выключен |
 
@@ -302,9 +302,15 @@ PROCESSOR_STATE_SERVER_URLS=http://spotify:8090/state
 ```
 
 Так работают пауза, продолжение и «что играет». Для поиска музыки и переключения треков нужно ещё приложение Spotify:
-1. Создайте приложение на [developer.spotify.com](https://developer.spotify.com/dashboard) с Redirect URI `http://127.0.0.1:8888/callback`.
-2. Задайте его `SPOTIFY_CLIENT_ID` и `SPOTIFY_CLIENT_SECRET` контейнеру Spotify, а не alice-server.
-3. Откройте страницу сервиса и подключите управление тем же способом, что и вход. Страница напишет «Голосовое управление подключено».
+1. Создайте приложение на [developer.spotify.com](https://developer.spotify.com/dashboard). В Redirect URIs добавьте **точный** адрес `https://<адрес-пульта>/spotify/callback`.
+2. Задайте контейнеру Spotify `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` и такой же `SPOTIFY_REDIRECT_URI`. Используется адрес API с пультом (обычно порт назначения reverse proxy — `API_PORT`), а не адрес эмулируемого облака станции.
+3. В плеере пульта раскройте подключение управления и нажмите «Войти в Spotify». После разрешения доступа браузер вернётся в пульт автоматически; копировать адрес с кодом больше не нужно.
+
+Callback доступен без сессии пульта: запрос проверяется по одноразовому `state` со сроком 10 минут, созданному при запуске входа владельцем. Код обменивается на токены внутри Spotify-моста. Возврат всегда ведёт в `/ui/`, без кода и токенов в адресе.
+
+[Spotify требует HTTPS](https://developer.spotify.com/documentation/web-api/concepts/redirect_uri) для серверного callback. Адрес должен открываться в браузере, а сертификат — быть доверенным. Домашний HTTPS-домен подходит в своей сети или VPN; HTTP-адрес вида `192.168.…` не подходит. Для локальной настройки можно оставить `http://127.0.0.1:8888/callback`: тогда пульт показывает ручную форму для полного адреса перенаправления.
+
+Это отдельная авторизация Web API для поиска, очереди и медиатеки. Вход самого Spotify Connect через librespot, описанный выше, использует собственное приложение и остаётся отдельным.
 
 ## AirPlay
 

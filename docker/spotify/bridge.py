@@ -61,6 +61,7 @@ import collections
 import hashlib
 import html
 import re
+import tempfile
 import http.server
 import json
 import logging
@@ -909,42 +910,121 @@ class SpotifyApi:
     def __init__(self):
         self.lock = threading.RLock()
         self.tokens = json.loads(TOKENS.read_text()) if TOKENS.is_file() else None
-        self.state = secrets.token_urlsafe(16)
+        self.pending_authorization = None
         self.device = None
         self.retry_after = 0
 
     def connected(self):
         return bool(self.tokens and self.tokens.get("refresh_token"))
 
-    def authorize_url(self):
-        query = {"client_id": CLIENT_ID, "response_type": "code", "redirect_uri": REDIRECT_URI, "scope": SCOPES, "state": self.state}
-        return f"{self.accounts}/authorize?{urllib.parse.urlencode(query)}"
+    @staticmethod
+    def automatic_callback():
+        try:
+            redirect = urllib.parse.urlsplit(REDIRECT_URI)
+        except ValueError:
+            return False
+        return (redirect.scheme == "https" and bool(redirect.hostname)
+                and redirect.username is None and redirect.password is None
+                and redirect.path in ("/callback", "/spotify/callback")
+                and not redirect.query and not redirect.fragment)
+
+    @staticmethod
+    def manual_callback():
+        try:
+            redirect = urllib.parse.urlsplit(REDIRECT_URI)
+        except ValueError:
+            return False
+        return (redirect.scheme == "http" and redirect.hostname in ("127.0.0.1", "::1")
+                and redirect.username is None and redirect.password is None
+                and not redirect.query and not redirect.fragment)
+
+    def begin_authorization(self):
+        if not self.automatic_callback() and not self.manual_callback():
+            raise SpotifyError("Для входа настройте HTTPS callback /spotify/callback или /callback; ручной вход поддерживает только loopback-адрес.")
+        prefix = base64.urlsafe_b64encode(STATION_ID.encode("utf-8")).decode("ascii").rstrip("=")
+        state = prefix + "." + secrets.token_urlsafe(32)
+        with self.lock:
+            # One pending attempt per bridge: starting a new flow retires the old one.
+            self.pending_authorization = (state, time.monotonic() + 600)
+        query = {"client_id": CLIENT_ID, "response_type": "code", "redirect_uri": REDIRECT_URI,
+                 "scope": SCOPES, "state": state}
+        return {"authorize_url": f"{self.accounts}/authorize?{urllib.parse.urlencode(query)}",
+                "redirect_uri": REDIRECT_URI, "automatic_callback": self.automatic_callback()}
 
     def finish_authorization(self, redirected):
-        query = urllib.parse.parse_qs(urllib.parse.urlsplit(redirected.strip()).query)
-        if query.get("state", [""])[0] != self.state:
-            raise SpotifyError("ссылка не от этого входа: начните заново")
-        if "code" not in query:
-            raise SpotifyError(query.get("error", ["в адресе нет кода"])[0])
-        self.save(self.token_request({"grant_type": "authorization_code", "code": query["code"][0], "redirect_uri": REDIRECT_URI}))
+        try:
+            address = urllib.parse.urlsplit(redirected.strip())
+            redirect = urllib.parse.urlsplit(REDIRECT_URI)
+            if ((address.scheme, address.netloc, address.path) != (redirect.scheme, redirect.netloc, redirect.path)
+                    or address.fragment):
+                raise ValueError("unexpected redirect")
+            query = urllib.parse.parse_qs(address.query, keep_blank_values=True, max_num_fields=20)
+            if any(len(query.get(key, [])) > 1 for key in ("state", "code", "error")):
+                raise ValueError("repeated callback field")
+        except (ValueError, AttributeError):
+            raise SpotifyError("Неверный адрес возврата Spotify. Начните вход заново.") from None
+        self.finish_callback(query.get("state", [""])[0], query.get("code", [None])[0], query.get("error", [None])[0])
+
+    def finish_callback(self, state, code=None, error=None):
+        invalid = "Ссылка входа устарела или уже использована. Начните вход заново."
+        with self.lock:
+            pending = self.pending_authorization
+            if pending and time.monotonic() >= pending[1]:
+                self.pending_authorization = None
+                pending = None
+            if (not pending or not isinstance(state, str) or len(state) > 2048 or not state.isascii()
+                    or not secrets.compare_digest(state, pending[0])):
+                raise SpotifyError(invalid)
+            # Consume even a denial or malformed result, and before any network I/O.
+            self.pending_authorization = None
+            # Keep begin/finish/refresh serialized until the new account is
+            # persisted, so an older slow exchange cannot overwrite a newer one.
+            if error is not None:
+                raise SpotifyError("Вход в Spotify не подтверждён. Начните вход заново и разрешите доступ.")
+            if not isinstance(code, str) or not code or len(code) > 8192:
+                raise SpotifyError("Spotify не передал код входа. Начните вход заново.")
+            answer = self.token_request({"grant_type": "authorization_code", "code": code, "redirect_uri": REDIRECT_URI})
+            if (not isinstance(answer, dict) or not isinstance(answer.get("refresh_token"), str)
+                    or not answer["refresh_token"]):
+                raise SpotifyError("Spotify не передал данные постоянного подключения. Начните вход заново.")
+            try:
+                self.save(answer, replace=True)
+            except (OSError, ValueError, TypeError):
+                raise SpotifyError("Не удалось сохранить подключение Spotify. Начните вход заново.") from None
+            self.device = None
 
     def token_request(self, form):
         try:
-            return http_json("POST", f"{self.accounts}/api/token", form=form, proxy=PROXY,
-                             headers={"Authorization": "Basic " + base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()})
+            answer = http_json("POST", f"{self.accounts}/api/token", form=form, proxy=PROXY,
+                               headers={"Authorization": "Basic " + base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()})
         except urllib.error.HTTPError as error:
-            raise SpotifyError(f"Spotify отказал в токене: {error.code} {error.read().decode()[:200]}") from None
-        except OSError as error:
-            raise SpotifyError(f"Spotify недоступен: {error}") from None
+            raise SpotifyError(f"Spotify не завершил вход (HTTP {error.code}). Начните вход заново.", error.code) from None
+        except (OSError, ValueError):
+            raise SpotifyError("Не удалось связаться с сервером входа Spotify. Попробуйте начать вход заново.") from None
+        if not isinstance(answer, dict) or not isinstance(answer.get("access_token"), str) or not answer["access_token"]:
+            raise SpotifyError("Spotify вернул неполный ответ входа. Начните вход заново.")
+        return answer
 
-    def save(self, answer):
+    def save(self, answer, replace=False):
         with self.lock:
-            tokens = dict(self.tokens or {})
+            tokens = {} if replace else dict(self.tokens or {})
             tokens.update(answer)
             tokens["expires_at"] = time.time() + int(answer.get("expires_in", 3600)) - 60
-            self.tokens = tokens
             TOKENS.parent.mkdir(parents=True, exist_ok=True)
-            TOKENS.write_text(json.dumps(tokens))
+            descriptor, temporary = tempfile.mkstemp(prefix=f".{TOKENS.name}.", dir=TOKENS.parent)
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                    os.fchmod(stream.fileno(), 0o600)
+                    json.dump(tokens, stream)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, TOKENS)
+                self.tokens = tokens
+            finally:
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
 
     def access_token(self):
         with self.lock:
@@ -1090,7 +1170,8 @@ class MusicService:
         missing = sorted(set(SCOPES.split()) - scopes)
         return {"configured": bool(api), "connected": bool(api and api.connected()),
                 "missing_scopes": missing, "reconnect_required": bool(missing),
-                "authorize_url": api.authorize_url() if api else None,
+                "authorize_url": None,
+                "automatic_callback": bool(api and api.automatic_callback()),
                 "redirect_uri": REDIRECT_URI if api else None}
 
     def require_api(self, scope=None):
@@ -1216,13 +1297,18 @@ class MusicService:
 
     def action(self, body):
         action = body.get("action")
-        if action == "authorize":
+        if action in ("authorize", "authorize_start", "authorize_callback"):
             if not self.owner.api:
                 raise SpotifyError("Spotify API не настроен: используются существующие SPOTIFY_CLIENT_ID и SPOTIFY_CLIENT_SECRET.")
-            url = body.get("url")
-            if not isinstance(url, str) or len(url) > 8192:
-                raise SpotifyError("Вставьте адрес перенаправления после входа в Spotify.")
-            self.owner.api.finish_authorization(url)
+            if action == "authorize_start":
+                return self.owner.api.begin_authorization()
+            if action == "authorize_callback":
+                self.owner.api.finish_callback(body.get("state"), body.get("code"), body.get("error"))
+            else:
+                url = body.get("url")
+                if not isinstance(url, str) or len(url) > 8192:
+                    raise SpotifyError("Вставьте адрес перенаправления после входа в Spotify.")
+                self.owner.api.finish_authorization(url)
         else:
             api = self.require_api()
             if action == "save":
@@ -1346,8 +1432,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                                        {key: values[0] for key, values in query.items()}))
         elif path == "/health":
             self.reply(200, "text/plain", "ok")
+        elif path == "/api-authorize" and bridge.api:
+            try:
+                self.redirect(bridge.music.action({"action": "authorize_start"})["authorize_url"])
+            except SpotifyError as error:
+                self.oauth_error(str(error))
+        elif (bridge.api and bridge.api.automatic_callback()
+              and path == urllib.parse.urlsplit(REDIRECT_URI).path):
+            try:
+                if len(request.query) > 16384:
+                    raise ValueError("callback too large")
+                query = urllib.parse.parse_qs(request.query, keep_blank_values=True, max_num_fields=20)
+                if any(len(query.get(key, [])) > 1 for key in ("state", "code", "error")):
+                    raise ValueError("repeated callback field")
+                bridge.music.action({"action": "authorize_callback", "state": query.get("state", [None])[0],
+                                     "code": query.get("code", [None])[0], "error": query.get("error", [None])[0]})
+                self.redirect()
+            except ValueError:
+                self.oauth_error("Некорректный ответ входа Spotify. Начните вход заново.")
+            except SpotifyError as error:
+                self.oauth_error(str(error))
         elif path == "/":
-            self.reply(200, "text/html; charset=utf-8", status_page())
+            self.reply(200, "text/html; charset=utf-8", status_page(), cache_control="no-store")
         else:
             self.reply(404, "text/plain", "not found")
 
@@ -1382,7 +1488,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.redirect()
         elif path == "/api-sign-in" and bridge.api:
             try:
-                bridge.api.finish_authorization(self.form_value("url"))
+                bridge.music.action({"action": "authorize", "url": self.form_value("url")})
                 bridge.events.append(f"{time.strftime('%H:%M:%S')} управление Spotify подключено")
             except SpotifyError as error:
                 bridge.events.append(f"{time.strftime('%H:%M:%S')} ошибка подключения управления: {error}")
@@ -1392,9 +1498,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def music_reply(self, callback):
         try:
-            self.reply(200, "application/json; charset=utf-8", json.dumps(callback(), ensure_ascii=False))
+            self.reply(200, "application/json; charset=utf-8", json.dumps(callback(), ensure_ascii=False), cache_control="no-store")
         except SpotifyError as error:
-            self.reply(409, "application/json; charset=utf-8", json.dumps({"error": str(error)}, ensure_ascii=False))
+            self.reply(409, "application/json; charset=utf-8", json.dumps({"error": str(error)}, ensure_ascii=False), cache_control="no-store")
+
+    def oauth_error(self, message):
+        page = ("<!doctype html><html lang=ru><meta charset=utf-8>"
+                "<meta name=viewport content='width=device-width, initial-scale=1'>"
+                "<meta name=referrer content=no-referrer><title>Вход Spotify</title>"
+                f"<h1>Не удалось подключить Spotify</h1><p>{html.escape(message)}</p>"
+                "<p><a href='/'>Вернуться и начать вход заново</a></p></html>")
+        self.reply(400, "text/html; charset=utf-8", page, cache_control="no-store")
 
     def json_body(self):
         try:
@@ -1407,9 +1521,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
         return urllib.parse.parse_qs(body).get(name, [""])[0]
 
-    def redirect(self):
+    def redirect(self, location="/"):
         self.send_response(303)
-        self.send_header("Location", "/")
+        self.send_header("Location", location)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
     def reply(self, status, content_type, text, cache_control=None):
@@ -1420,6 +1537,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if cache_control:
             self.send_header("Cache-Control", cache_control)
             self.send_header("X-Content-Type-Options", "nosniff")
+            if cache_control == "no-store":
+                self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         self.wfile.write(body)
 
@@ -1444,11 +1563,15 @@ def status_page():
     if not bridge.api:
         parts.append("<p>Голосовое управление выключено: задайте SPOTIFY_CLIENT_ID и SPOTIFY_CLIENT_SECRET приложения с developer.spotify.com.</p>")
     elif not bridge.api.connected() or bridge.music.authorization()["missing_scopes"]:
-        parts.append(f"""<h2>Голосовое управление</h2><ol>
-<li>В настройках приложения на developer.spotify.com должен быть Redirect URI <code>{escape(REDIRECT_URI)}</code>.</li>
-<li>Откройте <a href="{escape(bridge.api.authorize_url())}" target="_blank">ссылку</a> и разрешите доступ.</li>
+        parts.append(f"<h2>Управление Spotify</h2><p>В настройках приложения на developer.spotify.com должен быть Redirect URI <code>{escape(REDIRECT_URI)}</code>.</p>")
+        if bridge.api.automatic_callback():
+            parts.append("<p><a href='/api-authorize' rel='noreferrer'>Войти в Spotify</a> и разрешить доступ. После входа браузер автоматически вернётся в пульт.</p>")
+        elif bridge.api.manual_callback():
+            parts.append(f"""<ol><li>Откройте <a href="/api-authorize" target="_blank" rel="noopener noreferrer">ссылку</a> и разрешите доступ.</li>
 <li>Браузер перейдёт на <code>{escape(REDIRECT_URI)}?code=…</code> и покажет ошибку. Скопируйте этот адрес сюда:</li></ol>
-<form method="post" action="/api-sign-in"><input name="url" size="80"> <button>Подключить</button></form>""")
+<form method="post" action="/api-sign-in"><input name="url" size="80" autocomplete="off"> <button>Подключить</button></form>""")
+        else:
+            parts.append("<p>Для автоматического входа нужен HTTPS callback /spotify/callback или /callback. Ручной вход поддерживается только с loopback-адресом.</p>")
     else:
         parts.append("<p>Голосовое управление подключено.</p>")
     if events:

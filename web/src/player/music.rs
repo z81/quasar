@@ -24,8 +24,8 @@ struct Authorization {
     connected: bool,
     reconnect_required: bool,
     missing_scopes: Vec<String>,
-    authorize_url: Option<String>,
     redirect_uri: Option<String>,
+    automatic_callback: bool,
 }
 
 #[derive(Clone, Default, Deserialize, PartialEq)]
@@ -139,6 +139,55 @@ fn perform(state: ControlState, duid: String, mut editor: Editor, body: Value) {
     });
 }
 
+fn authorize(
+    state: ControlState,
+    duid: String,
+    mut editor: Editor,
+    mut manual_link: Signal<Option<String>>,
+) {
+    if *editor.busy.peek() {
+        return;
+    }
+    editor.busy.set(true);
+    editor.error.set(None);
+    manual_link.set(None);
+    spawn(async move {
+        let result = async {
+            let response = api::mutate(
+                state,
+                "POST",
+                &endpoint(&duid),
+                Some(&json!({"action":"authorize_start"})),
+            )
+            .await?;
+            let value = response
+                .json::<Value>()
+                .await
+                .map_err(|_| "Не удалось подготовить вход в Spotify".to_owned())?;
+            let url = value["authorize_url"]
+                .as_str()
+                .filter(|url| url.starts_with("https://accounts.spotify.com/authorize?"))
+                .ok_or("Сервер не вернул ссылку Spotify")?
+                .to_owned();
+            if value["automatic_callback"] == true {
+                web_sys::window()
+                    .ok_or("Браузер недоступен")?
+                    .location()
+                    .set_href(&url)
+                    .map_err(|_| "Не удалось открыть Spotify".to_owned())?;
+            } else {
+                manual_link.set(Some(url));
+            }
+            Ok::<(), String>(())
+        }
+        .await;
+        if let Err(error) = result {
+            editor.error.set(Some(error));
+        }
+        editor.busy.set(false);
+    });
+}
+
 fn time_label(milliseconds: u64) -> String {
     let seconds = milliseconds / 1000;
     format!("{}:{:02}", seconds / 60, seconds % 60)
@@ -170,6 +219,7 @@ fn MusicForStation(state: ControlState, duid: String) -> Element {
     let mut clock = use_signal(js_sys::Date::now);
     let mut seek = use_signal(|| None::<u64>);
     let mut redirect = use_signal(String::new);
+    let manual_link = use_signal(|| None::<String>);
     let poll_duid = duid.clone();
     use_future(move || {
         let duid = poll_duid.clone();
@@ -282,6 +332,7 @@ fn MusicForStation(state: ControlState, duid: String) -> Element {
     let save_uri = uri.clone();
     let search_duid = duid.clone();
     let auth_duid = duid.clone();
+    let start_auth_duid = duid.clone();
     rsx! {
         document::Stylesheet { href: asset!("/assets/music.css") }
         div { class: "music-panel",
@@ -380,11 +431,21 @@ fn MusicForStation(state: ControlState, duid: String) -> Element {
             if snapshot.authorization.configured && (!snapshot.authorization.connected || snapshot.authorization.reconnect_required) {
                 details { class: "music-auth",
                     summary { if snapshot.authorization.connected { "Разрешить доступ к любимым трекам" } else { "Подключить управление Spotify" } }
-                    p { "Откройте ссылку, разрешите доступ и вставьте полный адрес, на который Spotify перенаправит браузер. Страница по этому адресу может не открыться — нужен сам адрес." }
-                    if let Some(url) = snapshot.authorization.authorize_url { a { href: url, target: "_blank", rel: "noopener noreferrer", "Войти в Spotify" } }
-                    form { class: "music-search", onsubmit: move |event| { event.prevent_default(); perform(state, auth_duid.clone(), editor, json!({"action":"authorize","url":redirect()})); redirect.set(String::new()); },
-                        input { r#type: "text", autocomplete: "off", spellcheck: "false", maxlength: "8192", aria_label: "Адрес перенаправления Spotify", placeholder: snapshot.authorization.redirect_uri.unwrap_or_default(), value: "{redirect}", oninput: move |event| redirect.set(event.value()) }
-                        button { class: "button secondary", r#type: "submit", disabled: (editor.busy)() || redirect().is_empty(), "Подключить" }
+                    if snapshot.authorization.automatic_callback {
+                        p { "Войдите в Spotify и разрешите доступ. После входа браузер автоматически вернётся в пульт." }
+                    } else {
+                        p { "Серверный HTTPS callback не настроен. Для ручного входа откройте ссылку, разрешите доступ и вставьте полный адрес перенаправления ниже." }
+                    }
+                    button { class: "button secondary", disabled: (editor.busy)(), onclick: move |_| authorize(state, start_auth_duid.clone(), editor, manual_link), "Войти в Spotify" }
+                    if let Some(uri) = snapshot.authorization.redirect_uri.as_ref() {
+                        p { "В приложении Spotify должен быть разрешён Redirect URI: " code { "{uri}" } }
+                    }
+                    if !snapshot.authorization.automatic_callback {
+                        if let Some(url) = manual_link() { p { a { href: url, target: "_blank", rel: "noopener noreferrer", "Открыть Spotify для входа ↗" } } }
+                        form { class: "music-search", onsubmit: move |event| { event.prevent_default(); perform(state, auth_duid.clone(), editor, json!({"action":"authorize","url":redirect()})); redirect.set(String::new()); },
+                            input { r#type: "text", autocomplete: "off", spellcheck: "false", maxlength: "8192", aria_label: "Адрес перенаправления Spotify", placeholder: snapshot.authorization.redirect_uri.unwrap_or_default(), value: "{redirect}", oninput: move |event| redirect.set(event.value()) }
+                            button { class: "button secondary", r#type: "submit", disabled: (editor.busy)() || redirect().is_empty(), "Подключить" }
+                        }
                     }
                 }
             }

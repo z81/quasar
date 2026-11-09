@@ -13,6 +13,7 @@ mod automations;
 mod maintenance;
 mod packages;
 mod system_sounds;
+mod spotify_auth;
 mod config;
 mod connections;
 mod control;

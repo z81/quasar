@@ -179,11 +179,9 @@ fn App() -> Element {
                     match panel {
                         Panel::Control => rsx! {
                             div { class: "dashboard",
+                                station::StationCard { state }
                                 player::PlayerCard { state }
-                                div { class: "control-grid",
-                                    composer::Composer { state }
-                                    station::StationCard { state }
-                                }
+                                composer::Composer { state }
                                 history::History { state, compact: true }
                                 weather::WeatherCard { state }
                             }

@@ -179,8 +179,12 @@ fn App() -> Element {
                     match panel {
                         Panel::Control => rsx! {
                             div { class: "dashboard",
-                                station::StationCard { state }
-                                player::PlayerCard { state }
+                                div { class: "dashboard-hero",
+                                    player::PlayerCard { state }
+                                    div { class: "dashboard-station", aria_label: "3D-вид колонки",
+                                        station::StationModel { state, duid: (state.selected)() }
+                                    }
+                                }
                                 composer::Composer { state }
                                 history::History { state, compact: true }
                                 weather::WeatherCard { state }

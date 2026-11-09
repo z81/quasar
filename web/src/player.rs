@@ -94,7 +94,9 @@ fn PlayerControls(state: ControlState) -> Element {
                         span { if let Some(current) = player.as_ref().and_then(|player| player.volume) { "Сейчас: {current}%" } else { "Нет данных" } }
                     }
                     div { class: "volume-inputs",
+                        button { class: "icon-button volume-step", r#type: "button", disabled: !enabled, aria_label: "Тише", title: "Тише", onclick: move |_| api::quick_action(state, "sound_quiter", "Тише"), Icon { name: "volume-down", size: 17 } }
                         input { r#type: "range", min: "0", max: "100", step: "1", aria_label: "Желаемая громкость", value: level.unwrap_or(0), style: "--range-progress: {level.unwrap_or(0)}%;", disabled: !can_volume, oninput: move |event| { dirty.set(true); volume.set(event.value()); } }
+                        button { class: "icon-button volume-step", r#type: "button", disabled: !enabled, aria_label: "Громче", title: "Громче", onclick: move |_| api::quick_action(state, "sound_louder", "Громче"), Icon { name: "volume-up", size: 17 } }
                         input { id: "volume-value", class: "volume-number", r#type: "text", inputmode: "numeric", pattern: "[0-9]+([.][0-9]*)?", maxlength: "6", aria_label: "Громкость в процентах", placeholder: "—", value: "{volume}", disabled: !can_volume, oninput: move |event| { dirty.set(true); volume.set(event.value()); } }
                         span { class: "form-help", "%" }
                         button { class: "icon-button volume-apply", r#type: "submit", aria_label: "Применить громкость", title: "Применить громкость", disabled: !can_volume || level.is_none() || !dirty(), Icon { name: "check", size: 18 } }
@@ -120,7 +122,7 @@ fn AlbumArt(cover_url: Option<String>, album: Option<String>) -> Element {
                     key: "{url}",
                     src: url.clone(),
                     alt: album.map(|name| format!("Обложка альбома «{name}»")).unwrap_or_else(|| "Обложка альбома".into()),
-                    width: "96", height: "96", decoding: "async", loading: "lazy", referrerpolicy: "no-referrer",
+                    width: "160", height: "160", decoding: "async", loading: "eager", referrerpolicy: "no-referrer",
                     onerror: move |_| failed.set(Some(url.clone())),
                     onload: move |_| failed.set(None),
                 }

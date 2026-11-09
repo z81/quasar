@@ -379,26 +379,26 @@ select { font: inherit; color: var(--text); background: var(--surface); }
 .favorite-bottom { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 18px; }
 .favorite-bottom > span { min-width: 0; }
 /* Spotify accents belong to the player; the rest of the dashboard keeps its theme. */
-.player-card { --accent: #15803d; --accent-text: #126b36; --accent-soft: #e3f4e9; --focus: #168344; --on-accent: #052a13; --accent-gradient: linear-gradient(135deg, #33e779, #1ed760); --accent-gradient-hover: linear-gradient(135deg, #49ed8b, #2de16e); --accent-shadow: 0 6px 20px #16834424; display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 16px 24px; align-items: center; padding: 24px; }
+.player-card { --accent: #15803d; --accent-text: #126b36; --accent-soft: #e3f4e9; --focus: #168344; --on-accent: #052a13; --accent-gradient: linear-gradient(135deg, #33e779, #1ed760); --accent-gradient-hover: linear-gradient(135deg, #49ed8b, #2de16e); --accent-shadow: 0 6px 20px #16834424; display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 12px 16px; align-items: center; padding: 18px; }
 .app[data-theme="dark"] .player-card { --accent: #1ed760; --accent-text: #75eba2; --accent-soft: #193d2b; --focus: #47df7e; }
 .player-now { display: contents; }
-.player-card > .player-now > .player-art { grid-column: 1; grid-row: 1 / 3; width: 160px; height: 160px; }
+.player-card > .player-now > .player-art { grid-column: 1; grid-row: 1 / 3; width: 128px; height: 128px; }
 .player-card > .player-now > .player-track { grid-column: 2; grid-row: 1; align-self: end; }
 .player-card > .player-console { grid-column: 2; grid-row: 2; align-self: start; }
-.player-art { display: grid; place-items: center; width: 96px; height: 96px; flex-shrink: 0; border-radius: 18px; color: var(--accent-text); background: var(--glass-control); border: 1px solid var(--glass-line); box-shadow: var(--glass-control-shadow); overflow: hidden; }
+.player-art { display: grid; place-items: center; width: 96px; height: 96px; flex-shrink: 0; border-radius: 12px; color: var(--accent-text); background: var(--glass-control); border: 1px solid var(--glass-line); box-shadow: var(--glass-control-shadow); overflow: hidden; }
 .player-art img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .player-track { min-width: 0; }
-.player-track h2 { font-size: 24px; line-height: 1.25; font-weight: 650; letter-spacing: -.5px; overflow-wrap: anywhere; margin-top: 0; }
+.player-track h2 { font-size: 22px; line-height: 1.25; font-weight: 650; letter-spacing: -.5px; overflow-wrap: anywhere; margin-top: 0; }
 .player-track p { font-size: 12px; color: var(--secondary); margin-top: 4px; overflow-wrap: anywhere; }
-.player-track .player-artist { font-size: 14px; }
+.player-track .player-artist { font-size: 13px; }
 .player-track .player-album { color: var(--muted); font-size: 11px; }
-.player-track .player-status { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; margin-top: 10px; }
-.player-console { display: grid; gap: 12px; min-width: 0; }
-.player-controls { display: flex; align-items: center; justify-content: center; gap: 12px; }
-.player-button { width: 44px; height: 44px; border-radius: 50%; border-color: transparent; background: transparent; color: var(--secondary); }
-.player-toggle { width: 56px; height: 56px; background: var(--accent-gradient); color: var(--on-accent); border-color: transparent; box-shadow: var(--accent-shadow); }
+.player-track .player-muted { color: var(--muted); font-size: 10px; }
+.player-console { display: grid; gap: 8px; min-width: 0; }
+.player-controls { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.player-button { width: 44px; height: 36px; border-radius: 8px; border-color: var(--glass-line); background: var(--glass-header); color: var(--secondary); }
+.player-toggle { width: 56px; height: 40px; background: var(--accent-gradient); color: var(--on-accent); border-color: transparent; box-shadow: var(--accent-shadow); }
 .player-toggle:hover:not(:disabled) { background: var(--accent-gradient-hover); color: var(--on-accent); }
-.player-stop { width: 36px; height: 36px; border-color: var(--glass-line); margin-left: 4px; }
+.player-stop { width: 36px; height: 36px; }
 .volume-form { min-width: 0; }
 .volume-inputs { display: flex; align-items: center; gap: 4px; }
 .volume-step { width: 30px; height: 34px; border: 0; border-radius: 8px; color: var(--secondary); }
@@ -610,9 +610,9 @@ select { font: inherit; color: var(--text); background: var(--surface); }
 .weather-search-empty { margin-bottom: 16px; }
 .weather-provider { border-top: 1px solid var(--line); margin-top: 22px; padding-top: 14px; }
 @media (max-width: 1180px) {
-  .player-card { grid-template-columns: 128px minmax(0, 1fr); gap: 16px; padding: 20px; }
-  .player-card > .player-now > .player-art { width: 128px; height: 128px; }
-  .player-track h2 { font-size: 22px; }
+  .player-card { grid-template-columns: 104px minmax(0, 1fr); padding: 16px; }
+  .player-card > .player-now > .player-art { width: 104px; height: 104px; }
+  .player-track h2 { font-size: 20px; }
   .settings-grid { grid-template-columns: minmax(0, 1fr); }
   .settings-card { padding: 22px; }
   .history-row-tools { flex-wrap: wrap; justify-content: flex-end; max-width: 110px; }
@@ -625,12 +625,12 @@ select { font: inherit; color: var(--text); background: var(--surface); }
 }
 @media (max-width: 760px) {
   .sidebar { overflow-y: visible; }
-  .player-card { grid-template-columns: 80px minmax(0, 1fr); padding: 16px; gap: 16px; }
-  .player-card > .player-now > .player-art { grid-row: 1; width: 80px; height: 80px; }
+  .player-card { grid-template-columns: 64px minmax(0, 1fr); gap: 12px; }
+  .player-card > .player-now > .player-art { grid-row: 1; width: 64px; height: 64px; }
   .player-card > .player-console { grid-column: 1 / -1; grid-row: 2; }
-  .player-art { width: 80px; height: 80px; border-radius: 14px; }
-  .player-track h2 { font-size: 20px; }
-  .player-console { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .player-track h2 { font-size: 18px; }
+  .player-console { grid-template-columns: minmax(0, 1fr); }
+  .player-button { height: 40px; }
   .volume-inputs { gap: 4px; }
   .volume-step { width: 36px; height: 40px; }
   .volume-number { height: 40px; font-size: 16px; }

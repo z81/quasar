@@ -1,5 +1,5 @@
-.music-panel { grid-column: 1 / -1; min-width: 0; border-top: 1px solid var(--glass-line); padding-top: 16px; }
-.music-playback-bar { display: flex; align-items: center; gap: 24px; }
+.music-panel { grid-column: 1 / -1; min-width: 0; border-top: 1px solid var(--glass-line); padding-top: 10px; }
+.music-playback-bar { display: flex; align-items: center; gap: 12px; }
 .music-progress { display: flex; flex: 1; gap: 12px; align-items: center; min-width: 0; color: var(--secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
 .music-progress > span { min-width: 32px; }
 .music-progress > span:last-child { text-align: right; }
@@ -70,8 +70,7 @@
   .music-track-row { grid-template-columns: 22px minmax(0, 1.4fr) minmax(0, 1fr) 36px 104px; gap: 8px; }
 }
 @media (max-width: 760px) {
-  .music-panel { padding-top: 14px; }
-  .music-playback-bar { gap: 8px; }
+  .music-playback-bar { gap: 4px; }
   .music-progress { gap: 8px; }
   .music-actions { justify-content: center; width: 100%; }
   .music-mode, .music-repeat, .music-repeat select { height: 40px; }

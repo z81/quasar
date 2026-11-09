@@ -39,16 +39,6 @@ fn PlayerControls(state: ControlState) -> Element {
         && player
             .as_ref()
             .is_some_and(|player| player.capabilities.set_volume);
-    let status = player
-        .as_ref()
-        .map(|player| match player.state.as_str() {
-            "playing" => "Играет",
-            "paused" => "На паузе",
-            "buffering" => "Загрузка",
-            "stopped" | "idle" | "finished" => "Остановлено",
-            _ => "Состояние неизвестно",
-        })
-        .unwrap_or("Состояние неизвестно");
     let can_pause = player
         .as_ref()
         .is_some_and(|player| player.capabilities.pause);
@@ -72,7 +62,9 @@ fn PlayerControls(state: ControlState) -> Element {
                     if let Some(album) = album {
                         p { class: "player-album", "{album}" }
                     }
-                    p { class: "player-status", span { class: if can_pause { "status-dot connected" } else { "status-dot" } } "{status}" if player.as_ref().is_some_and(|player| player.muted == Some(true)) { " · Звук выключен" } }
+                    if player.as_ref().is_some_and(|player| player.muted == Some(true)) {
+                        p { class: "player-muted", "Звук выключен" }
+                    }
                 }
             }
             div { class: "player-console",

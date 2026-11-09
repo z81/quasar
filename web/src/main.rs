@@ -164,9 +164,6 @@ fn App() -> Element {
                                 Panel::Maintenance => "Пакеты, службы, системные звуки и резервные копии.",
                             } }
                         }
-                        button { class: "button secondary refresh-button", aria_label: "Обновить данные", disabled: (state.loading)(), onclick: move |_| { state.loading.set(true); spawn(api::refresh(state)); spawn(weather::refresh(state)); },
-                            Icon { name: "refresh", size: 16 } "Обновить"
-                        }
                     }
                     if let Some(error) = (state.server_error)() {
                         div { class: "notice error", role: "alert", Icon { name: "alert" } span { "{error}. Повторяем подключение автоматически." } }
@@ -182,7 +179,7 @@ fn App() -> Element {
                                 div { class: "dashboard-hero",
                                     player::PlayerCard { state }
                                     div { class: "dashboard-station", aria_label: "3D-вид колонки",
-                                        station::StationModel { state, duid: (state.selected)() }
+                                        station::StationModel { state, duid: (state.selected)(), show_details: false }
                                     }
                                 }
                                 composer::Composer { state }
@@ -205,10 +202,6 @@ fn App() -> Element {
                         Panel::Advanced => rsx! {
                             div { class: "control-grid", composer::Advanced { state } station::StationCard { state } }
                         },
-                    }
-                    footer { class: "page-footer",
-                        span { "Команды и ответы — в одном пространстве." }
-                        span { "Quasar Control" }
                     }
                 }
             }

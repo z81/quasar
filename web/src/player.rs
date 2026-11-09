@@ -67,7 +67,6 @@ fn PlayerControls(state: ControlState) -> Element {
             div { class: "player-now",
                 AlbumArt { cover_url, album: album.clone() }
                 div { class: "player-track",
-                    div { class: "player-eyebrow", span { class: "card-kicker", "НА КОЛОНКЕ" } if let Some(source) = player.as_ref().and_then(|player| player.source.as_ref()) { span { class: "source-label", "{source}" } } }
                     h2 { if let Some(title) = player.as_ref().and_then(|player| player.title.as_ref()) { "{title}" } else { "Музыка на колонке" } }
                     if let Some(artist) = player.as_ref().and_then(|player| player.artist.as_ref()) { p { class: "player-artist", "{artist}" } }
                     if let Some(album) = album {
@@ -90,9 +89,6 @@ fn PlayerControls(state: ControlState) -> Element {
                 form { class: "volume-form", onsubmit: move |event| {
                     event.prevent_default(); if let Some(level) = level.filter(|_| can_volume) { volume.set(level.to_string()); dirty.set(true); api::player_action(state,"set_volume",Some(level)); }
                 },
-                    div { class: "volume-label", label { r#for: "volume-value", Icon { name: "volume-up", size: 15 } "Громкость" }
-                        span { if let Some(current) = player.as_ref().and_then(|player| player.volume) { "Сейчас: {current}%" } else { "Нет данных" } }
-                    }
                     div { class: "volume-inputs",
                         button { class: "icon-button volume-step", r#type: "button", disabled: !enabled, aria_label: "Тише", title: "Тише", onclick: move |_| api::quick_action(state, "sound_quiter", "Тише"), Icon { name: "volume-down", size: 17 } }
                         input { r#type: "range", min: "0", max: "100", step: "1", aria_label: "Желаемая громкость", value: level.unwrap_or(0), style: "--range-progress: {level.unwrap_or(0)}%;", disabled: !can_volume, oninput: move |event| { dirty.set(true); volume.set(event.value()); } }

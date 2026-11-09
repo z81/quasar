@@ -97,3 +97,15 @@
   .music-track-index { display: none; }
   .music-search .button { padding: 8px 10px; }
 }
+
+.music-more { border-color: var(--glass-line); }
+.music-popup { position: fixed; inset: 0; width: min(760px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); margin: auto; padding: 20px; border: 1px solid var(--glass-line); border-radius: 24px; background: var(--surface); background-image: var(--glass); color: var(--text); box-shadow: var(--glass-shadow); overflow: auto; overscroll-behavior: contain; }
+.music-popup::backdrop { background: #100d1c40; -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+.music-popup-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.music-popup-heading h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.music-popup-heading > .music-icon-button { width: 40px; height: 40px; }
+.music-popup .music-tabs { margin-top: 12px; }
+.music-popup .music-track-list { max-height: min(400px, 50dvh); }
+@media (max-width: 760px) {
+  .music-popup { width: calc(100vw - 24px); max-height: calc(100dvh - 32px); padding: 12px; border-radius: 18px; }
+}

@@ -5,16 +5,20 @@ use serde_json::{json, Value};
 use crate::{api, icons::Icon, state::ControlState, station_preview::*};
 
 #[component]
-pub(crate) fn StationModel(state: ControlState, duid: String) -> Element {
+pub(crate) fn StationModel(
+    state: ControlState,
+    duid: String,
+    #[props(default = true)] show_details: bool,
+) -> Element {
     rsx! {
         for duid in [duid] {
-            StationModelView { key: "{duid}", state, duid }
+            StationModelView { key: "{duid}", state, duid, show_details }
         }
     }
 }
 
 #[component]
-fn StationModelView(state: ControlState, duid: String) -> Element {
+fn StationModelView(state: ControlState, duid: String, show_details: bool) -> Element {
     let mut live_frame = use_signal(|| None::<Value>);
     let mut live_error = use_signal(|| None::<String>);
     let mut received_at = use_signal(|| 0.0_f64);
@@ -176,6 +180,7 @@ fn StationModelView(state: ControlState, duid: String) -> Element {
                 canvas { class: "station-model-canvas", tabindex: "0", role: "img", aria_label: "3D-модель Миди. Вращение перетаскиванием или клавишами со стрелками." }
                 div { class: "station-model-fallback", super::illustration::Midi {} }
             }
+            if show_details {
             div { class: "station-model-toolbar",
                 span { class: "station-model-label", "{label}" }
                 div { class: "station-model-controls", role: "group", aria_label: "Положение 3D-колонки",
@@ -186,6 +191,7 @@ fn StationModelView(state: ControlState, duid: String) -> Element {
             }
             p { class: "station-model-hint", role: "status", "{hint}" }
             p { class: "station-model-unavailable", role: "status", "3D недоступно в этом браузере. Показана иллюстрация." }
+            }
         }
     }
 }

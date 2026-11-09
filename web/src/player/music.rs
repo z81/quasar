@@ -39,7 +39,6 @@ struct MusicStatus {
     repeat: Option<String>,
     capabilities: HashMap<String, bool>,
     authorization: Authorization,
-    message: Option<String>,
 }
 
 #[derive(Clone, Default, Deserialize, PartialEq)]
@@ -351,6 +350,7 @@ fn MusicForStation(state: ControlState, duid: String) -> Element {
     let save_duid = duid.clone();
     let save_uri = uri.clone();
     let search_duid = duid.clone();
+    let popup_duid = duid.clone();
     let auth_duid = duid.clone();
     let start_auth_duid = duid.clone();
     rsx! {
@@ -384,14 +384,27 @@ fn MusicForStation(state: ControlState, duid: String) -> Element {
                     if !uri.is_empty() {
                         button { class: "music-mode music-save", disabled: !can_save || saved.is_none(), aria_pressed: "{saved.unwrap_or(false)}", aria_label: if saved == Some(true) { "Убрать из любимых" } else { "В любимые" }, title: if saved == Some(true) { "Убрать из любимых" } else { "В любимые" }, onclick: move |_| perform(state, save_duid.clone(), editor, json!({"action":"save","uri":save_uri,"saved":!saved.unwrap_or(false)})), Icon { name: "heart", size: 17 } }
                     }
+                    button { class: "music-mode music-more", r#type: "button", aria_label: "Открыть меню музыки", title: "Очередь, поиск и другие функции", aria_haspopup: "dialog", "popovertarget": "music-tools", "popovertargetaction": "show",
+                        onclick: move |_| {
+                            let mut editor = editor;
+                            let tab = editor.tab.peek().clone();
+                            if tab.is_empty() { editor.tab.set("queue".into()); }
+                            else if tab != "search" { section(state, popup_duid.clone(), editor, tab); }
+                        },
+                        Icon { name: "more", size: 22 }
+                    }
                 }
             }
-            if let Some(message) = snapshot.message { p { class: "player-note", "{message}" } }
             if let Some(error) = (editor.error)() { p { class: "form-feedback failure", role: "alert", "{error}" } }
             if let Some(notice) = (editor.notice)() { p { class: "player-note", role: "status", "{notice}" } }
+            div { id: "music-tools", class: "music-popup", "popover": "auto", role: "dialog", aria_labelledby: "music-tools-title",
+                div { class: "music-popup-heading",
+                    h2 { id: "music-tools-title", "Музыка" }
+                    button { class: "music-icon-button", r#type: "button", aria_label: "Закрыть меню музыки", title: "Закрыть", "popovertarget": "music-tools", "popovertargetaction": "hide", Icon { name: "close", size: 20 } }
+                }
             div { class: "music-tabs", role: "group", aria_label: "Музыка",
                 for (name, label, icon) in [("queue", "Очередь", "list"), ("search", "Поиск", "search"), ("lyrics", "Текст песни", "file"), ("artist", "Исполнитель", "user"), ("related", "Похожие", "spark")] {
-                    button { class: if tab == name { "music-tab active" } else { "music-tab" }, aria_pressed: "{tab == name}", onclick: move |_| { let mut editor = editor; editor.tab.set(if *editor.tab.peek() == name { String::new() } else { name.into() }); }, Icon { name: icon, size: 16 } "{label}" }
+                    button { class: if tab == name { "music-tab active" } else { "music-tab" }, aria_pressed: "{tab == name}", autofocus: name == "queue", onclick: move |_| { let mut editor = editor; editor.tab.set(name.into()); }, Icon { name: icon, size: 16 } "{label}" }
                 }
             }
             if !tab.is_empty() {
@@ -400,15 +413,6 @@ fn MusicForStation(state: ControlState, duid: String) -> Element {
                         h3 { "{section_title}" }
                         if let Some(count) = content.as_ref().filter(|_| matches!(tab.as_str(), "queue" | "search" | "related")).map(|value| value.tracks.len()) {
                             span { class: "music-result-count", "{count}" }
-                        }
-                        div { class: "music-content-tools",
-                            if tab != "search" {
-                                button { class: "music-icon-button", disabled: content_loading, aria_label: "Обновить раздел музыки", title: "Обновить", onclick: {
-                                    let duid = duid.clone(); let tab = tab.clone();
-                                    move |_| section(state, duid.clone(), editor, tab.clone())
-                                }, Icon { name: "refresh", size: 15 } }
-                            }
-                            button { class: "music-icon-button", aria_label: "Свернуть раздел музыки", title: "Свернуть", onclick: move |_| { let mut editor = editor; editor.tab.set(String::new()); }, Icon { name: "close", size: 15 } }
                         }
                     }
                     if tab == "search" {
@@ -482,6 +486,7 @@ fn MusicForStation(state: ControlState, duid: String) -> Element {
                         }
                     }
                 }
+            }
             }
         }
     }

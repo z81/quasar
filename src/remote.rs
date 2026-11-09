@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -36,6 +37,18 @@ pub struct RemoteServers {
 struct StateEntry {
     description: String,
     value: Value,
+}
+
+pub(crate) struct PlayerCover {
+    pub content_type: String,
+    pub body: Vec<u8>,
+}
+
+pub(crate) fn is_cover_key(key: &str) -> bool {
+    key.len() == 64
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 impl RemoteServers {
@@ -78,6 +91,61 @@ impl RemoteServers {
     /// Whether a function server offers `name`
     pub fn owns(&self, name: &str) -> bool {
         self.owners.read().unwrap_or_else(std::sync::PoisonError::into_inner).contains_key(name)
+    }
+
+    /// Cover keys originate in bridge events. Only configured state servers
+    /// receive requests, and each bridge checks its own station and key cache.
+    pub(crate) async fn player_cover(&self, duid: &str, key: &str) -> Option<PlayerCover> {
+        if !is_cover_key(key) {
+            return None;
+        }
+        let mut requests = self
+            .state_urls
+            .iter()
+            .map(|url| self.fetch_player_cover(url, duid, key))
+            .collect::<futures_util::stream::FuturesUnordered<_>>();
+        while let Some(result) = requests.next().await {
+            if result.is_some() {
+                return result;
+            }
+        }
+        None
+    }
+
+    async fn fetch_player_cover(&self, state_url: &str, duid: &str, key: &str) -> Option<PlayerCover> {
+        const MAX_BYTES: usize = 2 * 1024 * 1024;
+        let base = reqwest::Url::parse(state_url).ok()?;
+        let mut url = base.join(&format!("cover/{key}")).ok()?;
+        url.set_query(base.query());
+        url.query_pairs_mut().append_pair("duid", duid);
+        let mut response = self.client.get(url).send().await.ok()?;
+        if !response.status().is_success()
+            || response
+                .content_length()
+                .is_some_and(|size| size > MAX_BYTES as u64)
+        {
+            return None;
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)?
+            .to_str()
+            .ok()?
+            .split(';')
+            .next()?
+            .trim()
+            .to_owned();
+        if !matches!(content_type.as_str(), "image/jpeg" | "image/png" | "image/webp") {
+            return None;
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.ok()? {
+            if body.len() + chunk.len() > MAX_BYTES {
+                return None;
+            }
+            body.extend_from_slice(&chunk);
+        }
+        (!body.is_empty()).then_some(PlayerCover { content_type, body })
     }
 
     /// Fetches all function catalogs concurrently, skipping failed servers

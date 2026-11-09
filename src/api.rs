@@ -64,6 +64,7 @@ pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Rout
             "/devices/{duid}/player",
             get(player_status).post(player_action),
         )
+        .route("/devices/{duid}/player/cover/{key}", get(player_cover))
         .route(
             "/debug",
             get(|| async { Html(include_str!("api/debug.html")) }),
@@ -85,7 +86,8 @@ async fn no_cache(request: axum::extract::Request, next: axum::middleware::Next)
     let mut response = next.run(request).await;
     response
         .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        .entry(header::CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
     response
 }
 
@@ -336,6 +338,33 @@ async fn player_status(
     Path(duid): Path<String>,
 ) -> Json<crate::player::PlayerStatus> {
     Json(crate::player::status(&state.registry, &state.runtime.snapshot().remote, &duid).await)
+}
+
+async fn player_cover(
+    State(state): State<Arc<ApiState>>,
+    Path((duid, key)): Path<(String, String)>,
+) -> Response {
+    let Some(cover) = state
+        .runtime
+        .snapshot()
+        .remote
+        .player_cover(&duid, &key)
+        .await
+    else {
+        return (StatusCode::NOT_FOUND, "Cover unavailable").into_response();
+    };
+    (
+        [
+            (header::CONTENT_TYPE, cover.content_type),
+            (
+                header::CACHE_CONTROL,
+                "private, max-age=3600, immutable".to_owned(),
+            ),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+        ],
+        cover.body,
+    )
+        .into_response()
 }
 
 async fn player_action(

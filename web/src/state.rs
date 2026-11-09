@@ -248,6 +248,8 @@ pub struct Player {
     pub source: Option<String>,
     pub title: Option<String>,
     pub artist: Option<String>,
+    pub album: Option<String>,
+    pub cover_url: Option<String>,
     pub volume: Option<u8>,
     pub muted: Option<bool>,
     pub updated_at: Option<String>,

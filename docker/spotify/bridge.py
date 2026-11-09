@@ -31,7 +31,7 @@ import sys
 
 PORT = int(os.environ.get("PORT") or 8090)
 # what librespot reports through --onevent
-EVENT_FIELDS = ("PLAYER_EVENT", "TRACK_ID", "URI", "NAME", "ARTISTS", "ALBUM", "DURATION_MS", "POSITION_MS", "VOLUME", "CLIENT_NAME")
+EVENT_FIELDS = ("PLAYER_EVENT", "TRACK_ID", "URI", "NAME", "ARTISTS", "ALBUM", "COVERS", "DURATION_MS", "POSITION_MS", "VOLUME", "CLIENT_NAME")
 
 
 def hand_over_event():
@@ -58,6 +58,7 @@ if __name__ == "__main__" and "PLAYER_EVENT" in os.environ:
 # the bridge itself: the --onevent mode above does without all this
 import base64
 import collections
+import hashlib
 import html
 import http.server
 import json
@@ -169,6 +170,124 @@ def file_version(path):
     return stat.st_ino, stat.st_mtime_ns
 
 
+def album_cover(covers):
+    """librespot emits cover URLs largest first, without their dimensions.
+    Prefer the medium variant when available for the compact player card."""
+    urls = []
+    for value in covers.splitlines():
+        value = value.strip()
+        if not value or "\\" in value or any(character.isspace() for character in value):
+            continue
+        try:
+            parsed = urllib.parse.urlsplit(value)
+            if (parsed.scheme == "https" and parsed.hostname and parsed.username is None
+                    and parsed.password is None):
+                # Accessing port also rejects an invalid or out-of-range port.
+                parsed.port
+                if value not in urls:
+                    urls.append(value)
+        except ValueError:
+            continue
+    return urls[1] if len(urls) >= 3 else next(iter(urls), None)
+
+
+class CoverCache:
+    """Only event-selected covers can be fetched; downloads never hold the playback lock."""
+
+    MAX_BYTES = 2 * 1024 * 1024
+    TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+    def __init__(self):
+        self.entries = collections.OrderedDict()
+        self.lock = threading.Lock()
+
+    def remember(self, url):
+        if not url:
+            return None
+        key = hashlib.sha256(url.encode()).hexdigest()
+        with self.lock:
+            if key not in self.entries:
+                self.entries[key] = {"url": url, "image": None, "lock": threading.Lock(), "retry_after": 0}
+            self.entries.move_to_end(key)
+            while len(self.entries) > 8:
+                self.entries.popitem(last=False)
+        return key
+
+    def get(self, key):
+        with self.lock:
+            entry = self.entries.get(key)
+        if entry is None:
+            raise KeyError(key)
+        if not entry["lock"].acquire(timeout=8):
+            raise TimeoutError("cover download busy")
+        try:
+            if entry["image"] is None:
+                if time.monotonic() < entry["retry_after"]:
+                    raise OSError("cover temporarily unavailable")
+                try:
+                    entry["image"] = self.fetch(entry["url"])
+                except (OSError, ValueError):
+                    entry["retry_after"] = time.monotonic() + 30
+                    raise
+            return entry["image"]
+        finally:
+            entry["lock"].release()
+
+    @classmethod
+    def fetch(cls, url):
+        parsed = urllib.parse.urlsplit(url)
+        image_id = parsed.path.removeprefix("/image/")
+        urls = [url]
+        if (parsed.netloc == "i.scdn.co" and parsed.path.startswith("/image/")
+                and len(image_id) == 40 and all(character in "0123456789abcdef" for character in image_id)
+                and not parsed.query and not parsed.fragment):
+            # The same Spotify image is available on these CDNs when i.scdn.co
+            # is unreachable. Keep the cache key tied to the original event URL.
+            urls = [f"https://image-cdn-{edge}.spotifycdn.com/image/{image_id}" for edge in ("ak", "fa")]
+        deadline = time.monotonic() + 6
+        for candidate in urls:
+            try:
+                return cls.download(candidate, deadline)
+            except (OSError, ValueError):
+                if time.monotonic() >= deadline:
+                    break
+        raise OSError("cover download failed")
+
+    @classmethod
+    def download(cls, url, deadline):
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, request, response, code, message, headers, new_url):
+                raise ValueError("cover redirects are not supported")
+
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": PROXY, "https": PROXY} if PROXY else {}), NoRedirect())
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("cover download timed out")
+        with opener.open(url, timeout=min(3, remaining)) as response:
+            content_type = response.headers.get_content_type()
+            if content_type not in cls.TYPES:
+                raise ValueError("unsupported cover type")
+            if int(response.headers.get("Content-Length") or 0) > cls.MAX_BYTES:
+                raise ValueError("cover too large")
+            body = bytearray()
+            while True:
+                if time.monotonic() > deadline:
+                    raise TimeoutError("cover download timed out")
+                chunk = response.read1(min(65536, cls.MAX_BYTES + 1 - len(body)))
+                if not chunk:
+                    break
+                body.extend(chunk)
+                if len(body) > cls.MAX_BYTES:
+                    raise ValueError("cover too large")
+        valid = ((content_type == "image/jpeg" and body.startswith(b"\xff\xd8\xff"))
+                 or (content_type == "image/png" and body.startswith(b"\x89PNG\r\n\x1a\n"))
+                 or (content_type == "image/webp" and body[:4] == b"RIFF" and body[8:12] == b"WEBP"))
+        if not valid:
+            raise ValueError("invalid cover image")
+        return content_type, bytes(body)
+
+
 class Station:
     """The station, through the management API of alice-server"""
 
@@ -253,6 +372,7 @@ class Bridge:
         self.played_out = False
         self.jumped = False
         self.track = None
+        self.covers = CoverCache()
         self.last_play_push = None
         self.librespot_status = "starting"
         self.sign_in_url = None
@@ -587,7 +707,13 @@ class Bridge:
             self.events.append(f"{time.strftime('%H:%M:%S')} {event}")
             if event == "track_changed":
                 artists = ", ".join(filter(None, fields.get("ARTISTS", "").split("\n")))
-                self.track = {"name": fields.get("NAME", ""), "artists": artists, "uri": fields.get("URI", "")}
+                cover = album_cover(fields.get("COVERS", ""))
+                self.track = {
+                    "id": fields.get("TRACK_ID", ""), "name": fields.get("NAME", ""),
+                    "artists": artists, "uri": fields.get("URI", ""),
+                    "album": fields.get("ALBUM", "").strip() or None,
+                    "cover_url": cover, "cover_key": self.covers.remember(cover),
+                }
             elif event == "playing":
                 self.state = "playing"
                 if self.airplay:
@@ -596,17 +722,22 @@ class Bridge:
                 self.state = "paused"
             elif event in ("stopped", "session_disconnected"):
                 self.state = "stopped"
+                self.track = None
             elif event == "end_of_track":
                 self.played_out = True
             elif event == "loading":
                 # a track that does not follow the end of the last one: a skip, another context
                 self.jumped |= not self.played_out
                 self.played_out = False
+                if self.track and fields.get("TRACK_ID") != self.track.get("id"):
+                    self.track = None
             elif event == "seeked":
                 self.jumped = True
             elif event in ("session_connected", "session_client_changed"):
                 # another controller, with a slider of its own
                 self.spotify_volume.forget()
+                if event == "session_connected":
+                    self.track = None
             volume = fields.get("VOLUME", "") if event == "volume_changed" else ""
             volume_steps = self.spotify_volume.follow(int(volume)) if volume.isdigit() else 0
             if event in ("playing", "paused", "stopped", "session_disconnected"):
@@ -734,6 +865,9 @@ class Bridge:
                 "state": state,
                 "title": track.get("name") if track else None,
                 "artist": track.get("artists") if track else None,
+                "album": track.get("album") if track else None,
+                "cover_url": track.get("cover_url") if track else None,
+                "cover_key": track.get("cover_key") if track else None,
                 "stream_id": self.station.stream_id,
             }
         return {
@@ -868,13 +1002,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
     def do_GET(self):
-        path = urllib.parse.urlsplit(self.path).path
+        request = urllib.parse.urlsplit(self.path)
+        path = request.path
         if path == "/stream.mp3":
             self.send_response(200)
             self.send_header("Content-Type", "audio/mpeg")
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             bridge.serve_listener(self)
+        elif path.startswith("/cover/"):
+            if urllib.parse.parse_qs(request.query).get("duid") != [STATION_ID]:
+                return self.reply(404, "text/plain", "not found")
+            try:
+                content_type, body = bridge.covers.get(path.removeprefix("/cover/"))
+            except KeyError:
+                return self.reply(404, "text/plain", "not found")
+            except (OSError, ValueError):
+                return self.reply(502, "text/plain", "cover unavailable")
+            self.reply(200, content_type, body, cache_control="private, max-age=3600, immutable")
         elif path == "/functions":
             self.reply(200, "application/json", json.dumps(bridge.catalog()))
         elif path == "/health":
@@ -932,11 +1077,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Location", "/")
         self.end_headers()
 
-    def reply(self, status, content_type, text):
-        body = text.encode()
+    def reply(self, status, content_type, text, cache_control=None):
+        body = text if isinstance(text, bytes) else text.encode()
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        if cache_control:
+            self.send_header("Cache-Control", cache_control)
+            self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
 

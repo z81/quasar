@@ -53,14 +53,24 @@ fn PlayerControls(state: ControlState) -> Element {
     let can_resume = player
         .as_ref()
         .is_some_and(|player| player.capabilities.resume);
+    let spotify_track = player.as_ref().is_some_and(|player| {
+        player.source.as_deref() == Some("Spotify")
+            && matches!(player.state.as_str(), "playing" | "paused")
+            && player.title.is_some()
+    });
+    let album = player.as_ref().and_then(|player| player.album.clone());
+    let cover_url = player.as_ref().and_then(|player| player.cover_url.clone());
     rsx! {
-        section { class: "card player-card", aria_label: "Плеер выбранной колонки",
+        section { class: if spotify_track { "card player-card has-track" } else { "card player-card" }, aria_label: "Плеер выбранной колонки",
             div { class: "player-now",
-                span { class: "player-art", Icon { name: "music", size: 28 } }
+                AlbumArt { cover_url, album: album.clone() }
                 div { class: "player-track",
                     div { class: "card-kicker", "СЕЙЧАС НА КОЛОНКЕ" if let Some(source) = player.as_ref().and_then(|player| player.source.as_ref()) { span { class: "source-label", "{source}" } } }
                     h2 { if let Some(title) = player.as_ref().and_then(|player| player.title.as_ref()) { "{title}" } else { "{status}" } }
                     p { if let Some(artist) = player.as_ref().and_then(|player| player.artist.as_ref()) { "{artist} · " } "{status}" if player.as_ref().is_some_and(|player| player.muted == Some(true)) { " · Звук выключен" } }
+                    if let Some(album) = album {
+                        p { class: "player-album", span { "Альбом · " } "{album}" }
+                    }
                 }
             }
             div { class: "player-controls", role: "group", aria_label: "Управление воспроизведением",
@@ -89,6 +99,28 @@ fn PlayerControls(state: ControlState) -> Element {
             if dirty() && level.is_none() { p { class: "player-note failure", "Введите целое число от 0 до 100." } }
             if let Some(error) = (state.player_error)() { p { class: "player-note failure", "Плеер недоступен: {error}" } }
             else if player.as_ref().is_none_or(|player| player.updated_at.is_none()) { p { class: "player-note", "Ждём состояние от колонки. Недоступные для текущего источника команды отключены." } }
+        }
+    }
+}
+
+#[component]
+fn AlbumArt(cover_url: Option<String>, album: Option<String>) -> Element {
+    let mut failed = use_signal(|| None::<String>);
+    let cover_url = cover_url.filter(|url| failed.read().as_ref() != Some(url));
+    rsx! {
+        span { class: "player-art",
+            if let Some(url) = cover_url {
+                img {
+                    key: "{url}",
+                    src: url.clone(),
+                    alt: album.map(|name| format!("Обложка альбома «{name}»")).unwrap_or_else(|| "Обложка альбома".into()),
+                    width: "80", height: "80", decoding: "async", loading: "eager", referrerpolicy: "no-referrer",
+                    onerror: move |_| failed.set(Some(url.clone())),
+                    onload: move |_| failed.set(None),
+                }
+            } else {
+                Icon { name: "music", size: 28 }
+            }
         }
     }
 }

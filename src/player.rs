@@ -25,6 +25,8 @@ pub struct PlayerStatus {
     pub source: Option<String>,
     pub title: Option<String>,
     pub artist: Option<String>,
+    pub album: Option<String>,
+    pub cover_url: Option<String>,
     pub volume: Option<u8>,
     pub muted: Option<bool>,
     pub updated_at: Option<String>,
@@ -114,11 +116,15 @@ impl PlayerRegistry {
                 player.stream_id = track.stream_id.clone();
                 player.title = nonempty(track.title.as_deref());
                 player.artist = nonempty(track.sub_title.as_deref());
+                player.album = None;
+                player.cover_url = None;
                 // Stream type names the protocol media type, not its origin.
                 player.source = Some("Аудиопоток".to_string());
             } else if matches!(player.state.as_str(), "idle" | "stopped" | "finished") {
                 player.title = None;
                 player.artist = None;
+                player.album = None;
+                player.cover_url = None;
                 player.source = None;
                 player.stream_id = None;
             }
@@ -144,6 +150,8 @@ impl PlayerRegistry {
                     })
                     .filter(|artists| !artists.is_empty());
                 player.source = Some("Яндекс Музыка".to_string());
+                player.album = None;
+                player.cover_url = None;
             }
         }
         player.updated_at = Some(Utc::now().to_rfc3339());
@@ -248,6 +256,17 @@ pub async fn status(
             player.source = nonempty(bridge["source"].as_str());
             player.title = nonempty(bridge["title"].as_str());
             player.artist = nonempty(bridge["artist"].as_str());
+            if player.source.as_deref() == Some("Spotify") && player.state != "stopped" {
+                player.album = nonempty(bridge["album"].as_str());
+                player.cover_url = bridge["cover_key"]
+                    .as_str()
+                    .filter(|key| crate::remote::is_cover_key(key))
+                    .and_then(|key| cover_path(duid, key))
+                    .or_else(|| cover_url(bridge["cover_url"].as_str()));
+            } else {
+                player.album = None;
+                player.cover_url = None;
+            }
         }
         player.capabilities.resume =
             player.connected && !native_other_source && remote.owns("speaker_player_resume");
@@ -374,4 +393,26 @@ fn nonempty(value: Option<&str>) -> Option<String> {
     value
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
+}
+
+fn cover_url(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.contains('\\') || value.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let url = reqwest::Url::parse(value).ok()?;
+    (url.scheme() == "https"
+        && url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none())
+    .then(|| url.to_string())
+}
+
+fn cover_path(duid: &str, key: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse("http://localhost/").ok()?;
+    url.path_segments_mut()
+        .ok()?
+        .clear()
+        .extend(["devices", duid, "player", "cover", key]);
+    Some(url.path().to_string())
 }

@@ -6,24 +6,26 @@ use crate::{api, icons::Icon, state::ControlState, station_preview::*};
 
 #[component]
 pub(crate) fn StationModel(state: ControlState, duid: String) -> Element {
-    rsx! { StationModelView { key: "{duid}", state, duid } }
+    rsx! {
+        for duid in [duid] {
+            StationModelView { key: "{duid}", state, duid }
+        }
+    }
 }
 
 #[component]
 fn StationModelView(state: ControlState, duid: String) -> Element {
-    let mut live_enabled = use_signal(|| false);
     let mut live_frame = use_signal(|| None::<Value>);
     let mut live_error = use_signal(|| None::<String>);
     let mut received_at = use_signal(|| 0.0_f64);
     let mut now = use_signal(js_sys::Date::now);
     let live_duid = duid.clone();
-    // The task is explicitly restarted/cancelled by the toggle effect below;
-    // keyed removal also cancels it when the DUID changes.
-    let mut live_task = use_future(move || {
-        let enabled = *live_enabled.peek();
+    // Poll automatically while mounted; keyed removal cancels the task when
+    // switching stations or leaving the dashboard.
+    use_future(move || {
         let duid = live_duid.clone();
         async move {
-            if !enabled || duid.is_empty() {
+            if duid.is_empty() {
                 return;
             }
             loop {
@@ -38,9 +40,6 @@ fn StationModelView(state: ControlState, duid: String) -> Element {
                         &format!("/devices/{}/tools/live", api::encoded(&duid)),
                     )
                     .await;
-                    if !*live_enabled.peek() {
-                        return;
-                    }
                     match result {
                         Ok(value) if value["available"] == true => {
                             live_frame.set(Some(value));
@@ -66,13 +65,6 @@ fn StationModelView(state: ControlState, duid: String) -> Element {
                 }
                 TimeoutFuture::new(delay).await;
             }
-        }
-    });
-    use_effect(move || {
-        if live_enabled() {
-            live_task.restart();
-        } else {
-            live_task.cancel();
         }
     });
     let mut tick = use_signal(|| 0_usize);
@@ -133,7 +125,7 @@ fn StationModelView(state: ControlState, duid: String) -> Element {
         serde_json::to_string(&segments).unwrap_or_default()
     });
     let live = live_frame();
-    let fresh = live_enabled() && live.is_some() && now() - received_at() < 8_000.0;
+    let fresh = live.is_some() && now() - received_at() < 8_000.0;
     let mut missing = Vec::new();
     if fresh {
         let value = live.as_ref().unwrap();
@@ -159,9 +151,7 @@ fn StationModelView(state: ControlState, duid: String) -> Element {
     } else {
         "null".to_owned()
     };
-    let hint = if !live_enabled() {
-        "Потяните, чтобы повернуть".to_owned()
-    } else if let Some(error) = live_error() {
+    let hint = if let Some(error) = live_error() {
         format!("Предпросмотр · {error}")
     } else if fresh && !missing.is_empty() {
         format!(
@@ -193,14 +183,6 @@ fn StationModelView(state: ControlState, duid: String) -> Element {
                     button { class: "icon-button", "data-reset-model": "", aria_label: "Вернуть исходный ракурс", Icon { name: "refresh", size: 14 } }
                     button { class: "icon-button", "data-turn": "1", aria_label: "Повернуть колонку вправо", Icon { name: "next", size: 14 } }
                 }
-            }
-            label { class: "field-help",
-                input { r#type: "checkbox", checked: live_enabled(), disabled: duid.is_empty() || !state.allowed(),
-                    onchange: move |event| {
-                        live_enabled.set(event.checked()); live_frame.set(None); live_error.set(None);
-                    }
-                }
-                " Читать дисплей и подсветку с колонки"
             }
             p { class: "station-model-hint", role: "status", "{hint}" }
             p { class: "station-model-unavailable", role: "status", "3D недоступно в этом браузере. Показана иллюстрация." }

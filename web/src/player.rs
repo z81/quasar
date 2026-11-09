@@ -67,35 +67,38 @@ fn PlayerControls(state: ControlState) -> Element {
             div { class: "player-now",
                 AlbumArt { cover_url, album: album.clone() }
                 div { class: "player-track",
-                    div { class: "card-kicker", "СЕЙЧАС НА КОЛОНКЕ" if let Some(source) = player.as_ref().and_then(|player| player.source.as_ref()) { span { class: "source-label", "{source}" } } }
-                    h2 { if let Some(title) = player.as_ref().and_then(|player| player.title.as_ref()) { "{title}" } else { "{status}" } }
-                    p { if let Some(artist) = player.as_ref().and_then(|player| player.artist.as_ref()) { "{artist} · " } "{status}" if player.as_ref().is_some_and(|player| player.muted == Some(true)) { " · Звук выключен" } }
+                    div { class: "player-eyebrow", span { class: "card-kicker", "НА КОЛОНКЕ" } if let Some(source) = player.as_ref().and_then(|player| player.source.as_ref()) { span { class: "source-label", "{source}" } } }
+                    h2 { if let Some(title) = player.as_ref().and_then(|player| player.title.as_ref()) { "{title}" } else { "Музыка на колонке" } }
+                    if let Some(artist) = player.as_ref().and_then(|player| player.artist.as_ref()) { p { class: "player-artist", "{artist}" } }
                     if let Some(album) = album {
-                        p { class: "player-album", span { "Альбом · " } "{album}" }
+                        p { class: "player-album", "{album}" }
                     }
+                    p { class: "player-status", span { class: if can_pause { "status-dot connected" } else { "status-dot" } } "{status}" if player.as_ref().is_some_and(|player| player.muted == Some(true)) { " · Звук выключен" } }
                 }
             }
-            div { class: "player-controls", role: "group", aria_label: "Управление воспроизведением",
-                for (action,icon,label,available) in [
-                    ("previous","previous","Предыдущий трек",player.as_ref().is_some_and(|player| player.capabilities.previous)),
-                    if can_pause { ("pause", "pause", "Пауза", true) } else { ("resume", "play", "Продолжить", can_resume) },
-                    ("next","next","Следующий трек",player.as_ref().is_some_and(|player| player.capabilities.next)),
-                ] {
-                    button { class: if matches!(action, "pause" | "resume") { "icon-button player-button player-toggle" } else { "icon-button player-button" }, disabled: !enabled || !available, aria_label: label, title: label, onclick: move |_| api::player_action(state, action, None), Icon { name: icon, size: 18 } }
+            div { class: "player-console",
+                div { class: "player-controls", role: "group", aria_label: "Управление воспроизведением",
+                    for (action,icon,label,available) in [
+                        ("previous","previous","Предыдущий трек",player.as_ref().is_some_and(|player| player.capabilities.previous)),
+                        if can_pause { ("pause", "pause", "Пауза", true) } else { ("resume", "play", "Продолжить", can_resume) },
+                        ("next","next","Следующий трек",player.as_ref().is_some_and(|player| player.capabilities.next)),
+                    ] {
+                        button { class: if matches!(action, "pause" | "resume") { "icon-button player-button player-toggle" } else { "icon-button player-button" }, disabled: !enabled || !available, aria_label: label, title: label, onclick: move |_| api::player_action(state, action, None), Icon { name: icon, size: 22 } }
+                    }
+                    button { class: "icon-button player-button player-stop", disabled: !enabled, aria_label: "Остановить воспроизведение", title: "Остановить", onclick: move |_| api::player_action(state,"stop",None), Icon { name: "stop", size: 17 } }
                 }
-                button { class: "icon-button player-button", disabled: !enabled, aria_label: "Остановить воспроизведение", title: "Остановить", onclick: move |_| api::player_action(state,"stop",None), Icon { name: "stop", size: 17 } }
-            }
-            form { class: "volume-form", onsubmit: move |event| {
-                event.prevent_default(); if let Some(level) = level.filter(|_| can_volume) { volume.set(level.to_string()); dirty.set(true); api::player_action(state,"set_volume",Some(level)); }
-            },
-                div { class: "volume-label", label { r#for: "volume-value", Icon { name: "volume-up", size: 15 } "Громкость" }
-                    span { if let Some(current) = player.as_ref().and_then(|player| player.volume) { "Сейчас: {current}%" } else { "Нет данных" } }
-                }
-                div { class: "volume-inputs",
-                    input { r#type: "range", min: "0", max: "100", step: "1", aria_label: "Желаемая громкость", value: level.unwrap_or(0), disabled: !can_volume, oninput: move |event| { dirty.set(true); volume.set(event.value()); } }
-                    input { id: "volume-value", class: "volume-number", r#type: "text", inputmode: "numeric", pattern: "[0-9]+([.][0-9]*)?", maxlength: "6", aria_label: "Громкость в процентах", placeholder: "—", value: "{volume}", disabled: !can_volume, oninput: move |event| { dirty.set(true); volume.set(event.value()); } }
-                    span { class: "form-help", "%" }
-                    button { class: "button secondary", r#type: "submit", disabled: !can_volume || level.is_none(), "Применить" }
+                form { class: "volume-form", onsubmit: move |event| {
+                    event.prevent_default(); if let Some(level) = level.filter(|_| can_volume) { volume.set(level.to_string()); dirty.set(true); api::player_action(state,"set_volume",Some(level)); }
+                },
+                    div { class: "volume-label", label { r#for: "volume-value", Icon { name: "volume-up", size: 15 } "Громкость" }
+                        span { if let Some(current) = player.as_ref().and_then(|player| player.volume) { "Сейчас: {current}%" } else { "Нет данных" } }
+                    }
+                    div { class: "volume-inputs",
+                        input { r#type: "range", min: "0", max: "100", step: "1", aria_label: "Желаемая громкость", value: level.unwrap_or(0), style: "--range-progress: {level.unwrap_or(0)}%;", disabled: !can_volume, oninput: move |event| { dirty.set(true); volume.set(event.value()); } }
+                        input { id: "volume-value", class: "volume-number", r#type: "text", inputmode: "numeric", pattern: "[0-9]+([.][0-9]*)?", maxlength: "6", aria_label: "Громкость в процентах", placeholder: "—", value: "{volume}", disabled: !can_volume, oninput: move |event| { dirty.set(true); volume.set(event.value()); } }
+                        span { class: "form-help", "%" }
+                        button { class: "icon-button volume-apply", r#type: "submit", aria_label: "Применить громкость", title: "Применить громкость", disabled: !can_volume || level.is_none() || !dirty(), Icon { name: "check", size: 18 } }
+                    }
                 }
             }
             if dirty() && level.is_none() { p { class: "player-note failure", "Введите целое число от 0 до 100." } }
@@ -117,7 +120,7 @@ fn AlbumArt(cover_url: Option<String>, album: Option<String>) -> Element {
                     key: "{url}",
                     src: url.clone(),
                     alt: album.map(|name| format!("Обложка альбома «{name}»")).unwrap_or_else(|| "Обложка альбома".into()),
-                    width: "80", height: "80", decoding: "async", loading: "eager", referrerpolicy: "no-referrer",
+                    width: "96", height: "96", decoding: "async", loading: "lazy", referrerpolicy: "no-referrer",
                     onerror: move |_| failed.set(Some(url.clone())),
                     onload: move |_| failed.set(None),
                 }

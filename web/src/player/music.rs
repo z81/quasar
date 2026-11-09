@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::{api, state::ControlState};
+use crate::{api, icons::Icon, state::ControlState};
 
 #[derive(Clone, Default, Deserialize, PartialEq)]
 #[serde(default)]
@@ -72,6 +72,7 @@ struct Editor {
     query: Signal<String>,
     content: Signal<Option<Content>>,
     content_error: Signal<Option<String>>,
+    content_loading: Signal<bool>,
     generation: Signal<u64>,
     saved: Signal<Option<bool>>,
 }
@@ -99,6 +100,9 @@ fn section(state: ControlState, duid: String, mut editor: Editor, tab: String) {
     editor.generation.set(generation);
     editor.content.set(None);
     editor.content_error.set(None);
+    editor
+        .content_loading
+        .set(!tab.is_empty() && tab != "search");
     if tab.is_empty() || tab == "search" {
         return;
     }
@@ -107,6 +111,7 @@ fn section(state: ControlState, duid: String, mut editor: Editor, tab: String) {
         if *editor.generation.peek() != generation {
             return;
         }
+        editor.content_loading.set(false);
         match result {
             Ok(content) => editor.content.set(Some(content)),
             Err(error) => editor.content_error.set(Some(error)),
@@ -213,6 +218,7 @@ fn MusicForStation(state: ControlState, duid: String) -> Element {
         query: use_signal(String::new),
         content: use_signal(|| None::<Content>),
         content_error: use_signal(|| None::<String>),
+        content_loading: use_signal(|| false),
         generation: use_signal(|| 0),
         saved: use_signal(|| None::<bool>),
     };
@@ -318,6 +324,20 @@ fn MusicForStation(state: ControlState, duid: String) -> Element {
     let saved = (editor.saved)();
     let tab = (editor.tab)();
     let content = (editor.content)();
+    let content_loading = (editor.content_loading)();
+    let section_title = match tab.as_str() {
+        "queue" => "Далее в очереди",
+        "search" => "Поиск музыки",
+        "lyrics" => "Текст песни",
+        "artist" => "Об исполнителе",
+        "related" => "Похожие треки",
+        _ => "Музыка",
+    };
+    let seek_progress = if duration > 0 {
+        (seek().or(position).unwrap_or(0) as f64 / duration as f64 * 100.0).clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
     let current_line = content.as_ref().and_then(|value| {
         value
             .lines
@@ -336,77 +356,89 @@ fn MusicForStation(state: ControlState, duid: String) -> Element {
     rsx! {
         document::Stylesheet { href: asset!("/assets/music.css") }
         div { class: "music-panel",
-            if let Some(position) = position {
-                div { class: "music-progress",
-                    span { "{time_label(seek().unwrap_or(position))}" }
-                    input { r#type: "range", min: "0", max: "{duration}", step: "1000", value: "{seek().unwrap_or(position)}", disabled: !can_seek,
-                        aria_label: "Позиция в треке",
-                        oninput: move |event| seek.set(event.value().parse::<u64>().ok()),
-                        onchange: move |_| {
-                            let selected_position = *seek.peek();
-                            if let Some(position) = selected_position {
-                                perform(state, seek_duid.clone(), editor, json!({"action":"seek","position_ms":position,"expected_uri":seek_uri}));
-                                seek.set(None);
+            div { class: "music-playback-bar",
+                if let Some(position) = position {
+                    div { class: "music-progress",
+                        span { "{time_label(seek().unwrap_or(position))}" }
+                        input { r#type: "range", min: "0", max: "{duration}", step: "1000", value: "{seek().unwrap_or(position)}", disabled: !can_seek,
+                            aria_label: "Позиция в треке", style: "--range-progress: {seek_progress}%",
+                            oninput: move |event| seek.set(event.value().parse::<u64>().ok()),
+                            onchange: move |_| {
+                                let selected_position = *seek.peek();
+                                if let Some(position) = selected_position {
+                                    perform(state, seek_duid.clone(), editor, json!({"action":"seek","position_ms":position,"expected_uri":seek_uri}));
+                                    seek.set(None);
+                                }
                             }
                         }
-                    }
-                    span { "{time_label(duration)}" }
-                }
-            }
-            div { class: "music-actions",
-                button { class: "button secondary", disabled: !can_shuffle, aria_pressed: "{shuffle}", onclick: move |_| perform(state, shuffle_duid.clone(), editor, json!({"action":"shuffle","enabled":!shuffle})), if shuffle { "Вперемешку: вкл." } else { "Вперемешку" } }
-                label { "Повтор"
-                    select { value: "{repeat}", disabled: !can_repeat, aria_label: "Режим повтора", onchange: move |event| perform(state, repeat_duid.clone(), editor, json!({"action":"repeat","mode":event.value()})),
-                        option { value: "off", "Выключен" } option { value: "context", "Очередь" } option { value: "track", "Трек" }
+                        span { "{time_label(duration)}" }
                     }
                 }
-                if !uri.is_empty() {
-                    button { class: "button secondary", disabled: !can_save || saved.is_none(), aria_pressed: "{saved.unwrap_or(false)}", onclick: move |_| perform(state, save_duid.clone(), editor, json!({"action":"save","uri":save_uri,"saved":!saved.unwrap_or(false)})), if saved == Some(true) { "♥ Любимый трек" } else { "♡ В любимые" } }
+                div { class: "music-actions",
+                    button { class: "music-mode", disabled: !can_shuffle, aria_pressed: "{shuffle}", aria_label: "Перемешать", title: "Перемешать", onclick: move |_| perform(state, shuffle_duid.clone(), editor, json!({"action":"shuffle","enabled":!shuffle})), Icon { name: "shuffle", size: 17 } }
+                    label { class: "music-repeat", title: "Режим повтора", Icon { name: "repeat", size: 17 }
+                        select { value: "{repeat}", disabled: !can_repeat, aria_label: "Режим повтора", onchange: move |event| perform(state, repeat_duid.clone(), editor, json!({"action":"repeat","mode":event.value()})),
+                            option { value: "off", "Без повтора" } option { value: "context", "Повтор очереди" } option { value: "track", "Повтор трека" }
+                        }
+                    }
+                    if !uri.is_empty() {
+                        button { class: "music-mode music-save", disabled: !can_save || saved.is_none(), aria_pressed: "{saved.unwrap_or(false)}", aria_label: if saved == Some(true) { "Убрать из любимых" } else { "В любимые" }, title: if saved == Some(true) { "Убрать из любимых" } else { "В любимые" }, onclick: move |_| perform(state, save_duid.clone(), editor, json!({"action":"save","uri":save_uri,"saved":!saved.unwrap_or(false)})), Icon { name: "heart", size: 17 } }
+                    }
                 }
             }
             if let Some(message) = snapshot.message { p { class: "player-note", "{message}" } }
             if let Some(error) = (editor.error)() { p { class: "form-feedback failure", role: "alert", "{error}" } }
             if let Some(notice) = (editor.notice)() { p { class: "player-note", role: "status", "{notice}" } }
             div { class: "music-tabs", role: "group", aria_label: "Музыка",
-                for (name, label) in [("queue", "Очередь"), ("search", "Найти трек"), ("lyrics", "Текст песни"), ("artist", "Исполнитель"), ("related", "Похожие треки")] {
-                    button { class: if tab == name { "button secondary active" } else { "button secondary" }, aria_pressed: "{tab == name}", onclick: move |_| { let mut editor = editor; editor.tab.set(if *editor.tab.peek() == name { String::new() } else { name.into() }); }, "{label}" }
-                }
-            }
-            if tab == "search" {
-                form { class: "music-search", onsubmit: move |event| {
-                    event.prevent_default();
-                    let mut editor = editor;
-                    let query = editor.query.peek().trim().to_owned();
-                    if query.is_empty() { return; }
-                    let duid = search_duid.clone();
-                    let generation = *editor.generation.peek() + 1;
-                    editor.generation.set(generation); editor.content.set(None); editor.content_error.set(None);
-                    spawn(async move {
-                        let result = api::get::<Content>(state, &format!("{}?op=search&q={}", endpoint(&duid), api::encoded(&query))).await;
-                        if *editor.generation.peek() != generation { return; }
-                        match result { Ok(value) => editor.content.set(Some(value)), Err(error) => editor.content_error.set(Some(error)) }
-                    });
-                },
-                    input { r#type: "search", maxlength: "200", aria_label: "Название трека или исполнитель", placeholder: "Трек или исполнитель", value: "{editor.query}", oninput: move |event| { let mut editor = editor; editor.query.set(event.value()); } }
-                    button { class: "button secondary", r#type: "submit", disabled: !snapshot.authorization.connected, "Найти" }
+                for (name, label, icon) in [("queue", "Очередь", "list"), ("search", "Поиск", "search"), ("lyrics", "Текст песни", "file"), ("artist", "Исполнитель", "user"), ("related", "Похожие", "spark")] {
+                    button { class: if tab == name { "music-tab active" } else { "music-tab" }, aria_pressed: "{tab == name}", onclick: move |_| { let mut editor = editor; editor.tab.set(if *editor.tab.peek() == name { String::new() } else { name.into() }); }, Icon { name: icon, size: 16 } "{label}" }
                 }
             }
             if !tab.is_empty() {
-                div { class: "music-content",
-                    if tab != "search" {
-                        button { class: "text-button", onclick: {
-                            let duid = duid.clone(); let tab = tab.clone();
-                            move |_| section(state, duid.clone(), editor, tab.clone())
-                        }, "Обновить" }
+                div { class: "music-content", aria_busy: "{content_loading}",
+                    div { class: "music-content-heading",
+                        h3 { "{section_title}" }
+                        if let Some(count) = content.as_ref().filter(|_| matches!(tab.as_str(), "queue" | "search" | "related")).map(|value| value.tracks.len()) {
+                            span { class: "music-result-count", "{count}" }
+                        }
+                        div { class: "music-content-tools",
+                            if tab != "search" {
+                                button { class: "music-icon-button", disabled: content_loading, aria_label: "Обновить раздел музыки", title: "Обновить", onclick: {
+                                    let duid = duid.clone(); let tab = tab.clone();
+                                    move |_| section(state, duid.clone(), editor, tab.clone())
+                                }, Icon { name: "refresh", size: 15 } }
+                            }
+                            button { class: "music-icon-button", aria_label: "Свернуть раздел музыки", title: "Свернуть", onclick: move |_| { let mut editor = editor; editor.tab.set(String::new()); }, Icon { name: "close", size: 15 } }
+                        }
+                    }
+                    if tab == "search" {
+                        form { class: "music-search", onsubmit: move |event| {
+                            event.prevent_default();
+                            let mut editor = editor;
+                            let query = editor.query.peek().trim().to_owned();
+                            if query.is_empty() { return; }
+                            let duid = search_duid.clone();
+                            let generation = *editor.generation.peek() + 1;
+                            editor.generation.set(generation); editor.content.set(None); editor.content_error.set(None); editor.content_loading.set(true);
+                            spawn(async move {
+                                let result = api::get::<Content>(state, &format!("{}?op=search&q={}", endpoint(&duid), api::encoded(&query))).await;
+                                if *editor.generation.peek() != generation { return; }
+                                editor.content_loading.set(false);
+                                match result { Ok(value) => editor.content.set(Some(value)), Err(error) => editor.content_error.set(Some(error)) }
+                            });
+                        },
+                            input { r#type: "search", maxlength: "200", aria_label: "Название трека или исполнитель", placeholder: "Трек или исполнитель", value: "{editor.query}", oninput: move |event| { let mut editor = editor; editor.query.set(event.value()); } }
+                            button { class: "button secondary", r#type: "submit", disabled: !snapshot.authorization.connected || content_loading, Icon { name: "search", size: 16 } "Найти" }
+                        }
                     }
                     if let Some(error) = (editor.content_error)() { p { class: "form-feedback failure", role: "status", "{error}" } }
                     else if let Some(content) = content {
-                        if let Some(message) = content.message { p { class: "player-note", "{message}" } }
+                        if let Some(message) = content.message { p { class: "music-content-hint", "{message}" } }
                         if matches!(tab.as_str(), "queue" | "search" | "related") {
-                            if content.tracks.is_empty() { p { class: "player-note", "Треков нет" } }
+                            if content.tracks.is_empty() { p { class: "music-empty", if tab == "search" { "Ничего не найдено. Попробуйте другое название." } else { "Пока здесь нет треков" } } }
                             ol { class: "music-track-list",
                                 for (index, track) in content.tracks.into_iter().enumerate() {
-                                    MusicTrack { key: "{index}:{track.uri}", state, duid: duid.clone(), editor, track, can_play: can_send && snapshot.authorization.connected, can_queue }
+                                    MusicTrack { key: "{index}:{track.uri}", state, duid: duid.clone(), editor, index, track, can_play: can_send && snapshot.authorization.connected, can_queue }
                                 }
                             }
                         }
@@ -418,6 +450,7 @@ fn MusicForStation(state: ControlState, duid: String) -> Element {
                                     for (index, line) in content.lines.into_iter().enumerate() { p { class: if current_line == Some(index) { "current" } else { "" }, "{line.text}" } }
                                 }
                             } else if let Some(plain) = content.plain { p { class: "music-lyrics plain", "{plain}" } }
+                            else { p { class: "music-empty", "Текст этой песни пока не найден" } }
                         }
                         if tab == "artist" {
                             if let Some(name) = content.name { h3 { "{name}" } }
@@ -425,7 +458,8 @@ fn MusicForStation(state: ControlState, duid: String) -> Element {
                             if let Some(count) = content.followers { p { "Подписчики: {count}" } }
                             if let Some(url) = content.url { a { href: url, target: "_blank", rel: "noopener noreferrer", "Исполнитель в Spotify" } }
                         }
-                    } else if tab != "search" { p { class: "player-note", "Загрузка…" } }
+                    } else if content_loading { p { class: "music-empty", role: "status", "Загружаем музыку…" } }
+                    else if tab == "search" { p { class: "music-empty", "Найдите трек по названию или исполнителю" } }
                 }
             }
             if snapshot.authorization.configured && (!snapshot.authorization.connected || snapshot.authorization.reconnect_required) {
@@ -458,6 +492,7 @@ fn MusicTrack(
     state: ControlState,
     duid: String,
     editor: Editor,
+    index: usize,
     track: Track,
     can_play: bool,
     can_queue: bool,
@@ -465,12 +500,15 @@ fn MusicTrack(
     let add_duid = duid.clone();
     let add_uri = track.uri.clone();
     rsx! {
-        li {
-            div { class: "music-track-copy", strong { "{track.name}" } span { "{track.artists}" } small { "{track.album}" } }
+        li { class: "music-track-row",
+            span { class: "music-track-index", "{index + 1}" }
+            div { class: "music-track-copy", strong { title: "{track.name}", "{track.name}" } span { title: "{track.artists}", "{track.artists}" } small { class: "music-track-mobile-album", "{track.album}" } }
+            span { class: "music-track-album", title: "{track.album}", "{track.album}" }
+            span { class: "music-track-duration", if let Some(duration) = track.duration_ms { "{time_label(duration)}" } else { "—" } }
             div { class: "music-track-actions",
-                button { class: "button secondary", disabled: !can_play, aria_label: "Включить {track.name}", onclick: move |_| perform(state, duid.clone(), editor, json!({"action":"play","uri":track.uri})), "Играть" }
-                button { class: "button secondary", disabled: !can_queue, aria_label: "Добавить в очередь {track.name}", onclick: move |_| perform(state, add_duid.clone(), editor, json!({"action":"queue_add","uri":add_uri})), "+ В очередь" }
-                if let Some(url) = track.url { a { href: url, target: "_blank", rel: "noopener noreferrer", "Spotify ↗" } }
+                button { class: "music-icon-button", disabled: !can_play, aria_label: "Включить {track.name}", title: "Играть", onclick: move |_| perform(state, duid.clone(), editor, json!({"action":"play","uri":track.uri})), Icon { name: "play", size: 16 } }
+                button { class: "music-icon-button", disabled: !can_queue, aria_label: "Добавить в очередь {track.name}", title: "Добавить в очередь", onclick: move |_| perform(state, add_duid.clone(), editor, json!({"action":"queue_add","uri":add_uri})), Icon { name: "plus", size: 17 } }
+                if let Some(url) = track.url { a { class: "music-icon-button", href: url, target: "_blank", rel: "noopener noreferrer", aria_label: "Открыть {track.name} в Spotify", title: "Открыть в Spotify", Icon { name: "external", size: 15 } } }
             }
         }
     }

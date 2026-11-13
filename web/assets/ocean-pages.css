@@ -81,3 +81,4 @@
  .app .ocean-player.is-expanded .music-library { align-self: start; }
 }
 @media(min-width:761px) { .app .ocean-player.is-expanded > .player-volume-dial { --ha-dial-size: 140px; } }
+.ocean-header button, .ocean-section-nav button { -webkit-appearance: none; appearance: none; }

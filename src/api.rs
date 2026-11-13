@@ -43,6 +43,7 @@ impl ApiState {
 pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Router {
     Router::new()
         .route("/devices", get(devices))
+        .route("/home-assistant", get(crate::home_assistant::dashboard))
         .route("/devices/{duid}", patch(update_device))
         .route("/devices/{duid}/push", post(push_event))
         .route("/devices/{duid}/push-raw", post(push_raw))

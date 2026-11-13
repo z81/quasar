@@ -1,0 +1,60 @@
+.ha-dashboard { min-width: 0; padding: 4px 0; }
+.ha-heading, .ha-title, .ha-toolbar, .ha-device-heading { display: flex; align-items: center; gap: 12px; }
+.ha-heading { justify-content: space-between; margin-bottom: 16px; }
+.ha-title { flex-wrap: wrap; gap: 8px; }
+.ha-title h2 { font-size: 20px; letter-spacing: -.4px; margin: 0; }
+.ha-title > svg { color: var(--accent-text); }
+.ha-total { color: var(--secondary); background: var(--surface-soft); padding: 2px 8px; border-radius: 8px; font-size: 12px; }
+.ha-source, .ha-note { font-size: 13px; color: var(--secondary); }
+.ha-source { white-space: nowrap; }
+.ha-stale, .ha-error { color: var(--error); font-size: 12px; }
+.ha-error { margin: 8px 0; }
+.ha-toolbar { justify-content: space-between; margin-bottom: 12px; }
+.ha-search { display: flex; align-items: center; gap: 8px; min-width: 0; width: 320px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--glass-control); color: var(--secondary); }
+.ha-search:focus-within { border-color: var(--focus); box-shadow: 0 0 0 2px var(--accent-soft); }
+.ha-search input { min-width: 0; width: 100%; border: 0; background: transparent; color: var(--text); padding: 0; height: 24px; font-size: 14px; }
+.ha-search input::placeholder { color: var(--muted); opacity: 1; }
+.ha-category { max-width: 240px; height: 42px; padding: 0 30px 0 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--surface-soft); font: inherit; }
+.ha-rooms { display: flex; gap: 6px; overflow-x: auto; padding: 3px 3px 12px; margin: 0 -3px 4px; scrollbar-width: thin; }
+.ha-room { flex-shrink: 0; border: 1px solid transparent; padding: 7px 12px; border-radius: 8px; background: transparent; color: var(--secondary); font-size: 13px; }
+.ha-room:hover { background: var(--surface-hover); }
+.ha-room.selected { background: var(--accent-soft); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.ha-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); align-items: start; gap: 12px; }
+.ha-device { min-width: 0; padding: 16px; border: 1px solid var(--glass-line); border-radius: 16px; background: var(--glass); box-shadow: var(--shadow); backdrop-filter: blur(18px); }
+.ha-device.is-active { border-color: color-mix(in srgb, var(--accent) 42%, var(--glass-line)); }
+.ha-device-heading { align-items: flex-start; gap: 10px; }
+.ha-device-icon { display: grid; place-items: center; flex-shrink: 0; width: 38px; height: 38px; border-radius: 10px; background: var(--surface-soft); color: var(--secondary); }
+.is-active .ha-device-icon { color: var(--accent-text); background: var(--accent-soft); }
+.ha-device-title { min-width: 0; }
+.ha-device h3 { font-size: 14px; font-weight: 600; line-height: 1.4; margin: 0 0 3px; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.ha-device-title > span { font-size: 11px; color: var(--secondary); }
+.ha-device-state { font-size: 22px; font-weight: 600; letter-spacing: -.5px; margin: 14px 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.is-unavailable .ha-device-state { font-size: 18px; color: var(--muted); }
+.ha-readings { display: flex; flex-wrap: wrap; gap: 6px; min-height: 24px; }
+.ha-readings > span { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 2px 6px; border-radius: 5px; background: var(--surface-soft); color: var(--secondary); font-size: 11px; overflow-wrap: anywhere; }
+.ha-details { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
+.ha-details > summary { display: flex; justify-content: space-between; align-items: center; gap: 8px; list-style: none; cursor: pointer; color: var(--secondary); font-size: 12px; }
+.ha-details > summary::-webkit-details-marker { display: none; }
+.ha-details[open] > summary svg { transform: rotate(90deg); }
+.ha-details summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; border-radius: 3px; }
+.ha-entities { margin: 8px 0 0; display: grid; gap: 10px; max-height: 360px; overflow: auto; scrollbar-width: thin; }
+.ha-entity { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; font-size: 12px; }
+.ha-entity dt { color: var(--secondary); overflow-wrap: anywhere; }
+.ha-entity dd { margin: 0; text-align: right; max-width: 140px; overflow-wrap: anywhere; }
+.ha-entity-reading { display: flex; justify-content: space-between; gap: 8px; grid-column: 1 / -1; color: var(--muted); font-size: 11px; }
+.ha-entity-reading span { overflow-wrap: anywhere; min-width: 0; }
+.ha-diagnostics { margin-top: 12px; color: var(--secondary); font-size: 12px; }
+.ha-diagnostics summary { cursor: pointer; }
+.ha-show-more { display: block; margin: 14px auto 0; padding: 8px 16px; border: 1px solid var(--line); border-radius: 8px; color: var(--secondary); background: var(--glass-control); font-size: 13px; }
+.ha-show-more:hover { color: var(--text); background: var(--surface-hover); }
+@media (max-width: 600px) {
+  .ha-heading { align-items: flex-start; gap: 8px; }
+  .ha-title h2 { font-size: 18px; }
+  .ha-source { font-size: 11px; padding-top: 4px; }
+  .ha-toolbar { gap: 8px; }
+  .ha-search { flex: 1; padding: 8px; }
+  .ha-category { max-width: 130px; padding-left: 8px; font-size: 12px; }
+  .ha-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .ha-room { padding: 10px 12px; }
+  .ha-details > summary { min-height: 32px; }
+}

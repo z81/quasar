@@ -154,6 +154,16 @@ impl Mcp {
             futures_util::future::join_all(fetches).await.into_iter().flatten().collect()
         })))
     }
+
+    pub async fn dashboard(&self) -> Vec<crate::home_assistant::Snapshot> {
+        let snapshots = self.servers.iter().map(|server| async move {
+            let supported = crate::home_assistant::registry::websocket_url(&server.url).is_some()
+                || server.live_context_tool().is_some()
+                || server.dashboard.lock().await.is_some();
+            if supported { Some(server.dashboard().await) } else { None }
+        });
+        futures_util::future::join_all(snapshots).await.into_iter().flatten().collect()
+    }
 }
 
 impl Drop for Mcp {
@@ -207,6 +217,7 @@ struct Server {
     /// wakes the background task to list the tools again
     refresh: Notify,
     next_id: AtomicU64,
+    dashboard: Mutex<Option<(Instant, crate::home_assistant::Snapshot)>>,
 }
 
 impl Server {
@@ -220,6 +231,7 @@ impl Server {
             tools: RwLock::new(Vec::new()),
             refresh: Notify::new(),
             next_id: AtomicU64::new(1),
+            dashboard: Mutex::new(None),
         }
     }
 
@@ -271,6 +283,50 @@ impl Server {
             tracing::info!("MCP server {}: {} tools: {}", self.name(), tools.len(), names.join(", "));
         }
         *current = tools;
+    }
+
+    async fn dashboard(&self) -> crate::home_assistant::Snapshot {
+        use crate::home_assistant::{self, Snapshot};
+        // Coalesce concurrent browser polls, including failures. Settings reload creates a new client.
+        let mut cache = self.dashboard.lock().await;
+        if let Some((checked, snapshot)) = cache.as_ref() {
+            if checked.elapsed() < Duration::from_secs(10) {
+                return snapshot.clone();
+            }
+        }
+        let registry = async {
+            let token = self.token.as_deref().context("no registry credential")?;
+            home_assistant::registry::fetch(&self.url, token).await
+        };
+        let registry = tokio::time::timeout(TIMEOUT, registry).await;
+        let fresh = match registry {
+            Ok(Ok(registry)) => Some((home_assistant::from_registry(registry), "registry")),
+            _ => {
+                if let Some(tool) = self.live_context_tool() {
+                    let call = self.request("tools/call", json!({"name": tool, "arguments": {}}));
+                    match tokio::time::timeout(TIMEOUT, call).await {
+                        Ok(Ok(result)) => home_assistant::from_context(&result).ok().map(|devices| (devices, "context")),
+                        _ => None,
+                    }
+                } else { None }
+            }
+        };
+        let snapshot = match fresh {
+            Some((devices, grouping)) => Snapshot {
+                source: self.prefix.clone(), devices,
+                updated_at: Some(chrono::Utc::now().to_rfc3339()),
+                grouping: grouping.into(), ..Default::default()
+            },
+            None => {
+                let mut snapshot = cache.as_ref().map(|(_, value)| value.clone()).unwrap_or_default();
+                snapshot.source = self.prefix.clone();
+                snapshot.stale = true;
+                snapshot.error = Some("Не удалось обновить Home Assistant. Проверьте MCP-подключение в настройках сервера.".into());
+                snapshot
+            }
+        };
+        *cache = Some((Instant::now(), snapshot.clone()));
+        snapshot
     }
 
     /// The tool that tells the live context, plain or namespaced

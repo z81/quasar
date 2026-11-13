@@ -10,6 +10,7 @@ mod display_studio;
 mod dnd_settings;
 mod favorites;
 mod history;
+mod home_assistant;
 mod icons;
 mod midi_display;
 mod maintenance;
@@ -182,6 +183,7 @@ fn App() -> Element {
                                         station::StationModel { state, duid: (state.selected)(), show_details: false }
                                     }
                                 }
+                                home_assistant::HomeAssistant { state }
                                 composer::Composer { state }
                                 history::History { state, compact: true }
                                 weather::WeatherCard { state }

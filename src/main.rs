@@ -26,6 +26,7 @@ mod device_access;
 mod device_tools;
 mod gigastt;
 mod logging;
+mod home_assistant;
 mod mcp;
 mod openrouter;
 mod piper;

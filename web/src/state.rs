@@ -101,12 +101,67 @@ pub enum Panel {
     MidiDisplay,
     SmartHome,
     Automations,
+    AutomationOverview,
+    StationOverview,
     DeviceTools,
     Maintenance,
     Access,
 }
 
 impl Panel {
+    pub fn route(self) -> &'static str {
+        match self {
+            Self::Control => "dashboard",
+            Self::Music => "music",
+            Self::Home => "home",
+            Self::History => "history",
+            Self::Advanced => "advanced",
+            Self::Favorites => "favorites",
+            Self::Schedules => "alarm",
+            Self::Timers => "timer",
+            Self::Settings => "settings",
+            Self::StationSettings => "station-settings",
+            Self::DeviceAccess => "files",
+            Self::MidiDisplay => "display",
+            Self::SmartHome => "zigbee",
+            Self::Automations => "scenarios",
+            Self::DeviceTools => "diagnostics",
+            Self::Maintenance => "maintenance",
+            Self::Access => "access",
+            Self::AutomationOverview => "automation",
+            Self::StationOverview => "station",
+        }
+    }
+    pub fn from_route(route: &str) -> Self {
+        match route.trim_start_matches('#') {
+            "dashboard" => Self::Control,
+            "music" => Self::Music,
+            "home" => Self::Home,
+            "history" => Self::History,
+            "advanced" => Self::Advanced,
+            "favorites" => Self::Favorites,
+            "alarm" => Self::Schedules,
+            "timer" => Self::Timers,
+            "settings" => Self::Settings,
+            "station-settings" => Self::StationSettings,
+            "files" => Self::DeviceAccess,
+            "display" => Self::MidiDisplay,
+            "zigbee" => Self::SmartHome,
+            "scenarios" => Self::Automations,
+            "diagnostics" => Self::DeviceTools,
+            "maintenance" => Self::Maintenance,
+            "access" => Self::Access,
+            "automation" => Self::AutomationOverview,
+            "station" => Self::StationOverview,
+            _ => Self::Control,
+        }
+    }
+    pub fn from_location() -> Self {
+        web_sys::window()
+            .and_then(|w| w.location().hash().ok())
+            .map(|hash| Self::from_route(&hash))
+            .unwrap_or_default()
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::Control => "Пульт",
@@ -122,6 +177,8 @@ impl Panel {
             Self::DeviceAccess => "Терминал и файлы",
             Self::MidiDisplay => "Своя Миди",
             Self::SmartHome => "Zigbee и Matter",
+            Self::AutomationOverview => "Автоматизация",
+            Self::StationOverview => "Станция",
             Self::Automations => "Сценарии и офлайн-будильники",
             Self::DeviceTools => "Диагностика и Bluetooth",
             Self::Maintenance => "Обслуживание",

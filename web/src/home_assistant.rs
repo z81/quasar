@@ -182,18 +182,19 @@ pub fn HomeAssistant(state: ControlState) -> Element {
                     || entity.id.to_lowercase().contains(&query))
         })
         .collect();
-    let visible = if expanded() { filtered.len() } else { 8 };
+    let visible = if expanded() { filtered.len() } else { 6 };
     let stale = data.iter().any(|s| s.stale) || error().is_some();
     rsx! {
         document::Stylesheet { href: asset!("/assets/home-assistant.css") }
         document::Stylesheet { href: asset!("/assets/home-assistant-dial.css") }
         section { class: "ha-dashboard", aria_label: "Умный дом Home Assistant",
             div { class: "ha-heading",
-                div { class: "ha-title", Icon { name: "home", size: 22 } h2 { "Умный дом" }
+                div { class: "ha-title", Icon { name: "home", size: 22 } h2 { "Устройства" }
                     span { class: "ha-total", "{devices.len()}" }
                     if stale { span { class: "ha-stale", "Данные устарели" } }
                 }
-                span { class: "ha-source", "Home Assistant" }
+                span { class: "ha-source", "{rooms.len()} комнат · "
+                    if !stale { "{devices.iter().filter(|(_,_,e)| !e.unavailable() && e.active()).count()} включено" } else { "Состояния требуют обновления" } }
             }
             if let Some(message) = error() { p { class: "ha-error", role: "status", "{message}" } }
             for source in &data {
@@ -216,7 +217,7 @@ pub fn HomeAssistant(state: ControlState) -> Element {
                 }
                 div { class: "ha-rooms", role: "group", aria_label: "Комнаты",
                     button { r#type: "button", class: if chosen_room.is_none() { "ha-room selected" } else { "ha-room" }, aria_pressed: chosen_room.is_none(),
-                        onclick: move |_| { room.set(None); expanded.set(false); }, "Все" }
+                        onclick: move |_| { room.set(None); expanded.set(false); }, "Все комнаты" }
                     for name in &rooms {
                         {let target = name.clone(); rsx! {
                             button { key: "{name}", r#type: "button", class: if chosen_room.as_ref() == Some(name) { "ha-room selected" } else { "ha-room" }, aria_pressed: chosen_room.as_ref() == Some(name),
@@ -225,12 +226,21 @@ pub fn HomeAssistant(state: ControlState) -> Element {
                     }
                 }
                 if filtered.is_empty() { p { class: "ha-note", "Ничего не найдено" } }
-                div { class: "ha-grid",
-                    for (source, device, entity) in filtered.iter().take(visible) {
-                        DeviceTile { key: "{source.source}:{device.id}:{entity.id}", device: (*device).clone(), entity: (*entity).clone(), stale: source.stale || error().is_some(), source: source.source.clone(), show_source: data.len() > 1, dashboard, dispatch }
-                    }
+                for name in &rooms {
+                    {let items: Vec<_> = filtered.iter().filter(|(_, d, _)| area(d) == name).collect(); rsx! {
+                        if !items.is_empty() {
+                            section { class: "ocean-room-section", aria_label: "{name}",
+                                h2 { Icon { name: "home", size: 24 } "{name}" span { class: "ha-total", "{items.len()}" } }
+                                div { class: "ha-grid",
+                                    for (source, device, entity) in items.into_iter().take(visible) {
+                                        DeviceTile { key: "{source.source}:{device.id}:{entity.id}", device: (*device).clone(), entity: (*entity).clone(), stale: source.stale || error().is_some(), source: source.source.clone(), show_source: data.len() > 1, dashboard, dispatch }
+                                    }
+                                }
+                            }
+                        }
+                    }}
                 }
-                if filtered.len() > 8 {
+                if rooms.iter().any(|name| filtered.iter().filter(|(_,d,_)| area(d) == name).count() > 6) {
                     button { r#type: "button", class: "ha-show-more", onclick: move |_| expanded.set(!expanded()),
                         if expanded() { "Свернуть" } else { "Показать все · {filtered.len()}" }
                     }

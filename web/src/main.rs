@@ -16,6 +16,7 @@ mod maintenance;
 mod midi_display;
 mod overview;
 mod packages;
+mod pages;
 mod player;
 mod ring_light;
 mod schedules;
@@ -66,7 +67,7 @@ fn App() -> Element {
         auth_error: use_signal(|| None),
         mode: use_signal(Default::default),
         text: use_signal(String::new),
-        panel: use_signal(Default::default),
+        panel: use_signal(Panel::from_location),
         theme: use_signal(Theme::load),
         notice: use_signal(|| None),
     };
@@ -130,6 +131,20 @@ fn App() -> Element {
             window.scroll_to_with_x_and_y(0.0, 0.0);
         }
     });
+    use_future(move || async move {
+        loop {
+            let route = document::eval("return new Promise(resolve => window.addEventListener('hashchange', () => resolve(location.hash), {once:true}))").join::<String>().await;
+            if let Ok(route) = route {
+                state.panel.set(Panel::from_route(&route));
+            } else {
+                break;
+            }
+        }
+    });
+    use_effect(move || {
+        let route = (state.panel)().route();
+        document::eval(&format!("if (location.hash !== '#{route}') history.pushState(null, '', '#{route}'); document.getElementById('main-content')?.focus({{preventScroll:true}})"));
+    });
     let panel = (state.panel)();
     let font_faces = [
         (400, asset!("/assets/ocean/manrope-400.woff2")),
@@ -146,6 +161,7 @@ fn App() -> Element {
         document::Stylesheet { href: asset!("/assets/control.css") }
         document::Stylesheet { href: asset!("/assets/ocean.css") }
         document::Stylesheet { href: asset!("/assets/ocean-sections.css") }
+        document::Stylesheet { href: asset!("/assets/ocean-pages.css") }
         document::Style { "{font_faces}" }
         div { class: if state.allowed() { "app" } else { "app auth-app" }, "data-theme": (state.theme)().name(), style: "--ocean-background: url('{background}');",
             if !state.allowed() { access::LoginGate { state } } else {
@@ -159,6 +175,8 @@ fn App() -> Element {
                             h1 { "{panel.label()}" }
                             p { match panel {
                                 Panel::Control => "Музыка, громкость и команды выбранной колонке.",
+                                Panel::AutomationOverview => "Утро вовремя. Перерывы — по вашему расписанию.",
+                                Panel::StationOverview => "Звук, режимы и поведение вашей колонки.",
                                 Panel::Music => "Воспроизведение, поиск и ваша музыка.",
                                 Panel::Home => "Устройства, комнаты и управление умным домом.",
                                 Panel::History => "Запросы, ответы Алисы и результаты обработки.",
@@ -201,6 +219,8 @@ fn App() -> Element {
                                 div { class: "ocean-recent", history::History { state, compact: true } }
                             }
                         },
+                        Panel::AutomationOverview => rsx! { pages::AutomationPage { state } },
+                        Panel::StationOverview => rsx! { pages::StationPage { state } },
                         Panel::Music => rsx! { player::MusicPage { state } },
                         Panel::Home => rsx! { home_assistant::HomeAssistant { state } },
                         Panel::History => rsx! { history::History { state, compact: false } },

@@ -1,7 +1,6 @@
 use dioxus::prelude::*;
-use serde_json::{json, Value};
 
-use super::{controls::EntityControls, dial::Dial, model::*, presentation::*, Dashboard};
+use super::{controls::EntityControls, model::*, presentation::*, Dashboard};
 use crate::icons::Icon;
 
 // Independent channels get independent tiles. Related readings and configuration
@@ -52,20 +51,6 @@ pub(super) fn DeviceTile(
     let key = entity_key(&source, &entity.id);
     let pending = dashboard.pending.read().get(&key).cloned();
     let error = dashboard.command_errors.read().get(&key).cloned();
-    let disabled = stale || entity.unavailable() || pending.is_some();
-    let action_source = source.clone();
-    let action_entity = entity.id.clone();
-    let send = EventHandler::new(move |(control, value): (String, Value)| {
-        if !disabled {
-            dispatch.call(ActionRequest {
-                source: action_source.clone(),
-                entity_id: action_entity.clone(),
-                control,
-                value,
-            });
-        }
-    });
-    let toggle = entity.controls.iter().find(|c| c.kind == "toggle");
     let level = entity.controls.iter().find(|c| c.kind == "range");
     let active = !stale && !entity.unavailable() && entity.active();
     let title = if entity.controls.is_empty() && tile_entities(&device).len() == 1 {
@@ -118,19 +103,12 @@ pub(super) fn DeviceTile(
     rsx! {
         div { class: if level.is_some() { "ha-tile-item has-dial" } else { "ha-tile-item" },
             article { class, aria_label: "{title}", aria_busy: pending.is_some(),
-                if let Some(toggle) = toggle {
-                    { let on = toggle.value.as_bool().unwrap_or(false); let id = toggle.id.clone(); rsx! {
-                        button { r#type: "button", class: "ha-tile-face ha-tile-power", disabled: disabled || toggle.value.is_null(), aria_pressed: on,
-                            aria_label: format!("{} {}", if on { "Выключить" } else { "Включить" }, title),
-                            onclick: move |_| send.call((id.clone(), json!(!on))),
-                            TileFace { entity: entity.clone(), title: title.clone(), stale, companion: companion.clone() }
-                        }
-                    }}
-                } else {
+                div { class: "ocean-device-heading", h3 { "{title}" } p { "{room}" } }
+                if entity.controls.is_empty() {
                     div { class: "ha-tile-face", TileFace { entity: entity.clone(), title: title.clone(), stale, companion: companion.clone() } }
-                }
-                if let Some(control) = level {
-                    div { class: "ha-tile-dial", Dial { control: control.clone(), entity_name: title.clone(), disabled, onchange: send } }
+                } else {
+                    EntityControls { entity: entity.clone(), device_name: device.name.clone(), source: source.clone(), stale,
+                        show_name: false, pending: pending.clone(), error: None, dispatch }
                 }
                 button { r#type: "button", class: "ha-tile-more", aria_label: "Настройки — {title}", title: "Настройки", aria_haspopup: "dialog",
                     "popovertarget": popup.clone(), "popovertargetaction": "show",

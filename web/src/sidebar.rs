@@ -10,6 +10,8 @@ const ALL: &[(Panel, &str)] = &[
     (Panel::Favorites, "star"),
     (Panel::Schedules, "alarm"),
     (Panel::Timers, "timer"),
+    (Panel::AutomationOverview, "alarm"),
+    (Panel::StationOverview, "speaker"),
     (Panel::Automations, "code"),
     (Panel::History, "history"),
     (Panel::Home, "home"),
@@ -28,9 +30,10 @@ fn section(panel: Panel) -> u8 {
     match panel {
         Panel::Control | Panel::History => 0,
         Panel::Music | Panel::Favorites => 1,
-        Panel::Automations | Panel::Schedules | Panel::Timers => 2,
+        Panel::AutomationOverview | Panel::Automations | Panel::Schedules | Panel::Timers => 2,
         Panel::Home | Panel::SmartHome => 3,
-        Panel::StationSettings
+        Panel::StationOverview
+        | Panel::StationSettings
         | Panel::MidiDisplay
         | Panel::DeviceAccess
         | Panel::DeviceTools
@@ -62,7 +65,7 @@ pub fn Sidebar(mut state: ControlState) -> Element {
         header { class: "ocean-header",
             a { class: "ocean-brand", href: "/ui/", aria_label: "Quasar — главная", "quasar." Icon { name: "spark", size: 24 } }
             nav { class: "ocean-primary-nav navigation", aria_label: "Основные разделы",
-                for (group, target, label) in [(0,Panel::Control,"Пульт"),(1,Panel::Music,"Музыка"),(2,Panel::Automations,"Автоматизация"),(3,Panel::Home,"Дом"),(4,Panel::MidiDisplay,"Станция")] {
+                for (group, target, label) in [(0,Panel::Control,"Пульт"),(1,Panel::Music,"Музыка"),(2,Panel::AutomationOverview,"Автоматизация"),(3,Panel::Home,"Дом"),(4,Panel::StationOverview,"Станция")] {
                     button { r#type: "button", class: if section(panel) == group { "ocean-nav-tab active" } else { "ocean-nav-tab" }, aria_current: if section(panel) == group { "page" } else { "false" },
                         onclick: move |_| state.panel.set(target), "{label}" }
                 }

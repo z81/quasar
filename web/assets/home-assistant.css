@@ -29,7 +29,7 @@
 .app[data-theme="dark"] .ha-tile.ha-domain-light.is-active { --ha-tile-accent: #ffd65f; --ha-tile-text: #f0e9d5; --ha-tile-muted: #beb49b; --ha-tile-bg: #473e20; background: #473e20; border-color: #615633; }
 .app[data-theme="dark"] .ha-tile.ha-domain-climate.is-active { --ha-tile-accent: #ffac8d; --ha-tile-text: #ffede5; --ha-tile-muted: #d5b5a7; --ha-tile-bg: #50332b; background: #50332b; border-color: #6a483c; }
 .ha-tile-face { position: relative; min-height: 228px; display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; width: 100%; height: auto; padding: 24px; border: 0; border-radius: inherit; background: transparent; color: inherit; text-align: left; font: inherit; box-sizing: border-box; }
-.ha-tile.has-dial .ha-tile-face { display: grid; grid-template-rows: minmax(116px, 1fr) auto; }
+.ha-tile.has-dial .ha-tile-face { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(116px, 1fr) auto; justify-content: stretch; }
 .ha-tile-power { cursor: pointer; }
 .ha-tile-power:hover:not(:disabled) { background: color-mix(in srgb, var(--ha-tile-accent) 7%, transparent); }
 .ha-tile-power:active:not(:disabled) { background: color-mix(in srgb, var(--ha-tile-accent) 12%, transparent); }

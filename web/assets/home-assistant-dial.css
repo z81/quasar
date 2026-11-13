@@ -1,0 +1,61 @@
+.ha-dial {
+  position: relative;
+  width: var(--ha-dial-size, 128px);
+  height: var(--ha-dial-size, 128px);
+  flex: 0 0 auto;
+  border-radius: 50%;
+  outline: none;
+  color: var(--ha-tile-text, var(--text, #f3f1f7));
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.ha-dial:active { cursor: grabbing; }
+.ha-dial:focus-visible {
+  outline: 2px solid var(--ha-tile-accent, var(--accent, #b59cf5));
+  outline-offset: 4px;
+}
+.ha-dial[aria-disabled="true"] { cursor: default; opacity: 0.48; }
+.ha-dial > * { pointer-events: none; }
+.ha-dial-ring { display: block; width: 100%; height: 100%; overflow: visible; }
+.ha-dial-track,
+.ha-dial-fill { fill: none; stroke-width: 7px; stroke-linecap: round; }
+.ha-dial-track { stroke: var(--ha-dial-track, color-mix(in srgb, currentColor 15%, transparent)); }
+.ha-dial-fill { stroke: var(--ha-tile-accent, var(--accent, #b59cf5)); }
+.ha-dial-thumb {
+  fill: var(--ha-tile-accent, var(--accent, #b59cf5));
+  stroke: var(--ha-tile-bg, var(--surface, #24202c));
+  stroke-width: 2px;
+  transition: r 140ms ease;
+}
+.ha-dial:hover:not([aria-disabled="true"]) .ha-dial-thumb,
+.ha-dial:focus-visible .ha-dial-thumb { r: 6px; }
+.ha-dial-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding-bottom: 4px;
+}
+.ha-dial-value { max-width: 80%; font-weight: 650; line-height: 1; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; }
+.ha-dial-unit { font-size: 11px; line-height: 1.2; color: var(--ha-tile-muted, var(--muted, #a8a1b3)); }
+.ha-dial-label {
+  position: absolute;
+  right: 10px;
+  bottom: 2px;
+  left: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--ha-tile-muted, var(--muted, #a8a1b3));
+}
+.ha-dial.is-draft .ha-dial-value { color: var(--ha-tile-accent, var(--accent, #b59cf5)); }
+@media (prefers-reduced-motion: reduce) { .ha-dial-thumb { transition: none; } }

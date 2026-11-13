@@ -1,7 +1,8 @@
 use dioxus::prelude::*;
 use serde_json::{json, Value};
 
-use super::model::{same_value, ActionRequest, Control, Entity, Pending};
+use super::dial::Dial;
+use super::model::{ActionRequest, Control, Entity, Pending};
 use super::presentation::{channel_name, facts, value};
 use crate::icons::Icon;
 
@@ -66,7 +67,7 @@ pub(super) fn EntityControls(
             }
             for control in entity.controls.iter().filter(|c| c.kind != "toggle") {
                 if control.kind == "range" {
-                    LevelControl { key: "{entity.id}:{control.id}", control: control.clone(), entity_name: entity.name.clone(), disabled, onchange: send }
+                    Dial { key: "{entity.id}:{control.id}", control: control.clone(), entity_name: entity.name.clone(), disabled, onchange: send }
                 } else if control.kind == "select" {
                     ChoiceControl { key: "{entity.id}:{control.id}", control: control.clone(), entity_name: entity.name.clone(), disabled, onchange: send }
                 }
@@ -77,78 +78,6 @@ pub(super) fn EntityControls(
                 }
             }
             if let Some(error) = error { p { class: "ha-command-error", role: "alert", "{error}" } }
-        }
-    }
-}
-
-// Range fields never expose intermediate numeric text. Quantize to the API step
-// before storing a draft so the displayed level and the submitted value agree.
-fn normalize(value: f64, min: f64, max: f64, step: f64) -> f64 {
-    let value = (min + ((value - min) / step).round() * step).clamp(min, max);
-    (value * 1_000_000.0).round() / 1_000_000.0
-}
-
-#[component]
-fn LevelControl(
-    control: Control,
-    entity_name: String,
-    disabled: bool,
-    onchange: EventHandler<(String, Value)>,
-) -> Element {
-    let mut draft = use_signal(|| None::<f64>);
-    use_effect(use_reactive((&control,), move |(control,)| {
-        if draft().is_some_and(|value| same_value(&control, &json!(value))) {
-            draft.set(None);
-        }
-    }));
-    let Some((min, max, step)) = control
-        .min
-        .zip(control.max)
-        .zip(control.step)
-        .map(|((a, b), c)| (a, b, c))
-        .filter(|(min, max, step)| {
-            min.is_finite() && max.is_finite() && step.is_finite() && min < max && *step > 0.0
-        })
-    else {
-        return rsx! {};
-    };
-    let actual = control.value.as_f64().filter(|n| n.is_finite());
-    let selected = draft().unwrap_or_else(|| actual.unwrap_or(min));
-    let selected = normalize(selected, min, max, step);
-    let changed = draft().is_some() && !same_value(&control, &json!(selected));
-    let label = format!("{} — {}", control.label, entity_name);
-    let apply_label = format!(
-        "Применить {} — {}",
-        control.label.to_lowercase(),
-        entity_name
-    );
-    let number = if actual.is_none() && draft().is_none() {
-        "—".into()
-    } else {
-        format!("{selected:.6}")
-            .trim_end_matches('0')
-            .trim_end_matches('.')
-            .replace('.', ",")
-    };
-    let unit = control.unit.as_deref().unwrap_or_default();
-    let progress = ((selected - min) / (max - min) * 100.0).clamp(0.0, 100.0);
-    let control_id = control.id.clone();
-    rsx! {
-        div { class: if changed { "ha-level is-dirty" } else { "ha-level" },
-            div { class: "ha-level-heading", span { "{control.label}" }
-                span { class: "ha-level-value", "{number}" if !unit.is_empty() { " {unit}" } }
-            }
-            div { class: "ha-level-input",
-                input { r#type: "range", min: "{min}", max: "{max}", step: "{step}", value: "{selected}", disabled,
-                    aria_label: label, aria_valuetext: format!("{number} {unit}"), style: "--ha-progress: {progress}%;",
-                    oninput: move |e| { if let Ok(value) = e.value().parse::<f64>() { if value.is_finite() { draft.set(Some(normalize(value,min,max,step))); } } },
-                }
-                button { r#type: "button", class: "ha-apply", title: "Применить", aria_label: apply_label,
-                    disabled: disabled || !changed,
-                    onclick: move |_| onchange.call((control_id.clone(), json!(selected))),
-                    Icon { name: "check", size: 17 }
-                }
-            }
         }
     }
 }

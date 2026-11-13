@@ -1,6 +1,8 @@
 mod controls;
+mod dial;
 mod model;
 mod presentation;
+mod tile;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,9 +11,9 @@ use gloo_timers::future::TimeoutFuture;
 use serde_json::json;
 
 use crate::{api, icons::Icon, state::ControlState};
-use controls::EntityControls;
-use model::{entity_key, same_value, ActionRequest, Device, Entity, Pending, Snapshot};
-use presentation::{area, channel_name, facts, icon, kind, metric_label, value};
+use model::{entity_key, same_value, ActionRequest, Pending, Snapshot};
+use presentation::{area, kind};
+use tile::DeviceTile;
 
 #[derive(Clone, Copy, PartialEq)]
 struct Dashboard {
@@ -155,43 +157,36 @@ pub fn HomeAssistant(state: ControlState) -> Element {
     }
     let devices: Vec<_> = data
         .iter()
-        .flat_map(|s| s.devices.iter().map(move |d| (s, d)))
-        .collect();
-    let rooms: BTreeSet<_> = devices.iter().map(|(_, d)| area(d).to_owned()).collect();
-    let categories: BTreeSet<_> = devices
-        .iter()
-        .flat_map(|(_, d)| {
-            d.entities
+        .flat_map(|s| {
+            s.devices
                 .iter()
-                .filter(|e| e.category.is_none())
-                .map(|e| kind(&e.domain))
+                .flat_map(move |d| tile::tile_entities(d).into_iter().map(move |e| (s, d, e)))
         })
         .collect();
+    let rooms: BTreeSet<_> = devices.iter().map(|(_, d, _)| area(d).to_owned()).collect();
+    let categories: BTreeSet<_> = devices.iter().map(|(_, _, e)| kind(&e.domain)).collect();
     let chosen_room = room().filter(|r| rooms.contains(r));
     let chosen_category = category();
     let query = search().trim().to_lowercase();
     let filtered: Vec<_> = devices
         .iter()
-        .filter(|(_, d)| {
+        .filter(|(_, d, entity)| {
             chosen_room.as_ref().is_none_or(|r| r == area(d))
                 && (chosen_category.is_empty()
                     || !categories.contains(chosen_category.as_str())
-                    || d.entities
-                        .iter()
-                        .any(|e| e.category.is_none() && kind(&e.domain) == chosen_category))
+                    || kind(&entity.domain) == chosen_category)
                 && (query.is_empty()
                     || d.name.to_lowercase().contains(&query)
                     || area(d).to_lowercase().contains(&query)
-                    || d.entities.iter().any(|e| {
-                        e.name.to_lowercase().contains(&query)
-                            || e.id.to_lowercase().contains(&query)
-                    }))
+                    || entity.name.to_lowercase().contains(&query)
+                    || entity.id.to_lowercase().contains(&query))
         })
         .collect();
     let visible = if expanded() { filtered.len() } else { 8 };
     let stale = data.iter().any(|s| s.stale) || error().is_some();
     rsx! {
         document::Stylesheet { href: asset!("/assets/home-assistant.css") }
+        document::Stylesheet { href: asset!("/assets/home-assistant-dial.css") }
         section { class: "ha-dashboard", aria_label: "Умный дом Home Assistant",
             div { class: "ha-heading",
                 div { class: "ha-title", Icon { name: "home", size: 22 } h2 { "Умный дом" }
@@ -231,8 +226,8 @@ pub fn HomeAssistant(state: ControlState) -> Element {
                 }
                 if filtered.is_empty() { p { class: "ha-note", "Ничего не найдено" } }
                 div { class: "ha-grid",
-                    for (source, device) in filtered.iter().take(visible) {
-                        DeviceCard { key: "{source.source}:{device.id}", device: (*device).clone(), stale: source.stale || error().is_some(), source: source.source.clone(), show_source: data.len() > 1, dashboard, dispatch }
+                    for (source, device, entity) in filtered.iter().take(visible) {
+                        DeviceTile { key: "{source.source}:{device.id}:{entity.id}", device: (*device).clone(), entity: (*entity).clone(), stale: source.stale || error().is_some(), source: source.source.clone(), show_source: data.len() > 1, dashboard, dispatch }
                     }
                 }
                 if filtered.len() > 8 {
@@ -243,139 +238,6 @@ pub fn HomeAssistant(state: ControlState) -> Element {
             } else if snapshots().is_some() && !stale {
                 p { class: "ha-note", "Нет доступных устройств. Откройте нужные сущности для Assist в Home Assistant." }
             }
-        }
-    }
-}
-
-#[component]
-fn DeviceCard(
-    device: Device,
-    stale: bool,
-    source: String,
-    show_source: bool,
-    dashboard: Dashboard,
-    dispatch: EventHandler<ActionRequest>,
-) -> Element {
-    let Some(primary) = device.entities.first() else {
-        return rsx! {};
-    };
-    let channels: Vec<_> = device
-        .entities
-        .iter()
-        .filter(|e| e.category.is_none() && !e.controls.is_empty())
-        .cloned()
-        .collect();
-    let settings: Vec<_> = device
-        .entities
-        .iter()
-        .filter(|e| e.category.as_deref() == Some("config") && !e.controls.is_empty())
-        .cloned()
-        .collect();
-    let active = !stale
-        && device
-            .entities
-            .iter()
-            .any(|e| e.category.is_none() && e.active());
-    let unavailable = device.entities.iter().all(Entity::unavailable);
-    let metrics: Vec<_> = device
-        .entities
-        .iter()
-        .filter(|e| {
-            e.category.is_none()
-                && e.unit.is_some()
-                && !e.unavailable()
-                && (channels.is_empty() || e.controls.is_empty())
-        })
-        .take(4)
-        .collect();
-    let main_value = value(primary);
-    let readings = if channels.is_empty() {
-        facts(primary)
-    } else {
-        Vec::new()
-    };
-    let normal: Vec<_> = device
-        .entities
-        .iter()
-        .filter(|e| e.category.is_none())
-        .cloned()
-        .collect();
-    let diagnostic: Vec<_> = device
-        .entities
-        .iter()
-        .filter(|e| e.category.is_some())
-        .cloned()
-        .collect();
-    rsx! {
-        article { class: if active { "ha-device is-active" } else if unavailable { "ha-device is-unavailable" } else { "ha-device" },
-            div { class: "ha-device-heading",
-                span { class: "ha-device-icon", Icon { name: icon(primary), size: 22 } }
-                div { class: "ha-device-title", h3 { title: "{device.name}", "{device.name}" }
-                    span { "{area(&device)}" if show_source { " · {source}" } }
-                }
-            }
-            if !channels.is_empty() {
-                div { class: "ha-channels",
-                    for entity in &channels {
-                        {let key = entity_key(&source, &entity.id); rsx! {
-                            EntityControls { key: "{entity.id}", entity: entity.clone(), device_name: device.name.clone(), source: source.clone(), stale,
-                                show_name: channels.len() > 1, pending: dashboard.pending.read().get(&key).cloned(), error: dashboard.command_errors.read().get(&key).cloned(), dispatch }
-                        }}
-                    }
-                }
-            } else if metrics.is_empty() {
-                div { class: "ha-device-state", title: "{main_value}", "{main_value}" }
-            }
-            if !metrics.is_empty() || !readings.is_empty() {
-                div { class: "ha-metrics",
-                    for metric in metrics {
-                        div { class: "ha-metric", title: "{metric.name}",
-                            span { class: "ha-metric-label", Icon { name: icon(metric), size: 14 }
-                                if device.entities.iter().filter(|e| e.category.is_none() && e.device_class == metric.device_class).count() > 1 {
-                                    "{channel_name(&metric.name, &device.name)}"
-                                } else { "{metric_label(metric)}" }
-                            }
-                            strong { "{value(metric)}" }
-                        }
-                    }
-                    for reading in readings.iter().take(2) {
-                        div { class: "ha-metric", span { class: "ha-metric-label", "{reading.name}" } strong { "{reading.value}" } }
-                    }
-                }
-            }
-            if !settings.is_empty() {
-                details { class: "ha-details ha-settings",
-                    summary { "Настройки" Icon { name: "settings", size: 14 } }
-                    for entity in settings {
-                        {let key = entity_key(&source, &entity.id); rsx! {
-                            EntityControls { key: "{entity.id}", entity: entity.clone(), device_name: device.name.clone(), source: source.clone(), stale,
-                                show_name: true, pending: dashboard.pending.read().get(&key).cloned(), error: dashboard.command_errors.read().get(&key).cloned(), dispatch }
-                        }}
-                    }
-                }
-            }
-            details { class: "ha-details",
-                summary { "Все параметры · {device.entities.len()}" Icon { name: "chevron", size: 14 } }
-                EntityList { entities: normal }
-                if !diagnostic.is_empty() {
-                    details { class: "ha-diagnostics", summary { "Служебные · {diagnostic.len()}" }
-                        EntityList { entities: diagnostic }
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn EntityList(entities: Vec<Entity>) -> Element {
-    rsx! {
-        dl { class: "ha-entities",
-            for entity in entities { div { key: "{entity.id}", class: "ha-entity",
-                dt { title: "{entity.id}", "{entity.name}" }
-                dd { "{value(&entity)}" }
-                for reading in &entity.readings { div { class: "ha-entity-reading", span { "{reading.name}" } span { "{reading.value}" } } }
-            } }
         }
     }
 }

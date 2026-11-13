@@ -1,198 +1,105 @@
-use std::collections::BTreeSet;
+mod controls;
+mod model;
+mod presentation;
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use dioxus::prelude::*;
 use gloo_timers::future::TimeoutFuture;
-use serde::Deserialize;
+use serde_json::json;
 
 use crate::{api, icons::Icon, state::ControlState};
+use controls::EntityControls;
+use model::{entity_key, same_value, ActionRequest, Device, Entity, Pending, Snapshot};
+use presentation::{area, channel_name, facts, icon, kind, metric_label, value};
 
-#[derive(Clone, Deserialize, PartialEq)]
-struct Snapshot {
-    source: String,
-    devices: Vec<Device>,
-    updated_at: Option<String>,
-    stale: bool,
-    error: Option<String>,
-    grouping: String,
+#[derive(Clone, Copy, PartialEq)]
+struct Dashboard {
+    snapshots: Signal<Option<Vec<Snapshot>>>,
+    error: Signal<Option<String>>,
+    generation: Signal<u64>,
+    pending: Signal<BTreeMap<String, Pending>>,
+    command_errors: Signal<BTreeMap<String, String>>,
 }
 
-#[derive(Clone, Deserialize, PartialEq)]
-struct Device {
-    id: String,
-    name: String,
-    area: Option<String>,
-    entities: Vec<Entity>,
-}
-
-#[derive(Clone, Deserialize, PartialEq)]
-struct Entity {
-    id: String,
-    name: String,
-    domain: String,
-    state: String,
-    device_class: Option<String>,
-    unit: Option<String>,
-    category: Option<String>,
-    readings: Vec<Reading>,
-}
-
-#[derive(Clone, Deserialize, PartialEq)]
-struct Reading {
-    name: String,
-    value: String,
-}
-
-fn kind(domain: &str) -> &'static str {
-    match domain {
-        "light" => "Свет",
-        "climate" | "fan" | "humidifier" | "water_heater" | "weather" => "Климат",
-        "sensor" | "binary_sensor" => "Датчики",
-        "switch" | "input_boolean" | "remote" => "Переключатели",
-        "media_player" => "Медиа",
-        "cover" | "lock" | "alarm_control_panel" | "camera" => "Дом и безопасность",
-        "person" | "device_tracker" => "Присутствие",
-        "scene" | "script" | "automation" => "Сценарии",
-        _ => "Другое",
+async fn refresh(state: ControlState, mut dashboard: Dashboard) {
+    let generation = *dashboard.generation.peek() + 1;
+    dashboard.generation.set(generation);
+    let result = api::get::<Vec<Snapshot>>(state, "/home-assistant").await;
+    if *dashboard.generation.peek() != generation {
+        return;
     }
-}
-
-fn icon(entity: &Entity) -> &'static str {
-    match entity.domain.as_str() {
-        "light" => "bulb",
-        "climate" | "water_heater" => "thermometer",
-        "fan" => "wind",
-        "humidifier" => "drop",
-        "weather" => "cloud",
-        "media_player" => "music",
-        "person" | "device_tracker" => "user",
-        "lock" => "lock",
-        "cover" => "window",
-        "switch" | "input_boolean" => "power",
-        "sensor" | "binary_sensor" => match entity.device_class.as_deref() {
-            Some("temperature") => "thermometer",
-            Some("humidity" | "moisture") => "drop",
-            Some("battery") => "battery",
-            Some("occupancy" | "motion" | "presence") => "user",
-            Some("power" | "energy" | "voltage" | "current") => "power",
-            Some("door" | "window" | "opening") => "window",
-            _ => "activity",
-        },
-        "scene" | "script" | "automation" => "spark",
-        _ => "grid",
-    }
-}
-
-fn value(entity: &Entity) -> String {
-    if entity.state == "unavailable" {
-        return "Недоступно".into();
-    }
-    if entity.state == "unknown" {
-        return "Нет данных".into();
-    }
-    if matches!(
-        entity.domain.as_str(),
-        "scene" | "script" | "button" | "input_button"
-    ) && entity.state.contains('T')
-    {
-        let date = js_sys::Date::new(&entity.state.clone().into());
-        if !date.get_time().is_nan() {
-            let options = js_sys::Object::new();
-            let _ = js_sys::Reflect::set(&options, &"day".into(), &"numeric".into());
-            let _ = js_sys::Reflect::set(&options, &"month".into(), &"short".into());
-            return format!("Запуск: {}", date.to_locale_date_string("ru-RU", &options));
+    match result {
+        Ok(snapshots) => {
+            dashboard.snapshots.set(Some(snapshots));
+            dashboard.error.set(None);
         }
+        Err(message) => dashboard.error.set(Some(message)),
     }
-    if let Some(unit) = &entity.unit {
-        return format!("{} {unit}", entity.state);
-    }
-    if entity.domain == "binary_sensor" && matches!(entity.state.as_str(), "on" | "off") {
-        let on = entity.state == "on";
-        return match entity.device_class.as_deref() {
-            Some("door" | "window" | "opening" | "garage_door") => {
-                if on {
-                    "Открыто"
+    let outcomes: Vec<_> = {
+        let data = dashboard.snapshots.peek();
+        dashboard
+            .pending
+            .peek()
+            .iter()
+            .filter_map(|(key, pending)| {
+                let source = data.as_ref().and_then(|sources| {
+                    sources.iter().find(|s| s.source == pending.request.source)
+                });
+                let confirmed = pending.accepted
+                    && dashboard.error.peek().is_none()
+                    && source.is_some_and(|source| {
+                        !source.stale
+                            && source
+                                .devices
+                                .iter()
+                                .flat_map(|d| &d.entities)
+                                .find(|entity| {
+                                    entity.id == pending.request.entity_id && !entity.unavailable()
+                                })
+                                .and_then(|entity| {
+                                    entity
+                                        .controls
+                                        .iter()
+                                        .find(|control| control.id == pending.request.control)
+                                })
+                                .is_some_and(|control| same_value(control, &pending.request.value))
+                    });
+                if confirmed {
+                    Some((key.clone(), None))
+                } else if pending.accepted && js_sys::Date::now() - pending.started >= 30_000.0 {
+                    Some((
+                        key.clone(),
+                        Some(
+                            "Не удалось дождаться подтверждения. Проверьте текущее состояние."
+                                .to_owned(),
+                        ),
+                    ))
                 } else {
-                    "Закрыто"
+                    None
                 }
-            }
-            Some("motion" | "occupancy" | "presence") => {
-                if on {
-                    "Обнаружено"
-                } else {
-                    "Не обнаружено"
-                }
-            }
-            Some("connectivity") => {
-                if on {
-                    "Подключено"
-                } else {
-                    "Отключено"
-                }
-            }
-            Some("problem" | "safety" | "tamper" | "smoke" | "gas" | "moisture") => {
-                if on {
-                    "Тревога"
-                } else {
-                    "В норме"
-                }
-            }
-            Some("battery") => {
-                if on {
-                    "Низкий заряд"
-                } else {
-                    "В норме"
-                }
-            }
-            _ => {
-                if on {
-                    "Активно"
-                } else {
-                    "Неактивно"
-                }
-            }
-        }
-        .into();
-    }
-    let label = match entity.state.as_str() {
-        "on" => "Включено",
-        "off" => "Выключено",
-        "home" => "Дома",
-        "not_home" => "Вне дома",
-        "playing" => "Воспроизведение",
-        "paused" => "На паузе",
-        "idle" => "Ожидание",
-        "standby" => "Ожидание",
-        "open" => "Открыто",
-        "closed" => "Закрыто",
-        "opening" => "Открывается",
-        "closing" => "Закрывается",
-        "locked" => "Закрыт",
-        "unlocked" => "Открыт",
-        "heat" | "heating" => "Обогрев",
-        "cool" | "cooling" => "Охлаждение",
-        "auto" => "Авто",
-        "dry" => "Осушение",
-        "fan_only" => "Вентиляция",
-        "cleaning" => "Уборка",
-        "docked" => "На базе",
-        "returning" => "Возвращается",
-        "cloudy" => "Облачно",
-        "sunny" => "Ясно",
-        "partlycloudy" => "Переменная облачность",
-        "rainy" => "Дождь",
-        _ => &entity.state,
+            })
+            .collect()
     };
-    label.into()
-}
-
-fn area(device: &Device) -> &str {
-    device.area.as_deref().unwrap_or("Без комнаты")
+    for (key, error) in outcomes {
+        dashboard.pending.write().remove(&key);
+        if let Some(error) = error {
+            dashboard.command_errors.write().insert(key, error);
+        }
+    }
 }
 
 #[component]
 pub fn HomeAssistant(state: ControlState) -> Element {
-    let mut snapshots = use_signal(|| None::<Vec<Snapshot>>);
-    let mut error = use_signal(|| None::<String>);
+    let dashboard = Dashboard {
+        snapshots: use_signal(|| None::<Vec<Snapshot>>),
+        error: use_signal(|| None::<String>),
+        generation: use_signal(|| 0),
+        pending: use_signal(BTreeMap::new),
+        command_errors: use_signal(BTreeMap::new),
+    };
+    let snapshots = dashboard.snapshots;
+    let error = dashboard.error;
     let mut room = use_signal(|| None::<String>);
     let mut category = use_signal(String::new);
     let mut search = use_signal(String::new);
@@ -205,16 +112,42 @@ pub fn HomeAssistant(state: ControlState) -> Element {
                     .await
                     .unwrap_or(false)
             {
-                match api::get::<Vec<Snapshot>>(state, "/home-assistant").await {
-                    Ok(data) => {
-                        snapshots.set(Some(data));
-                        error.set(None);
+                refresh(state, dashboard).await;
+            }
+            TimeoutFuture::new(5_000).await;
+        }
+    });
+    let dispatch = EventHandler::new(move |request: ActionRequest| {
+        let key = entity_key(&request.source, &request.entity_id);
+        if !state.allowed() || dashboard.pending.peek().contains_key(&key) {
+            return;
+        }
+        let mut dashboard = dashboard;
+        dashboard.command_errors.write().remove(&key);
+        dashboard.pending.write().insert(
+            key.clone(),
+            Pending {
+                request: request.clone(),
+                started: js_sys::Date::now(),
+                accepted: false,
+            },
+        );
+        spawn(async move {
+            let payload = json!({"source": request.source, "entity_id": request.entity_id, "control": request.control, "value": request.value});
+            match api::mutate(state, "POST", "/home-assistant/action", Some(&payload)).await {
+                Ok(_) => {
+                    if let Some(pending) = dashboard.pending.write().get_mut(&key) {
+                        pending.accepted = true;
+                        pending.started = js_sys::Date::now();
                     }
-                    Err(message) => error.set(Some(message)),
+                }
+                Err(message) => {
+                    dashboard.pending.write().remove(&key);
+                    dashboard.command_errors.write().insert(key, message);
                 }
             }
-            TimeoutFuture::new(15_000).await;
-        }
+            refresh(state, dashboard).await;
+        });
     });
     let data = snapshots().unwrap_or_default();
     if snapshots().is_some() && data.is_empty() && error().is_none() {
@@ -299,7 +232,7 @@ pub fn HomeAssistant(state: ControlState) -> Element {
                 if filtered.is_empty() { p { class: "ha-note", "Ничего не найдено" } }
                 div { class: "ha-grid",
                     for (source, device) in filtered.iter().take(visible) {
-                        DeviceCard { key: "{source.source}:{device.id}", device: (*device).clone(), stale: source.stale || error().is_some(), source: if data.len() > 1 { Some(source.source.clone()) } else { None } }
+                        DeviceCard { key: "{source.source}:{device.id}", device: (*device).clone(), stale: source.stale || error().is_some(), source: source.source.clone(), show_source: data.len() > 1, dashboard, dispatch }
                     }
                 }
                 if filtered.len() > 8 {
@@ -315,53 +248,52 @@ pub fn HomeAssistant(state: ControlState) -> Element {
 }
 
 #[component]
-fn DeviceCard(device: Device, stale: bool, source: Option<String>) -> Element {
+fn DeviceCard(
+    device: Device,
+    stale: bool,
+    source: String,
+    show_source: bool,
+    dashboard: Dashboard,
+    dispatch: EventHandler<ActionRequest>,
+) -> Element {
     let Some(primary) = device.entities.first() else {
         return rsx! {};
     };
-    let active = !stale
-        && device.entities.iter().any(|entity| {
-            entity.category.is_none()
-                && matches!(
-                    entity.domain.as_str(),
-                    "light" | "switch" | "climate" | "fan" | "media_player" | "vacuum"
-                )
-                && matches!(
-                    entity.state.as_str(),
-                    "on" | "playing" | "heat" | "cool" | "cleaning"
-                )
-        });
-    let unavailable = device.entities.iter().all(|e| e.state == "unavailable");
     let channels: Vec<_> = device
         .entities
         .iter()
-        .filter(|e| e.category.is_none() && e.domain == primary.domain)
+        .filter(|e| e.category.is_none() && !e.controls.is_empty())
+        .cloned()
         .collect();
-    let state_value = if matches!(primary.domain.as_str(), "light" | "switch")
-        && channels.len() > 1
-        && channels
+    let settings: Vec<_> = device
+        .entities
+        .iter()
+        .filter(|e| e.category.as_deref() == Some("config") && !e.controls.is_empty())
+        .cloned()
+        .collect();
+    let active = !stale
+        && device
+            .entities
             .iter()
-            .all(|e| matches!(e.state.as_str(), "on" | "off"))
-    {
-        format!(
-            "{} из {} включено",
-            channels.iter().filter(|e| e.state == "on").count(),
-            channels.len()
-        )
-    } else {
-        value(primary)
-    };
+            .any(|e| e.category.is_none() && e.active());
+    let unavailable = device.entities.iter().all(Entity::unavailable);
     let metrics: Vec<_> = device
         .entities
         .iter()
         .filter(|e| {
-            e.id != primary.id
-                && e.category.is_none()
+            e.category.is_none()
                 && e.unit.is_some()
-                && !matches!(e.state.as_str(), "unavailable" | "unknown")
+                && !e.unavailable()
+                && (channels.is_empty() || e.controls.is_empty())
         })
-        .take(3)
+        .take(4)
         .collect();
+    let main_value = value(primary);
+    let readings = if channels.is_empty() {
+        facts(primary)
+    } else {
+        Vec::new()
+    };
     let normal: Vec<_> = device
         .entities
         .iter()
@@ -378,17 +310,52 @@ fn DeviceCard(device: Device, stale: bool, source: Option<String>) -> Element {
         article { class: if active { "ha-device is-active" } else if unavailable { "ha-device is-unavailable" } else { "ha-device" },
             div { class: "ha-device-heading",
                 span { class: "ha-device-icon", Icon { name: icon(primary), size: 22 } }
-                div { class: "ha-device-title", h3 { "{device.name}" }
-                    span { "{area(&device)}" if let Some(source) = source { " · {source}" } }
+                div { class: "ha-device-title", h3 { title: "{device.name}", "{device.name}" }
+                    span { "{area(&device)}" if show_source { " · {source}" } }
                 }
             }
-            div { class: "ha-device-state", title: "{state_value}", "{state_value}" }
-            div { class: "ha-readings",
-                for metric in metrics { span { title: "{metric.name}", Icon { name: icon(metric), size: 14 } "{value(metric)}" } }
-                for reading in primary.readings.iter().take(2) { span { title: "{reading.name}", "{reading.value}" } }
+            if !channels.is_empty() {
+                div { class: "ha-channels",
+                    for entity in &channels {
+                        {let key = entity_key(&source, &entity.id); rsx! {
+                            EntityControls { key: "{entity.id}", entity: entity.clone(), device_name: device.name.clone(), source: source.clone(), stale,
+                                show_name: channels.len() > 1, pending: dashboard.pending.read().get(&key).cloned(), error: dashboard.command_errors.read().get(&key).cloned(), dispatch }
+                        }}
+                    }
+                }
+            } else if metrics.is_empty() {
+                div { class: "ha-device-state", title: "{main_value}", "{main_value}" }
+            }
+            if !metrics.is_empty() || !readings.is_empty() {
+                div { class: "ha-metrics",
+                    for metric in metrics {
+                        div { class: "ha-metric", title: "{metric.name}",
+                            span { class: "ha-metric-label", Icon { name: icon(metric), size: 14 }
+                                if device.entities.iter().filter(|e| e.category.is_none() && e.device_class == metric.device_class).count() > 1 {
+                                    "{channel_name(&metric.name, &device.name)}"
+                                } else { "{metric_label(metric)}" }
+                            }
+                            strong { "{value(metric)}" }
+                        }
+                    }
+                    for reading in readings.iter().take(2) {
+                        div { class: "ha-metric", span { class: "ha-metric-label", "{reading.name}" } strong { "{reading.value}" } }
+                    }
+                }
+            }
+            if !settings.is_empty() {
+                details { class: "ha-details ha-settings",
+                    summary { "Настройки" Icon { name: "settings", size: 14 } }
+                    for entity in settings {
+                        {let key = entity_key(&source, &entity.id); rsx! {
+                            EntityControls { key: "{entity.id}", entity: entity.clone(), device_name: device.name.clone(), source: source.clone(), stale,
+                                show_name: true, pending: dashboard.pending.read().get(&key).cloned(), error: dashboard.command_errors.read().get(&key).cloned(), dispatch }
+                        }}
+                    }
+                }
             }
             details { class: "ha-details",
-                summary { "Параметры · {device.entities.len()}" Icon { name: "chevron", size: 14 } }
+                summary { "Все параметры · {device.entities.len()}" Icon { name: "chevron", size: 14 } }
                 EntityList { entities: normal }
                 if !diagnostic.is_empty() {
                     details { class: "ha-diagnostics", summary { "Служебные · {diagnostic.len()}" }

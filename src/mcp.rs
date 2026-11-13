@@ -164,6 +164,31 @@ impl Mcp {
         });
         futures_util::future::join_all(snapshots).await.into_iter().flatten().collect()
     }
+
+    pub async fn dashboard_action(&self, action: &crate::home_assistant::controls::Action) -> Result<(), crate::home_assistant::controls::ActionError> {
+        use crate::home_assistant::controls::ActionError;
+        if action.source.len() > 64 || action.entity_id.len() > 255 || action.control.len() > 64 {
+            return Err(ActionError::Invalid("Некорректная команда."));
+        }
+        let server = self.servers.iter().find(|s| s.prefix == action.source)
+            .ok_or(ActionError::Invalid("Подключение Home Assistant не найдено."))?;
+        let token = server.token.as_deref().ok_or(ActionError::Unavailable)?;
+        let mut cache = server.dashboard.lock().await;
+        // Refresh permissions before writing; a read-only MCP must stay read-only
+        // even when its HA bearer credential has broader privileges.
+        let tools = tokio::time::timeout(TIMEOUT, server.list_tools()).await
+            .map_err(|_| ActionError::Unavailable)?.map_err(|_| ActionError::Unavailable)?;
+        server.set_tools(tools, false);
+        if !server.dashboard_writable() {
+            return Err(ActionError::Invalid("MCP-подключение доступно только для чтения."));
+        }
+        let result = tokio::time::timeout(Duration::from_secs(20), crate::home_assistant::registry::execute(&server.url, token, action)).await
+            .unwrap_or(Err(ActionError::Unconfirmed));
+        if let Some((checked, _)) = cache.as_mut() {
+            *checked = Instant::now() - Duration::from_secs(60);
+        }
+        result
+    }
 }
 
 impl Drop for Mcp {
@@ -290,7 +315,7 @@ impl Server {
         // Coalesce concurrent browser polls, including failures. Settings reload creates a new client.
         let mut cache = self.dashboard.lock().await;
         if let Some((checked, snapshot)) = cache.as_ref() {
-            if checked.elapsed() < Duration::from_secs(10) {
+            if checked.elapsed() < Duration::from_secs(4) {
                 return snapshot.clone();
             }
         }
@@ -300,7 +325,7 @@ impl Server {
         };
         let registry = tokio::time::timeout(TIMEOUT, registry).await;
         let fresh = match registry {
-            Ok(Ok(registry)) => Some((home_assistant::from_registry(registry), "registry")),
+            Ok(Ok(registry)) => Some((home_assistant::from_registry(&registry, self.dashboard_writable()), "registry")),
             _ => {
                 if let Some(tool) = self.live_context_tool() {
                     let call = self.request("tools/call", json!({"name": tool, "arguments": {}}));
@@ -327,6 +352,14 @@ impl Server {
         };
         *cache = Some((Instant::now(), snapshot.clone()));
         snapshot
+    }
+
+    fn dashboard_writable(&self) -> bool {
+        self.tools.read().unwrap_or_else(PoisonError::into_inner).iter().any(|tool| {
+            matches!(tool.name.rsplit("__").next().unwrap_or_default(),
+                "HassTurnOn" | "HassTurnOff" | "HassLightSet" | "HassClimateSetTemperature" |
+                "HassFanSetSpeed" | "HassSetVolume" | "HassSetPosition")
+        })
     }
 
     /// The tool that tells the live context, plain or namespaced

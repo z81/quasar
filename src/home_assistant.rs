@@ -1,13 +1,19 @@
 //! Dashboard data derived from HA registries, with an Assist MCP snapshot fallback.
+pub mod controls;
 pub mod registry;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use anyhow::{ensure, Context, Result};
-use axum::{extract::State, Json};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Default, Serialize)]
@@ -38,16 +44,36 @@ pub struct Entity {
     pub unit: Option<String>,
     pub category: Option<String>,
     pub readings: Vec<Reading>,
+    pub controls: Vec<controls::Control>,
 }
 
 #[derive(Clone, Serialize)]
 pub struct Reading {
+    pub id: String,
     pub name: String,
     pub value: String,
 }
 
 pub async fn dashboard(State(state): State<Arc<crate::api::ApiState>>) -> Json<Vec<Snapshot>> {
     Json(state.runtime.snapshot().mcp.dashboard().await)
+}
+
+pub async fn action(
+    State(state): State<Arc<crate::api::ApiState>>,
+    Json(action): Json<controls::Action>,
+) -> Response {
+    use controls::ActionError;
+    match state.runtime.snapshot().mcp.dashboard_action(&action).await {
+        Ok(()) => (StatusCode::ACCEPTED, Json(json!({"status": "accepted"}))).into_response(),
+        Err(error) => {
+            let (status, message) = match error {
+                ActionError::Invalid(message) => (StatusCode::UNPROCESSABLE_ENTITY, message),
+                ActionError::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "Home Assistant недоступен. Команда не отправлена."),
+                ActionError::Unconfirmed => (StatusCode::BAD_GATEWAY, "Не удалось подтвердить команду. Проверьте состояние устройства перед повтором."),
+            };
+            (status, Json(json!({"error": message}))).into_response()
+        }
+    }
 }
 
 fn string(value: &Value) -> Option<String> {
@@ -96,6 +122,7 @@ fn entity(
     ] {
         if let Some(value) = string(&attrs[key]) {
             readings.push(Reading {
+                id: key.into(),
                 name: label.into(),
                 value: format!("{value} {unit}").trim().into(),
             });
@@ -106,6 +133,7 @@ fn entity(
         .filter(|n| (0.0..=255.0).contains(n))
     {
         readings.push(Reading {
+            id: "brightness".into(),
             name: "Яркость".into(),
             value: format!("{} %", (brightness * 100.0 / 255.0).round()),
         });
@@ -119,10 +147,11 @@ fn entity(
         unit: string(&attrs["unit_of_measurement"]),
         category,
         readings,
+        controls: Vec::new(),
     }
 }
 
-pub fn from_registry(registry: registry::Registry) -> Vec<Device> {
+pub fn from_registry(registry: &registry::Registry, writable: bool) -> Vec<Device> {
     let areas: HashMap<_, _> = registry
         .areas
         .iter()
@@ -179,13 +208,31 @@ pub fn from_registry(registry: registry::Registry) -> Vec<Device> {
             area,
             entities: Vec::new(),
         });
-        group.entities.push(entity(
+        let domain = id.split('.').next().unwrap_or_default();
+        let mut display_state = state.clone();
+        if matches!(domain, "climate" | "water_heater")
+            && display_state["attributes"]["temperature_unit"].is_null()
+        {
+            if let Some(unit) = &registry.temperature_unit {
+                display_state["attributes"]["temperature_unit"] = json!(unit);
+            }
+        }
+        let mut view = entity(
             id.into(),
             name,
-            id.split('.').next().unwrap_or_default().into(),
-            state,
+            domain.into(),
+            &display_state,
             string(&entry["entity_category"]),
-        ));
+        );
+        if writable && view.category.as_deref() != Some("diagnostic") {
+            view.controls = controls::for_entity(
+                domain,
+                state,
+                &registry.services,
+                registry.temperature_unit.as_deref(),
+            );
+        }
+        group.entities.push(view);
     }
     sorted(groups.into_values().collect())
 }

@@ -161,80 +161,63 @@ pub fn WeatherCard(mut state: ControlState) -> Element {
         view.stale || (error.is_some() && (view.current.is_some() || !view.daily.is_empty()))
     });
     rsx! {
-        section { class: "card weather-card", aria_label: "Погода",
-            div { class: "weather-heading",
-                div {
-                    span { class: "card-kicker", Icon { name: "sun", size: 16 } "ПОГОДА РЯДОМ" }
-                    if let Some(location) = location {
-                        h2 { "{location.name}" }
-                        if !location.detail().is_empty() { p { class: "weather-location-detail", "{location.detail()}" } }
-                    }
-                }
-                button { class: "text-button weather-city-button", onclick: move |_| state.panel.set(Panel::Settings),
-                    Icon { name: "pin", size: 14 } if location.is_some() { "Сменить город" } else { "Выбрать город" }
+        document::Stylesheet { href: asset!("/assets/ocean-overview.css") }
+        section { class: "weather-card ocean-weather", aria_label: "Погода",
+            svg { class: "ocean-weather-shape", view_box: "0 0 628 340", preserve_aspect_ratio: "none", "aria-hidden": "true",
+                path { d: "M0 45Q0 0 46 0C193 -8 305 43 426 34C510 29 551 -3 599 19Q628 25 628 56V307Q628 340 595 340H35Q0 340 0 306Z" }
+            }
+            div { class: "ocean-weather-heading",
+                h2 { "Погода" }
+                button { r#type: "button", class: "ocean-weather-city", title: location.map(|location| location.detail()), aria_label: "Сменить город",
+                    onclick: move |_| state.panel.set(Panel::Settings),
+                    if let Some(location) = location { "{location.name}" } else { "Выбрать город" }
                 }
             }
-            if current.is_some() || weather.as_ref().is_some_and(|view| !view.daily.is_empty()) {
-                div { class: "weather-content",
-                    div { class: "weather-current",
-                        if let Some(current) = current {
-                        div { class: "weather-now",
-                            span { class: "weather-main-icon", Icon { name: weather_icon(current.weather_code,current.is_day), size: 42 } }
-                            strong { class: "weather-temperature", "{temperature(current.temperature)}" }
-                            span { class: "weather-celsius", "C" }
-                        }
-                        p { class: "weather-description", "{current.description}" }
-                        p { class: "weather-feels", "Ощущается как {temperature(current.apparent_temperature)}" }
-                        div { class: "weather-details",
-                            span { title: "Скорость ветра", Icon { name: "wind", size: 15 } {measurement(current.wind_speed, "м/с")} }
-                            span { title: "Осадки", Icon { name: "rain", size: 15 } {measurement(current.precipitation, "мм")} }
-                        }
-                        } else {
-                            div { class: "weather-empty", Icon { name: "cloud", size: 28 } p { "Текущая погода недоступна" } }
-                        }
+            if let Some(current) = current {
+                div { class: "ocean-weather-now",
+                    strong { class: "ocean-weather-temperature", "{temperature(current.temperature)}" }
+                    div { class: "ocean-weather-description", strong { "{current.description}" }
+                        span { "Ощущается как {temperature(current.apparent_temperature)}" }
+                        span { class: "ocean-weather-details", {format!("Ветер {} · Осадки {}", measurement(current.wind_speed, "м/с"), measurement(current.precipitation, "мм"))} }
                     }
-                    if let Some(view) = weather.as_ref() {
-                        if !view.daily.is_empty() {
-                            div { class: "weather-forecast", aria_label: "Прогноз на 5 дней",
-                                for day in view.daily.iter().take(5) {
-                                    div { class: "weather-day", key: "{day.date}",
-                                        span { class: "weather-day-label", "{day_label(&day.date)}" }
-                                        span { class: "weather-day-icon", title: "{day.description}", aria_label: "{day.description}", Icon { name: weather_icon(day.weather_code, Some(true)), size: 24 } }
-                                        div { class: "weather-day-temperatures", strong { "{temperature(day.temperature_max)}" } span { "{temperature(day.temperature_min)}" } }
-                                        span { class: "weather-rain-chance", title: "Вероятность осадков", Icon { name: "rain", size: 12 } {measurement(day.precipitation_probability, "%")} }
-                                    }
-                                }
+                    span { class: "ocean-weather-art", aria_hidden: "true",
+                        if matches!(current.weather_code, Some(2 | 3)) && current.is_day == Some(false) {
+                            img { src: asset!("/assets/ocean/weather-cloud-moon.webp"), alt: "", width: "140", height: "140", loading: "lazy", decoding: "async" }
+                        } else { Icon { name: weather_icon(current.weather_code, current.is_day), size: 100 } }
+                    }
+                }
+            } else if (state.weather_loading)() {
+                div { class: "ocean-weather-empty", role: "status", span { class: "spinner" } p { "Узнаём погоду…" } }
+            } else if location.is_some() || error.is_some() {
+                div { class: "ocean-weather-empty", Icon { name: "cloud", size: 40 } p { "Погода пока недоступна" } }
+            } else {
+                div { class: "ocean-weather-empty", Icon { name: "sun", size: 40 }
+                    p { "Выберите город — здесь появится прогноз." }
+                    button { class: "button secondary", onclick: move |_| state.panel.set(Panel::Settings), "Выбрать город" }
+                }
+            }
+            if let Some(view) = weather.as_ref() {
+                if !view.daily.is_empty() {
+                    div { class: "ocean-weather-forecast", aria_label: "Прогноз на 5 дней",
+                        for day in view.daily.iter().take(5) {
+                            div { class: "ocean-weather-day", key: "{day.date}",
+                                span { class: "ocean-weather-date", "{day_label(&day.date)}" }
+                                span { class: "ocean-weather-day-icon", title: "{day.description}", aria_label: "{day.description}", Icon { name: weather_icon(day.weather_code, Some(true)), size: 24 } }
+                                span { class: "ocean-weather-temperatures", strong { "{temperature(day.temperature_max)}" } small { "{temperature(day.temperature_min)}" } }
+                                span { class: "ocean-weather-rain", title: "Вероятность осадков", {measurement(day.precipitation_probability, "%")} }
                             }
                         }
                     }
                 }
-            } else if (state.weather_loading)() {
-                div { class: "weather-empty", role: "status", span { class: "spinner" } p { "Узнаём погоду…" } }
-            } else if location.is_some() || error.is_some() {
-                div { class: "weather-empty", Icon { name: "cloud", size: 28 } p { "Погода пока недоступна" } }
-            } else {
-                div { class: "weather-empty",
-                    Icon { name: "sun", size: 30 }
-                    div { h3 { "Что за окном?" } p { "Выберите город — здесь появятся погода и прогноз на 5 дней." } }
-                    button { class: "button secondary", onclick: move |_| state.panel.set(Panel::Settings), "Выбрать город" }
-                }
             }
             if let Some(error) = error {
-                p { class: "weather-warning", role: "status",
-                    Icon { name: "alert", size: 14 }
-                    span { if stale { "Показываем последние данные. " } "{error}" }
-                }
+                p { class: "ocean-overview-error", role: "status", if stale { "Показываем последние данные. " } "{error}" }
             } else if stale {
-                p { class: "weather-warning", role: "status", Icon { name: "history", size: 14 } "Показываем последние данные. Пробуем обновить автоматически." }
+                p { class: "ocean-overview-error", role: "status", "Данные устарели. Обновляем автоматически." }
             }
-            div { class: "weather-footer",
-                span {
-                    if let Some(time) = weather.as_ref().and_then(|view| view.fetched_at.as_ref()) {
-                        "{updated_at(time)}"
-                        if stale { " · данные устарели" }
-                    } else { "Прогноз на 5 дней" }
-                }
-                a { href: "https://open-meteo.com/", target: "_blank", rel: "noopener noreferrer", "Данные Open-Meteo ↗" }
+            div { class: "ocean-weather-footer",
+                span { if let Some(time) = weather.as_ref().and_then(|view| view.fetched_at.as_ref()) { "{updated_at(time)}" } }
+                a { href: "https://open-meteo.com/", target: "_blank", rel: "noopener noreferrer", "Open-Meteo ↗" }
             }
         }
     }

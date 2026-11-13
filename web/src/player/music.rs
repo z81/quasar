@@ -198,22 +198,28 @@ fn time_label(milliseconds: u64) -> String {
 }
 
 #[component]
-pub(super) fn MusicPanel(state: ControlState) -> Element {
+pub(super) fn MusicPanel(state: ControlState, expanded: bool) -> Element {
     let duid = (state.selected)();
     rsx! {
-        if !duid.is_empty() { MusicForStation { key: "{duid}", state, duid } }
+        if !duid.is_empty() { MusicForStation { key: "{duid}", state, duid, expanded } }
     }
 }
 
 #[component]
-fn MusicForStation(state: ControlState, duid: String) -> Element {
+fn MusicForStation(state: ControlState, duid: String, expanded: bool) -> Element {
     let editor = Editor {
         status: use_signal(|| None::<MusicStatus>),
         received_at: use_signal(js_sys::Date::now),
         busy: use_signal(|| false),
         error: use_signal(|| None::<String>),
         notice: use_signal(|| None::<String>),
-        tab: use_signal(String::new),
+        tab: use_signal(move || {
+            if expanded {
+                "queue".into()
+            } else {
+                String::new()
+            }
+        }),
         query: use_signal(String::new),
         content: use_signal(|| None::<Content>),
         content_error: use_signal(|| None::<String>),
@@ -320,6 +326,23 @@ fn MusicForStation(state: ControlState, duid: String) -> Element {
         && !(editor.busy)();
     let shuffle = snapshot.shuffle.unwrap_or(false);
     let repeat = snapshot.repeat.as_deref().unwrap_or("off");
+    let next_repeat = match repeat {
+        "off" => "context",
+        "context" => "track",
+        _ => "off",
+    };
+    let repeat_label = match repeat {
+        "context" => "Повтор очереди",
+        "track" => "Повтор трека",
+        _ => "Без повтора",
+    };
+    let player = (state.player)();
+    let transport_enabled = state.can_send();
+    let can_pause = player.as_ref().is_some_and(|p| p.capabilities.pause);
+    let source = player
+        .as_ref()
+        .and_then(|p| p.source.clone())
+        .unwrap_or_else(|| "Музыка".into());
     let saved = (editor.saved)();
     let tab = (editor.tab)();
     let content = (editor.content)();
@@ -374,37 +397,58 @@ fn MusicForStation(state: ControlState, duid: String) -> Element {
                         span { "{time_label(duration)}" }
                     }
                 }
-                div { class: "music-actions",
-                    button { class: "music-mode", disabled: !can_shuffle, aria_pressed: "{shuffle}", aria_label: "Перемешать", title: "Перемешать", onclick: move |_| perform(state, shuffle_duid.clone(), editor, json!({"action":"shuffle","enabled":!shuffle})), Icon { name: "shuffle", size: 17 } }
-                    label { class: "music-repeat", title: "Режим повтора", Icon { name: "repeat", size: 17 }
-                        select { value: "{repeat}", disabled: !can_repeat, aria_label: "Режим повтора", onchange: move |event| perform(state, repeat_duid.clone(), editor, json!({"action":"repeat","mode":event.value()})),
-                            option { value: "off", "Без повтора" } option { value: "context", "Повтор очереди" } option { value: "track", "Повтор трека" }
+                div { class: "music-actions", role: "group", aria_label: "Управление воспроизведением",
+                    button { class: "music-mode", disabled: !can_shuffle, aria_pressed: shuffle, aria_label: "Перемешать", title: "Перемешать", onclick: move |_| perform(state, shuffle_duid.clone(), editor, json!({"action":"shuffle","enabled":!shuffle})), Icon { name: "shuffle", size: 20 } }
+                    for (action, icon, label, available) in [
+                        ("previous", "previous", "Предыдущий трек", player.as_ref().is_some_and(|p| p.capabilities.previous)),
+                        if can_pause { ("pause", "pause", "Пауза", true) } else { ("resume", "play", "Продолжить", player.as_ref().is_some_and(|p| p.capabilities.resume)) },
+                        ("next", "next", "Следующий трек", player.as_ref().is_some_and(|p| p.capabilities.next)),
+                    ] {
+                        button { class: if matches!(action, "pause" | "resume") { "player-button player-toggle" } else { "player-button" }, disabled: !transport_enabled || !available,
+                            aria_label: label, title: label, onclick: move |_| api::player_action(state, action, None), Icon { name: icon, size: 23 }
                         }
                     }
-                    if !uri.is_empty() {
-                        button { class: "music-mode music-save", disabled: !can_save || saved.is_none(), aria_pressed: "{saved.unwrap_or(false)}", aria_label: if saved == Some(true) { "Убрать из любимых" } else { "В любимые" }, title: if saved == Some(true) { "Убрать из любимых" } else { "В любимые" }, onclick: move |_| perform(state, save_duid.clone(), editor, json!({"action":"save","uri":save_uri,"saved":!saved.unwrap_or(false)})), Icon { name: "heart", size: 17 } }
+                    button { class: "music-mode music-repeat", disabled: !can_repeat, aria_pressed: repeat != "off", aria_label: "{repeat_label}", title: "{repeat_label}",
+                        onclick: move |_| perform(state, repeat_duid.clone(), editor, json!({"action":"repeat","mode":next_repeat})),
+                        Icon { name: "repeat", size: 20 }
+                        if repeat == "track" { span { class: "repeat-one", "1" } }
                     }
-                    button { class: "music-mode music-more", r#type: "button", aria_label: "Открыть меню музыки", title: "Очередь, поиск и другие функции", aria_haspopup: "dialog", "popovertarget": "music-tools", "popovertargetaction": "show",
-                        onclick: move |_| {
-                            let mut editor = editor;
-                            let tab = editor.tab.peek().clone();
-                            if tab.is_empty() { editor.tab.set("queue".into()); }
-                            else if tab != "search" { section(state, popup_duid.clone(), editor, tab); }
-                        },
-                        Icon { name: "more", size: 22 }
+                }
+                button { class: "music-source", r#type: "button", aria_label: "Открыть меню музыки", title: "Очередь, поиск и другие функции", aria_haspopup: if expanded { None } else { Some("dialog") },
+                    "popovertarget": if expanded { None } else { Some("music-tools") }, "popovertargetaction": if expanded { None } else { Some("show") },
+                    onclick: move |_| {
+                        let mut editor = editor;
+                        let tab = editor.tab.peek().clone();
+                        if tab.is_empty() { editor.tab.set("queue".into()); }
+                        else if tab != "search" { section(state, popup_duid.clone(), editor, tab); }
+                        if expanded { document::eval("document.getElementById('music-tools')?.scrollIntoView({behavior:'smooth',block:'start'});"); }
+                    },
+                    if source == "Spotify" {
+                        svg { class: "music-source-mark", width: "23", height: "23", view_box: "0 0 24 24", "aria-hidden": "true",
+                            circle { cx: "12", cy: "12", r: "11", fill: "#56dd8e" }
+                            path { d: "M5.5 8.7c4.6-1.6 9-1.2 13 1 M6.3 12c3.9-1.3 7.7-1 11 1 M7 15.3c3.1-.9 6.2-.7 9 .7", fill: "none", stroke: "#06354e", stroke_width: "1.8", stroke_linecap: "round" }
+                        }
                     }
+                    else { Icon { name: "music", size: 17 } }
+                    span { "{source}" } Icon { name: "chevron", size: 14 }
                 }
             }
             if let Some(error) = (editor.error)() { p { class: "form-feedback failure", role: "alert", "{error}" } }
             if let Some(notice) = (editor.notice)() { p { class: "player-note", role: "status", "{notice}" } }
-            div { id: "music-tools", class: "music-popup", "popover": "auto", role: "dialog", aria_labelledby: "music-tools-title",
+            div { id: "music-tools", class: if expanded { "music-popup music-library" } else { "music-popup" }, "popover": if expanded { None } else { Some("auto") }, role: if expanded { "region" } else { "dialog" }, aria_labelledby: "music-tools-title",
                 div { class: "music-popup-heading",
                     h2 { id: "music-tools-title", "Музыка" }
-                    button { class: "music-icon-button", r#type: "button", aria_label: "Закрыть меню музыки", title: "Закрыть", "popovertarget": "music-tools", "popovertargetaction": "hide", Icon { name: "close", size: 20 } }
+                    div { class: "music-popup-actions",
+                        if !uri.is_empty() {
+                            button { class: "music-icon-button music-save", disabled: !can_save || saved.is_none(), aria_pressed: saved.unwrap_or(false), aria_label: if saved == Some(true) { "Убрать из любимых" } else { "В любимые" }, title: if saved == Some(true) { "Убрать из любимых" } else { "В любимые" }, onclick: move |_| perform(state, save_duid.clone(), editor, json!({"action":"save","uri":save_uri,"saved":!saved.unwrap_or(false)})), Icon { name: "heart", size: 19 } }
+                        }
+                        button { class: "music-icon-button", disabled: !transport_enabled, aria_label: "Остановить воспроизведение", title: "Остановить", onclick: move |_| api::player_action(state,"stop",None), Icon { name: "stop", size: 17 } }
+                        if !expanded { button { class: "music-icon-button", r#type: "button", aria_label: "Закрыть меню музыки", title: "Закрыть", "popovertarget": "music-tools", "popovertargetaction": "hide", Icon { name: "close", size: 20 } } }
+                    }
                 }
             div { class: "music-tabs", role: "group", aria_label: "Музыка",
                 for (name, label, icon) in [("queue", "Очередь", "list"), ("search", "Поиск", "search"), ("lyrics", "Текст песни", "file"), ("artist", "Исполнитель", "user"), ("related", "Похожие", "spark")] {
-                    button { class: if tab == name { "music-tab active" } else { "music-tab" }, aria_pressed: "{tab == name}", autofocus: name == "queue", onclick: move |_| { let mut editor = editor; editor.tab.set(name.into()); }, Icon { name: icon, size: 16 } "{label}" }
+                    button { class: if tab == name { "music-tab active" } else { "music-tab" }, aria_pressed: "{tab == name}", autofocus: !expanded && name == "queue", onclick: move |_| { let mut editor = editor; editor.tab.set(name.into()); }, Icon { name: icon, size: 16 } "{label}" }
                 }
             }
             if !tab.is_empty() {

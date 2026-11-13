@@ -9,28 +9,28 @@ use serde_json::Value;
 use crate::{api, icons::Icon, state::ControlState};
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
-struct Timer {
-    id: String,
+pub(crate) struct Timer {
+    pub(crate) id: String,
     title: String,
-    duration_seconds: u32,
+    pub(crate) duration_seconds: u32,
     remaining_ms: Option<i64>,
-    next_run_at: Option<String>,
+    pub(crate) next_run_at: Option<String>,
     enabled: bool,
-    status: String,
+    pub(crate) status: String,
     last_error: Option<String>,
     active_run_id: Option<String>,
 }
 
 impl Timer {
-    fn active(&self) -> bool {
+    pub(crate) fn active(&self) -> bool {
         self.active_run_id.is_some()
     }
 
-    fn running(&self) -> bool {
+    pub(crate) fn running(&self) -> bool {
         self.enabled && self.next_run_at.is_some() && !self.active()
     }
 
-    fn remaining(&self, now: i64) -> i64 {
+    pub(crate) fn remaining(&self, now: i64) -> i64 {
         if self.status == "paused" {
             return self.remaining_ms.unwrap_or_default().max(0);
         }
@@ -45,7 +45,7 @@ impl Timer {
         0
     }
 
-    fn status_label(&self, remaining: i64) -> &'static str {
+    pub(crate) fn status_label(&self, remaining: i64) -> &'static str {
         match self.status.as_str() {
             "paused" => "На паузе",
             "sent" => "Отправлен на колонку",
@@ -64,10 +64,10 @@ impl Timer {
 }
 
 #[derive(Clone, Deserialize, PartialEq)]
-struct TimerList {
-    items: Vec<Timer>,
-    persistent: bool,
-    server_time: String,
+pub(crate) struct TimerList {
+    pub(crate) items: Vec<Timer>,
+    pub(crate) persistent: bool,
+    pub(crate) server_time: String,
     #[serde(default)]
     native_alarm_supported: Option<bool>,
 }
@@ -85,7 +85,7 @@ struct PanelData {
     clock_offset: Signal<i64>,
 }
 
-fn timestamp(value: &str) -> Option<i64> {
+pub(crate) fn timestamp(value: &str) -> Option<i64> {
     let millis = js_sys::Date::parse(value);
     millis.is_finite().then_some(millis as i64)
 }
@@ -94,7 +94,7 @@ fn clock() -> i64 {
     js_sys::Date::now() as i64
 }
 
-fn duration(milliseconds: i64) -> String {
+pub(crate) fn duration(milliseconds: i64) -> String {
     let seconds = (milliseconds.max(0) + 999) / 1000;
     format!(
         "{:02}:{:02}:{:02}",

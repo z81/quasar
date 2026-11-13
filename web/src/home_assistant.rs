@@ -1,6 +1,6 @@
 mod controls;
-mod dial;
-mod model;
+pub(crate) mod dial;
+pub(crate) mod model;
 mod presentation;
 mod tile;
 

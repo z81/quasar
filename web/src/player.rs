@@ -1,100 +1,79 @@
 use dioxus::prelude::*;
+use serde_json::json;
 
-use crate::api;
-use crate::icons::Icon;
-use crate::state::ControlState;
+use crate::{
+    api,
+    home_assistant::{dial::Dial, model::Control},
+    icons::Icon,
+    state::ControlState,
+};
 
 mod music;
 
 #[component]
 pub fn PlayerCard(state: ControlState) -> Element {
-    rsx! { PlayerControls { key: "{state.selected}", state } }
+    rsx! { PlayerControls { key: "{state.selected}", state, expanded: false } }
 }
 
 #[component]
-fn PlayerControls(state: ControlState) -> Element {
-    let mut volume = use_signal(String::new);
-    let mut dirty = use_signal(|| false);
-    use_effect(move || {
-        let snapshot = (state.player)()
-            .and_then(|player| player.volume)
-            .map(|value| value.to_string())
-            .unwrap_or_default();
-        if !dirty() && *volume.peek() != snapshot {
-            volume.set(snapshot);
-        } else if dirty() && *volume.peek() == snapshot {
-            dirty.set(false);
-        }
-    });
+pub fn MusicPage(state: ControlState) -> Element {
+    rsx! { PlayerControls { key: "{state.selected}", state, expanded: true } }
+}
+
+#[component]
+fn PlayerControls(state: ControlState, expanded: bool) -> Element {
     let player = (state.player)();
     let enabled = state.can_send();
-    let level = volume()
-        .parse::<f64>()
-        .ok()
-        .filter(|level| {
-            level.is_finite() && *level >= 0.0 && *level <= 100.0 && level.fract() == 0.0
-        })
-        .map(|level| level as u8);
-    let can_volume = enabled
-        && player
+    let can_volume = enabled && player.as_ref().is_some_and(|p| p.capabilities.set_volume);
+    let album = player.as_ref().and_then(|p| p.album.clone());
+    let cover_url = player.as_ref().and_then(|p| p.cover_url.clone());
+    let device_name = state
+        .device()
+        .map(|device| device.label().to_owned())
+        .unwrap_or_else(|| "Колонка".into());
+    let volume = Control {
+        id: "volume".into(),
+        label: "Громкость".into(),
+        kind: "range".into(),
+        value: player
             .as_ref()
-            .is_some_and(|player| player.capabilities.set_volume);
-    let can_pause = player
-        .as_ref()
-        .is_some_and(|player| player.capabilities.pause);
-    let can_resume = player
-        .as_ref()
-        .is_some_and(|player| player.capabilities.resume);
-    let spotify_track = player.as_ref().is_some_and(|player| {
-        player.source.as_deref() == Some("Spotify")
-            && matches!(player.state.as_str(), "playing" | "paused")
-            && player.title.is_some()
-    });
-    let album = player.as_ref().and_then(|player| player.album.clone());
-    let cover_url = player.as_ref().and_then(|player| player.cover_url.clone());
+            .and_then(|p| p.volume)
+            .map_or(serde_json::Value::Null, |value| json!(value)),
+        min: Some(0.0),
+        max: Some(100.0),
+        step: Some(1.0),
+        unit: Some("%".into()),
+        options: vec![],
+    };
     rsx! {
-        section { class: if spotify_track { "card player-card has-track" } else { "card player-card" }, aria_label: "Плеер выбранной колонки",
-            div { class: "player-now",
+        document::Stylesheet { href: asset!("/assets/home-assistant-dial.css") }
+        document::Stylesheet { href: asset!("/assets/ocean-player.css") }
+        div { class: "ocean-player-wrap",
+            section { class: if expanded { "ocean-player is-expanded" } else { "ocean-player" }, aria_label: "Плеер выбранной колонки",
                 AlbumArt { cover_url, album: album.clone() }
                 div { class: "player-track",
-                    h2 { if let Some(title) = player.as_ref().and_then(|player| player.title.as_ref()) { "{title}" } else { "Музыка на колонке" } }
-                    if let Some(artist) = player.as_ref().and_then(|player| player.artist.as_ref()) { p { class: "player-artist", "{artist}" } }
-                    if let Some(album) = album {
-                        p { class: "player-album", "{album}" }
+                    h2 { title: player.as_ref().and_then(|p| p.title.clone()).unwrap_or_else(|| "Музыка на колонке".into()),
+                        if let Some(title) = player.as_ref().and_then(|p| p.title.as_ref()) { "{title}" } else { "Музыка на колонке" }
                     }
-                    if player.as_ref().is_some_and(|player| player.muted == Some(true)) {
-                        p { class: "player-muted", "Звук выключен" }
+                    p { class: "player-artist",
+                        if let Some(artist) = player.as_ref().and_then(|p| p.artist.as_ref()) { "{artist}" }
+                        if let Some(album) = album { if player.as_ref().and_then(|p| p.artist.as_ref()).is_some() { " · " } "{album}" }
+                    }
+                    if player.as_ref().is_some_and(|p| p.muted == Some(true)) { p { class: "player-muted", "Звук выключен" } }
+                }
+                div { class: "player-volume-dial",
+                    Dial { control: volume, entity_name: device_name, disabled: !can_volume,
+                        onchange: move |(_, value): (String, serde_json::Value)| {
+                            if let Some(level) = value.as_f64().filter(|v| v.is_finite() && (0.0..=100.0).contains(v) && v.fract() == 0.0) {
+                                api::player_action(state, "set_volume", Some(level as u8));
+                            }
+                        }
                     }
                 }
+                music::MusicPanel { state, expanded }
+                if let Some(error) = (state.player_error)() { p { class: "player-note failure", "Плеер недоступен: {error}" } }
+                else if player.as_ref().is_none_or(|p| p.updated_at.is_none()) { p { class: "player-note", "Ждём состояние от колонки…" } }
             }
-            div { class: "player-console",
-                div { class: "player-controls", role: "group", aria_label: "Управление воспроизведением",
-                    for (action,icon,label,available) in [
-                        ("previous","previous","Предыдущий трек",player.as_ref().is_some_and(|player| player.capabilities.previous)),
-                        if can_pause { ("pause", "pause", "Пауза", true) } else { ("resume", "play", "Продолжить", can_resume) },
-                        ("next","next","Следующий трек",player.as_ref().is_some_and(|player| player.capabilities.next)),
-                    ] {
-                        button { class: if matches!(action, "pause" | "resume") { "icon-button player-button player-toggle" } else { "icon-button player-button" }, disabled: !enabled || !available, aria_label: label, title: label, onclick: move |_| api::player_action(state, action, None), Icon { name: icon, size: 22 } }
-                    }
-                    button { class: "icon-button player-button player-stop", disabled: !enabled, aria_label: "Остановить воспроизведение", title: "Остановить", onclick: move |_| api::player_action(state,"stop",None), Icon { name: "stop", size: 17 } }
-                }
-                form { class: "volume-form", onsubmit: move |event| {
-                    event.prevent_default(); if let Some(level) = level.filter(|_| can_volume) { volume.set(level.to_string()); dirty.set(true); api::player_action(state,"set_volume",Some(level)); }
-                },
-                    div { class: "volume-inputs",
-                        button { class: "icon-button volume-step", r#type: "button", disabled: !enabled, aria_label: "Тише", title: "Тише", onclick: move |_| api::quick_action(state, "sound_quiter", "Тише"), Icon { name: "volume-down", size: 17 } }
-                        input { r#type: "range", min: "0", max: "100", step: "1", aria_label: "Желаемая громкость", value: level.unwrap_or(0), style: "--range-progress: {level.unwrap_or(0)}%;", disabled: !can_volume, oninput: move |event| { dirty.set(true); volume.set(event.value()); } }
-                        button { class: "icon-button volume-step", r#type: "button", disabled: !enabled, aria_label: "Громче", title: "Громче", onclick: move |_| api::quick_action(state, "sound_louder", "Громче"), Icon { name: "volume-up", size: 17 } }
-                        input { id: "volume-value", class: "volume-number", r#type: "text", inputmode: "numeric", pattern: "[0-9]+([.][0-9]*)?", maxlength: "6", aria_label: "Громкость в процентах", placeholder: "—", value: "{volume}", disabled: !can_volume, oninput: move |event| { dirty.set(true); volume.set(event.value()); } }
-                        span { class: "form-help", "%" }
-                        button { class: "icon-button volume-apply", r#type: "submit", aria_label: "Применить громкость", title: "Применить громкость", disabled: !can_volume || level.is_none() || !dirty(), Icon { name: "check", size: 18 } }
-                    }
-                }
-            }
-            if dirty() && level.is_none() { p { class: "player-note failure", "Введите целое число от 0 до 100." } }
-            if let Some(error) = (state.player_error)() { p { class: "player-note failure", "Плеер недоступен: {error}" } }
-            else if player.as_ref().is_none_or(|player| player.updated_at.is_none()) { p { class: "player-note", "Ждём состояние от колонки. Недоступные для текущего источника команды отключены." } }
-            music::MusicPanel { state }
         }
     }
 }

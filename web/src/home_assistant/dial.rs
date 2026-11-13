@@ -120,7 +120,7 @@ fn adjustment_key(key: &Key) -> bool {
 }
 
 #[component]
-pub(super) fn Dial(
+pub(crate) fn Dial(
     control: Control,
     entity_name: String,
     disabled: bool,

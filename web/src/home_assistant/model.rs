@@ -77,7 +77,7 @@ pub(super) struct Reading {
 }
 
 #[derive(Clone, Deserialize, PartialEq)]
-pub(super) struct Control {
+pub(crate) struct Control {
     pub id: String,
     pub label: String,
     pub kind: String,
@@ -91,7 +91,7 @@ pub(super) struct Control {
 }
 
 #[derive(Clone, Deserialize, PartialEq)]
-pub(super) struct Choice {
+pub(crate) struct Choice {
     pub value: String,
     pub label: String,
 }

@@ -1,10 +1,10 @@
 mod access;
 mod animation_timeline;
-mod automations;
-mod device_tools;
 mod api;
+mod automations;
 mod composer;
 mod device_access;
+mod device_tools;
 mod display_settings;
 mod display_studio;
 mod dnd_settings;
@@ -12,10 +12,10 @@ mod favorites;
 mod history;
 mod home_assistant;
 mod icons;
-mod midi_display;
 mod maintenance;
+mod midi_display;
+mod overview;
 mod packages;
-mod system_sounds;
 mod player;
 mod ring_light;
 mod schedules;
@@ -28,6 +28,7 @@ mod speaker_profiles;
 mod state;
 mod station;
 mod station_preview;
+mod system_sounds;
 mod timers;
 mod weather;
 mod whisper_settings;
@@ -130,32 +131,43 @@ fn App() -> Element {
         }
     });
     let panel = (state.panel)();
+    let font_faces = [
+        (400, asset!("/assets/ocean/manrope-400.woff2")),
+        (500, asset!("/assets/ocean/manrope-500.woff2")),
+        (600, asset!("/assets/ocean/manrope-600.woff2")),
+        (700, asset!("/assets/ocean/manrope-700.woff2")),
+        (800, asset!("/assets/ocean/manrope-800.woff2")),
+    ].into_iter().map(|(weight, url)| format!("@font-face {{ font-family: Manrope; src: url('{url}') format('woff2'); font-weight: {weight}; font-display: swap; }}")).collect::<String>();
+    let background = asset!("/assets/ocean/background.webp");
     rsx! {
         document::Title { "Quasar — пульт управления" }
         document::Link { rel: "manifest", href: "/ui/app.webmanifest" }
         document::Script { r#type: "module", src: asset!("/assets/pwa.js") }
         document::Stylesheet { href: asset!("/assets/control.css") }
-        div { class: if state.allowed() { "app" } else { "app auth-app" }, "data-theme": (state.theme)().name(),
+        document::Stylesheet { href: asset!("/assets/ocean.css") }
+        document::Stylesheet { href: asset!("/assets/ocean-sections.css") }
+        document::Style { "{font_faces}" }
+        div { class: if state.allowed() { "app" } else { "app auth-app" }, "data-theme": (state.theme)().name(), style: "--ocean-background: url('{background}');",
             if !state.allowed() { access::LoginGate { state } } else {
             a { class: "skip-link", href: "#main-content", "К содержимому" }
             sidebar::Sidebar { state }
             div { class: "workspace",
-                header { class: "topbar",
-                    div { class: "breadcrumbs", span { if let Some(device) = state.device() { "{device.label()}" } else { "Пульт управления" } } Icon { name: "chevron", size: 13 } strong { "{panel.label()}" } }
-                    span { class: "topbar-label", span { class: "tiny-orbit" } "QUASAR CONTROL" }
-                }
                 main { class: "main", id: "main-content", tabindex: "-1",
-                    div { class: "page-heading",
+                    sidebar::SectionNavigation { state }
+                    if panel != Panel::Control { div { class: "page-heading",
                         div {
                             h1 { "{panel.label()}" }
                             p { match panel {
                                 Panel::Control => "Музыка, громкость и команды выбранной колонке.",
+                                Panel::Music => "Воспроизведение, поиск и ваша музыка.",
+                                Panel::Home => "Устройства, комнаты и управление умным домом.",
                                 Panel::History => "Запросы, ответы Алисы и результаты обработки.",
                                 Panel::Advanced => "Отправляйте колонке команды её собственного протокола.",
                                 Panel::Favorites => "Любимые команды для каждого дня. Сохраните и запускайте одним нажатием.",
                                 Panel::Schedules => "Планы на утро, важные дела и время для себя.",
                                 Panel::Timers => "Для чая, готовки и короткой паузы. Колонка напомнит сигналом.",
                                 Panel::Settings => "Модели, речь и интеграции сервера. Имя и голосовые настройки колонок.",
+                                Panel::StationSettings => "Голос, шёпот, расписание тишины и звук колонки.",
                                 Panel::Access => "Вход в пульт и ключи для ваших интеграций.",
                                 Panel::DeviceAccess => "Терминал и файлы выбранной колонки через ADB.",
                                 Panel::MidiDisplay => "Свои надписи, рисунки и анимации дисплея и верхней подсветки Миди.",
@@ -165,7 +177,7 @@ fn App() -> Element {
                                 Panel::Maintenance => "Пакеты, службы, системные звуки и резервные копии.",
                             } }
                         }
-                    }
+                    } }
                     if let Some(error) = (state.server_error)() {
                         div { class: "notice error", role: "alert", Icon { name: "alert" } span { "{error}. Повторяем подключение автоматически." } }
                     }
@@ -176,24 +188,27 @@ fn App() -> Element {
                     }
                     match panel {
                         Panel::Control => rsx! {
-                            div { class: "dashboard",
-                                div { class: "dashboard-hero",
+                            div { class: "ocean-dashboard",
+                                div { class: "ocean-left-column",
+                                    composer::Composer { state }
                                     player::PlayerCard { state }
-                                    div { class: "dashboard-station", aria_label: "3D-вид колонки",
-                                        station::StationModel { state, duid: (state.selected)(), show_details: false }
-                                    }
+                                    overview::Today { state }
                                 }
-                                home_assistant::HomeAssistant { state }
-                                composer::Composer { state }
-                                history::History { state, compact: true }
-                                weather::WeatherCard { state }
+                                div { class: "ocean-right-column",
+                                    overview::StationOverview { state }
+                                    weather::WeatherCard { state }
+                                }
+                                div { class: "ocean-recent", history::History { state, compact: true } }
                             }
                         },
+                        Panel::Music => rsx! { player::MusicPage { state } },
+                        Panel::Home => rsx! { home_assistant::HomeAssistant { state } },
                         Panel::History => rsx! { history::History { state, compact: false } },
                         Panel::Favorites => rsx! { favorites::Favorites { state } },
                         Panel::Schedules => rsx! { schedules::Schedules { state } },
                         Panel::Timers => rsx! { timers::Timers { state } },
-                        Panel::Settings => rsx! { settings::Settings { state } },
+                        Panel::Settings => rsx! { settings::Settings { key: "{panel.label()}", state } },
+                        Panel::StationSettings => rsx! { settings::Settings { key: "{panel.label()}", state, station: true } },
                         Panel::Access => rsx! { access::Access { state } },
                         Panel::DeviceAccess => rsx! { device_access::DeviceAccessPage { state } },
                         Panel::MidiDisplay => rsx! { device_access::DeviceAccessPage { state, mode: device_access::AccessMode::Display } },

@@ -88,12 +88,15 @@ impl Mode {
 pub enum Panel {
     #[default]
     Control,
+    Music,
+    Home,
     History,
     Advanced,
     Favorites,
     Schedules,
     Timers,
     Settings,
+    StationSettings,
     DeviceAccess,
     MidiDisplay,
     SmartHome,
@@ -106,16 +109,19 @@ pub enum Panel {
 impl Panel {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Control => "Управление",
+            Self::Control => "Пульт",
+            Self::Music => "Музыка",
+            Self::Home => "Дом",
             Self::History => "История команд",
             Self::Advanced => "Директивы",
             Self::Favorites => "Избранное",
             Self::Schedules => "Будильники",
             Self::Timers => "Таймеры",
             Self::Settings => "Настройки",
+            Self::StationSettings => "Настройки колонки",
             Self::DeviceAccess => "Терминал и файлы",
             Self::MidiDisplay => "Своя Миди",
-            Self::SmartHome => "Умный дом",
+            Self::SmartHome => "Zigbee и Matter",
             Self::Automations => "Сценарии и офлайн-будильники",
             Self::DeviceTools => "Диагностика и Bluetooth",
             Self::Maintenance => "Обслуживание",

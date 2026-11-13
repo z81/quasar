@@ -6,8 +6,8 @@ use crate::icons::Icon;
 use crate::state::{ControlState, Device};
 
 #[component]
-pub fn Settings(state: ControlState) -> Element {
-    let mut tab = use_signal(|| "server");
+pub fn Settings(state: ControlState, #[props(default)] station: bool) -> Element {
+    let mut tab = use_signal(move || if station { "station" } else { "server" });
     let device = state.device();
     rsx! {
         div { class: "settings-tabs", role: "tablist", aria_label: "Область настроек",

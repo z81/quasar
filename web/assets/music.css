@@ -108,3 +108,11 @@
 @media (max-width: 760px) {
   .music-popup { width: calc(100vw - 24px); max-height: calc(100dvh - 32px); padding: 12px; border-radius: 18px; }
 }
+
+/* Ocean: library surfaces follow the application theme in both modes. */
+.music-popup { border-color: var(--line); background: var(--surface); background-image: none; box-shadow: 0 24px 72px #001b3b33; }
+.music-popup .music-tabs { border-color: var(--line); background: var(--surface-soft); }
+.music-popup .music-tab.active { background: var(--accent-soft); color: var(--accent-text); border-color: var(--line); box-shadow: none; }
+.music-popup .music-content { border-color: var(--line); background: var(--surface-soft); }
+.music-popup .music-auth { border-color: var(--line); }
+.music-popup .music-track-row { border-top-color: var(--line); }

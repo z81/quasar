@@ -12,18 +12,18 @@ use crate::state::ControlState;
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Schedule {
-    id: String,
+    pub(crate) id: String,
     kind: String,
-    title: String,
+    pub(crate) title: String,
     text: String,
-    time: String,
+    pub(crate) time: String,
     date: Option<String>,
     weekdays: Vec<u8>,
     timezone: String,
-    enabled: bool,
-    next_run_at: Option<String>,
+    pub(crate) enabled: bool,
+    pub(crate) next_run_at: Option<String>,
     last_run_at: Option<String>,
-    status: String,
+    pub(crate) status: String,
     last_error: Option<String>,
     active_run_id: Option<String>,
     ringing_until: Option<String>,
@@ -31,11 +31,11 @@ pub struct Schedule {
 }
 
 impl Schedule {
-    fn alarm(&self) -> bool {
+    pub(crate) fn alarm(&self) -> bool {
         self.kind == "alarm"
     }
 
-    fn active(&self) -> bool {
+    pub(crate) fn active(&self) -> bool {
         self.alarm() && self.active_run_id.is_some()
     }
 
@@ -47,7 +47,7 @@ impl Schedule {
         }
     }
 
-    fn status_label(&self) -> &'static str {
+    pub(crate) fn status_label(&self) -> &'static str {
         match self.status.as_str() {
             "ringing" => "Звонит",
             "sent" if self.alarm() && self.active() => "Отправлен на колонку",
@@ -63,7 +63,7 @@ impl Schedule {
         }
     }
 
-    fn repetition(&self) -> String {
+    pub(crate) fn repetition(&self) -> String {
         if let Some(date) = &self.date {
             return time::calendar_date(date);
         }
@@ -94,8 +94,8 @@ const WEEKDAYS: [(u8, &str); 7] = [
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct ScheduleList {
-    items: Vec<Schedule>,
-    persistent: bool,
+    pub(crate) items: Vec<Schedule>,
+    pub(crate) persistent: bool,
     timezone: String,
     server_time: String,
     #[serde(default)]

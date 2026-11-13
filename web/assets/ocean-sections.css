@@ -1,0 +1,181 @@
+/* Ocean's panel and form language, shared by the full device tools. */
+.app :is(.settings-card, .server-settings-fields, .favorite-card, .schedule-item, .timer-item, .smart-home-card, .device-access, .tools-connection, .tools-health, .tools-history, .tools-bluetooth, .tools-logs, .display-studio, .auth-card) {
+  border-color: var(--line);
+  border-radius: 26px;
+  background: var(--surface);
+  box-shadow: 0 4px 14px #063b5a08;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.app :is(.settings-card, .server-settings-fields, .favorite-card, .schedule-item, .timer-item, .smart-home-card, .device-access, .tools-connection, .tools-health, .tools-history, .tools-bluetooth, .tools-logs, .display-studio, .auth-card)::before { content: none; }
+.app :is(.settings-card, .smart-home-card, .device-access, .tools-connection, .tools-health, .tools-history, .tools-bluetooth, .tools-logs, .display-studio) { padding: 26px; }
+.app :is(.settings-card, .smart-home-card, .device-access-heading, .display-studio-heading) h2 { font-size: 24px; font-weight: 800; line-height: 1.3; letter-spacing: -.7px; }
+.app :is(.settings-card, .device-access, .display-studio, .tools-health, .tools-bluetooth) .card-kicker { font-size: 11px; letter-spacing: .8px; }
+.app :is(.settings-card, .device-access, .tools-connection, .smart-home-card, .display-studio) :is(.settings-intro, .device-access-help, .smart-home-help) { font-size: 14px; line-height: 1.65; }
+.app :is(.settings-card, .server-settings, .device-access, .device-tools, .smart-home-page, .automations-page, .maintenance-page, .display-studio, .auth-shell) .form-field { gap: 8px; font-size: 14px; }
+.app :is(.settings-card, .server-settings, .device-access, .device-tools, .smart-home-page, .automations-page, .maintenance-page, .display-studio, .auth-shell) .form-field > span { font-size: 13px; font-weight: 650; }
+.app :is(.settings-card, .server-settings, .device-access, .device-tools, .smart-home-page, .automations-page, .maintenance-page, .display-studio, .auth-shell) .form-field :is(input, select, textarea) { min-height: 44px; border-radius: 12px; background: var(--surface); color: var(--text); font-size: 14px; }
+.app :is(.settings-card, .server-settings, .device-access, .device-tools, .smart-home-page, .automations-page, .maintenance-page, .display-studio, .auth-shell) .form-field :is(input, textarea)::placeholder { color: var(--muted); opacity: 1; }
+.app :is(.settings-card, .server-settings, .device-access, .device-tools, .smart-home-page, .automations-page, .maintenance-page, .display-studio, .auth-shell) :is(.form-help, .field-help, .form-field small) { font-size: 12px; line-height: 1.6; }
+.app .toggle-field { gap: 16px; padding: 16px 0; }
+.app .toggle-field strong { font-size: 14px; font-weight: 650; }
+.app .toggle-field small { font-size: 12px; line-height: 1.55; }
+.app .toggle-field > input[type="checkbox"] { appearance: none; position: relative; width: 46px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-hover); transition: background .18s, border-color .18s; }
+.app .toggle-field > input[type="checkbox"]::before { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--secondary); box-shadow: 0 1px 3px #062c4533; transition: transform .18s; }
+.app .toggle-field > input[type="checkbox"]:checked { border-color: var(--accent); background: var(--accent-gradient); }
+.app .toggle-field > input[type="checkbox"]:checked::before { background: #fff; transform: translateX(18px); }
+.app .toggle-field > input[type="checkbox"]:disabled { opacity: .45; cursor: not-allowed; }
+.app .toggle-field > input[type="checkbox"]:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+.app :is(.settings-tabs, .device-access-tabs) { border-radius: 16px; padding: 4px; border-color: var(--line); background: var(--surface-soft); }
+.app :is(.settings-tab, .device-access-tabs button) { min-height: 42px; border-radius: 12px; font-size: 14px; font-weight: 650; }
+.app :is(.settings-tab.active, .device-access-tabs button.active) { background: var(--accent-gradient); color: var(--on-accent); border-color: transparent; box-shadow: var(--accent-shadow); }
+.app .station-settings-stack { gap: 24px; }
+.app .server-settings-layout { gap: 20px; }
+.app .server-settings-fields { padding: 24px 26px 8px; }
+.app .server-settings-group { min-height: 42px; padding: 10px 14px; border-radius: 12px; font-size: 13px; }
+.app .server-settings-group.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 750; }
+.app .server-settings-group-heading h2 { font-size: 24px; font-weight: 800; letter-spacing: -.6px; }
+.app .server-setting-row { padding: 16px 0; }
+.app .server-setting-heading label { font-size: 14px; font-weight: 650; }
+.app .server-setting-footer code { font-size: 11px; }
+.app .server-setting-help summary { width: 30px; height: 30px; border-radius: 9px; }
+.app .server-setting-help-body { padding: 16px; border-radius: 14px; font-size: 13px; box-shadow: 0 12px 32px #062c4524; }
+.app .server-settings-savebar { padding: 16px 20px; border-radius: 18px; background: var(--surface-soft); }
+.app .server-settings-savebar strong { font-size: 14px; }
+.app .server-settings-savebar small { font-size: 12px; }
+.app .mcp-row { padding: 16px; border-radius: 16px; }
+.app .mcp-fields { grid-template-columns: minmax(100px, .6fr) minmax(0, 1.3fr) minmax(0, 1fr); }
+.app .mcp-token > label { font-size: 13px; font-weight: 650; }
+.app :is(.mcp-hint, .mcp-empty, .server-settings-intro p) { font-size: 13px; }
+.app :is(.mcp-row-actions, .server-setting-actions) .text-button { min-height: 32px; font-size: 12px; }
+.app :is(.security-note, .quiet-status, .schedule-intro) { padding: 16px 18px; border-radius: 16px; background: var(--surface-soft); color: var(--secondary); }
+.app .security-note, .app .schedule-intro p { font-size: 13px; }
+.app .quiet-status > strong { font-size: 14px; }
+.app :is(.created-token, .token-row) { border-radius: 14px; }
+.app .created-token strong, .app .token-row strong { font-size: 14px; }
+.app .created-token p, .app .token-row small { font-size: 12px; }
+.app .token-row { gap: 12px; }
+.app .auth-card { padding: 32px; }
+.app .auth-footer { font-size: 12px; }
+
+/* Saved commands and history keep their server delivery states. */
+.app .favorite-card { padding: 22px; }
+.app .favorite-heading h3 { font-size: 18px; font-weight: 750; line-height: 1.4; }
+.app .favorite-text { font-size: 14px; line-height: 1.65; }
+.app .favorite-bottom .form-help { font-size: 12px; }
+.app .favorite-heading .icon-button { width: 38px; height: 38px; border-radius: 12px; }
+.app .history-section > .card { border-radius: 26px; border-color: var(--line); background: var(--surface); box-shadow: 0 4px 14px #063b5a08; backdrop-filter: none; }
+.app .history-section > .card::before { content: none; }
+.app .history-title h2 { font-size: 24px; font-weight: 800; letter-spacing: -.6px; }
+.app .history-empty { min-height: 220px; }
+.app .history-empty h3 { font-size: 18px; font-weight: 750; line-height: 1.4; }
+.app .history-empty p { font-size: 14px; line-height: 1.6; max-width: 440px; }
+.app .history-note { font-size: 12px; }
+.app .history-row { padding: 20px 24px; gap: 16px; }
+.app .entry-icon { width: 40px; height: 40px; border-radius: 13px; }
+.app .entry-text { font-size: 14px; line-height: 1.6; }
+.app :is(.entry-meta, .entry-error, .delivery-status) { font-size: 12px; }
+.app .history-row-tools .icon-button { width: 36px; height: 36px; border-radius: 12px; }
+.app .history-search { min-height: 46px; border-radius: 14px; max-width: 480px; }
+.app .history-search input { font-size: 14px; }
+
+/* Scheduled actions use the same airy cards as the reference's Today widgets. */
+.app .schedule-list-heading h2 { font-size: 22px; font-weight: 800; }
+.app :is(.schedule-item, .timer-item) { padding: 24px; }
+.app .schedule-item.active-alarm { border-color: var(--accent); background: var(--surface-soft); }
+.app .schedule-kind-tabs { border-radius: 14px; }
+.app .schedule-kind { min-height: 42px; border-radius: 10px; font-size: 13px; }
+.app .schedule-kind.chosen { background: var(--accent-gradient); color: var(--on-accent); box-shadow: var(--accent-shadow); }
+.app .schedule-weekday { min-height: 42px; border-radius: 12px; font-size: 13px; }
+.app .schedule-weekday.chosen { background: var(--accent-soft); border-color: var(--accent); }
+.app .schedule-days-field > span, .app .schedule-toggle { font-size: 13px; }
+.app .schedule-time { font-size: 48px; font-weight: 800; letter-spacing: -1.8px; }
+.app .schedule-time-row > span { font-size: 13px; }
+.app .schedule-item h3 { font-size: 17px; font-weight: 750; }
+.app :is(.schedule-message, .schedule-ringing p) { font-size: 14px; }
+.app :is(.schedule-next, .schedule-meta, .schedule-ringing small, .schedule-error, .schedule-list-heading > div > span) { font-size: 12px; }
+.app .schedule-status { padding: 4px 9px; border-radius: 8px; }
+.app .schedule-ringing { border-radius: 16px; padding: 18px; }
+.app .timer-countdown { font-size: 48px; font-weight: 800; letter-spacing: -1.8px; }
+.app .timer-presets .suggestion { border-radius: 12px; font-size: 13px; min-height: 40px; }
+.app .timer-total, .app .timer-waiting { font-size: 13px; }
+.app .timer-duration .form-field input { font-size: 24px; }
+.app :is(.automation-node, .automation-connection) { padding: 20px; border-radius: 18px; background: var(--surface-soft); }
+.app .automation-node-header strong { font-size: 16px; }
+.app .automation-history { font-size: 14px; }
+.app .automation-log { font-size: 13px; }
+
+/* Device tools retain their native editor and display colours. */
+.app :is(.device-connection-settings, .smart-home-protocol, .smart-home-session, .smart-home-device, .tools-metric, .packages-service) { border-radius: 16px; }
+.app .device-connection-settings { padding: 14px 16px; }
+.app .device-connection-settings summary { font-size: 13px; }
+.app .device-file-shortcuts { border-radius: 14px; }
+.app :is(.device-file-filter, .device-file-location input) { min-height: 46px; border-radius: 12px; }
+.app .device-file-filter input, .app .device-file-location input { font-size: 14px; }
+.app .device-file-list { border-radius: 16px; }
+.app .device-file-entry { min-height: 46px; padding: 12px 14px; }
+.app .device-file-name { font-size: 13px; }
+.app .device-file-entry small { font-size: 11px; }
+.app .device-file-shortcut-copy strong { font-size: 13px; }
+.app :is(.device-file-editor, .device-terminal-shell) { border-radius: 18px; }
+.app .device-file-editor { padding: 20px; }
+.app .device-file-editor-heading strong { font-size: 16px; }
+.app .device-file-editor-heading small { font-size: 12px; }
+.app .device-file-text { border-radius: 12px; padding: 16px; }
+.app .device-file-placeholder strong { font-size: 16px; }
+.app .device-file-placeholder { font-size: 13px; }
+.app .tools-metric { padding: 20px; background: var(--surface-soft); }
+.app .tools-metric strong { font-size: 28px; font-weight: 800; }
+.app .tools-table, .app .tools-events { font-size: 13px; }
+.app .tools-table th, .app .tools-table td { padding: 12px; }
+.app .tools-log-output { padding: 18px; border-radius: 16px; background: var(--editor-bg); }
+.app .tools-bt-device { padding: 18px 0; }
+.app .tools-bt-device strong { font-size: 15px; }
+.app .smart-home-protocol strong { font-size: 16px; }
+.app .smart-home-protocol span, .app .smart-home-device small { font-size: 13px; }
+.app .smart-home-device { padding: 20px; }
+.app .smart-home-tabs .active { border-color: var(--accent); background: var(--accent-gradient); color: var(--on-accent); }
+.app .packages-card :is(.packages-connect input, .packages-filter) { min-height: 44px; padding: 10px 14px; border-radius: 12px; }
+.app .packages-row { padding: 14px 0; font-size: 14px; }
+.app :is(.packages-output, .sounds-entry) { padding: 16px; border-radius: 14px; }
+.app .sounds-entry { background: var(--surface-soft); }
+.app .sounds-entry[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent); }
+.app :is(.display-animation, .ring-effect) { border-radius: 12px; font-size: 13px; }
+.app .display-animation { min-height: 82px; }
+.app :is(.display-studio-hint, .display-custom-note, .midi-editor-help, .ring-help) { font-size: 13px; }
+.app :is(.midi-editor, .ring-editor) h3 { font-size: 18px; font-weight: 750; }
+.app :is(.midi-preview, .ring-preview) { border-radius: 18px; }
+.app .midi-extra { font-size: 13px; }
+.app .midi-extra button { min-height: 36px; border-radius: 10px; font-size: 12px; }
+.app .sound-band > label { font-size: 13px; }
+.app .sound-gain-number span { font-size: 12px; }
+.app .backup-item { font-size: 14px; }
+
+@media (max-width: 900px) {
+  .app :is(.schedules-grid, .timers-grid, .settings-grid) { grid-template-columns: minmax(0, 1fr); }
+  .app .mcp-fields { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 600px) {
+  .app :is(.settings-card, .smart-home-card, .device-access, .tools-connection, .tools-health, .tools-history, .tools-bluetooth, .tools-logs, .display-studio, .auth-card, .schedule-item, .timer-item, .favorite-card) { padding: 20px; border-radius: 22px; }
+  .app .server-settings-fields { padding: 20px 18px 4px; }
+  .app :is(.settings-card, .smart-home-card, .device-access-heading, .display-studio-heading) h2, .app .server-settings-group-heading h2 { font-size: 22px; }
+  .app :is(.settings-card, .server-settings, .device-access, .device-tools, .smart-home-page, .automations-page, .maintenance-page, .display-studio, .auth-shell) .form-field :is(input, select, textarea) { font-size: 16px; }
+  .app :is(.settings-tabs, .device-access-tabs) { max-width: 100%; }
+  .app :is(.settings-tab, .device-access-tabs button) { padding: 10px 12px; font-size: 13px; }
+  .app .settings-tab { min-width: 0; gap: 4px; padding: 10px 8px; }
+  .app .history-row { padding: 18px 16px; gap: 12px; }
+  .app .history-row-tools { margin-left: 52px; width: calc(100% - 52px); }
+  .app .history-row-tools .delivery-status { white-space: normal; }
+  .app .history-title h2 { font-size: 22px; }
+  .app .history-empty { padding: 28px 20px; }
+  .app .favorite-bottom { flex-wrap: wrap; }
+  .app .schedule-time, .app .timer-countdown { font-size: 42px; }
+  .app .tools-metric { padding: 14px; }
+  .app .tools-metric strong { font-size: 22px; }
+  .app .device-file-editor { padding: 16px; }
+  .app .device-file-filter input, .app .device-file-location input { font-size: 16px; }
+  .app .automation-node { padding: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app .toggle-field > input[type="checkbox"], .app .toggle-field > input[type="checkbox"]::before { transition: none; }
+}

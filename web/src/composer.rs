@@ -10,48 +10,33 @@ pub fn Composer(mut state: ControlState) -> Element {
     let mode = (state.mode)();
     let enabled = state.can_send() && !state.text.read().trim().is_empty();
     rsx! {
-        section { class: "card composer", aria_label: "Новая команда",
-            div { class: "card-heading", span { class: "card-kicker", Icon { name: "spark", size: 16 } "НОВАЯ КОМАНДА" } span { class: "subtle-pill", "Текст → действие" } }
-            h2 { "Попросить Алису" }
-            div { class: "mode-tabs", role: "group", aria_label: "Способ отправки",
-                for item in Mode::ALL {
-                    button { class: if item == mode { "mode-tab selected" } else { "mode-tab" }, aria_pressed: item == mode,
-                        onclick: move |_| state.mode.set(item), "{item.label()}"
-                    }
-                }
-            }
-            label { class: "sr-only", r#for: "command-text", "Текст команды" }
-            div { class: "command-field",
-                textarea { id: "command-text", placeholder: mode.placeholder(), value: "{state.text}", maxlength: "8000", spellcheck: "true",
+        section { class: "ocean-command", aria_label: "Новая команда",
+            h1 { "Спроси у " span { "Алисы" } }
+            form { class: "ocean-command-form", onsubmit: move |event| { event.prevent_default(); if enabled { api::submit(state); } },
+                label { class: "sr-only", r#for: "command-text", "Текст команды" }
+                textarea { id: "command-text", rows: "1", placeholder: mode.placeholder(), value: "{state.text}", maxlength: "8000", spellcheck: "true",
                     oninput: move |event| state.text.set(event.value()),
-                    onkeydown: move |event| {
-                        if event.key() == Key::Enter && (event.modifiers().ctrl() || event.modifiers().meta()) {
-                            event.prevent_default();
-                            if state.can_send() { api::submit(state); }
-                        }
+                    onkeydown: move |event| { if event.key() == Key::Enter && !event.modifiers().shift() { event.prevent_default(); if state.can_send() { api::submit(state); } } }
+                }
+                label { class: "ocean-command-mode", span { class: "sr-only", "Способ отправки" }
+                    select { value: mode.path(), onchange: move |event| { if let Some(mode) = Mode::ALL.into_iter().find(|m| m.path() == event.value()) { state.mode.set(mode); } },
+                        for item in Mode::ALL { option { value: item.path(), selected: item == mode, "{item.label()}" } }
                     }
                 }
-                div { class: "field-footer", span { "⌘ / Ctrl + Enter" } span { "{state.text.read().chars().count()} / 8000" } }
-            }
-            p { class: "mode-hint", "{mode.hint()}" }
-            div { class: "composer-bottom",
-                span { class: "send-target", Icon { name: "speaker", size: 15 }
-                    if let Some(device) = state.device() { span { "{device.label()}" } } else { span { "Колонка не выбрана" } }
-                }
-                button { class: "text-button save-draft", disabled: state.text.read().trim().is_empty() || state.device().is_none(), onclick: move |_| {
-                    let text = state.text.read().trim().to_string();
-                    api::save_favorite(state, text.chars().take(80).collect(), (state.selected)(), mode.path().to_string(), serde_json::json!({"eventText":text}));
-                    state.panel.set(crate::state::Panel::Favorites);
-                }, Icon { name: "star", size: 16 } "В избранное" }
-                button { class: "button primary", disabled: !enabled, onclick: move |_| api::submit(state),
-                    if (state.sending)() { span { class: "spinner" } "Отправляем" } else { "Отправить" Icon { name: "arrow", size: 18 } }
+                button { class: "ocean-send", r#type: "submit", disabled: !enabled, aria_label: "Отправить команду", title: "Отправить · Enter",
+                    if (state.sending)() { span { class: "spinner" } } else { Icon { name: "send", size: 27 } }
                 }
             }
-            div { class: "suggestions", span { "Попробуйте" }
-                for (label, text) in [("Погода", "Какая сегодня погода?"), ("Время", "Который час?"), ("Возможности", "Что ты умеешь?")] {
-                    button { class: "suggestion", onclick: move |_| { state.mode.set(Mode::Command); state.text.set(text.to_string()); }, "{label}" Icon { name: "chevron", size: 11 } }
+            div { class: "ocean-suggestions",
+                for (label, icon, text) in [("Погода", "cloud", "Какая сегодня погода?"), ("Таймер на 5 минут", "timer", "Поставь таймер на 5 минут")] {
+                    button { r#type: "button", onclick: move |_| { state.mode.set(Mode::Command); state.text.set(text.to_string()); }, Icon { name: icon, size: 24 } "{label}" }
+                }
+                button { r#type: "button", onclick: move |_| state.mode.set(Mode::Speak), Icon { name: "text", size: 23 } "Озвучить текст" }
+                button { r#type: "button", class: "ocean-save-command", title: "Сохранить в избранное", aria_label: "Сохранить команду в избранное", disabled: state.text.read().trim().is_empty() || state.device().is_none(),
+                    onclick: move |_| { let text = state.text.read().trim().to_string(); api::save_favorite(state, text.chars().take(80).collect(), (state.selected)(), mode.path().to_string(), serde_json::json!({"eventText":text})); state.panel.set(crate::state::Panel::Favorites); }, Icon { name: "star", size: 22 }
                 }
             }
+            if mode != Mode::Command { p { class: "ocean-command-hint", "{mode.hint()}" } }
         }
     }
 }

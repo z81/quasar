@@ -1,108 +1,107 @@
+use crate::{
+    icons::Icon,
+    state::{ControlState, Panel, Theme},
+};
 use dioxus::prelude::*;
 
-use crate::icons::Icon;
-use crate::state::{ControlState, Panel, Theme};
-
-const NAVIGATION_GROUPS: [(&str, &[(Panel, &str)]); 3] = [
-    (
-        "Каждый день",
-        &[
-            (Panel::Control, "grid"),
-            (Panel::Favorites, "star"),
-            (Panel::Schedules, "alarm"),
-            (Panel::Timers, "timer"),
-            (Panel::Automations, "code"),
-            (Panel::History, "history"),
-        ],
-    ),
-    (
-        "Колонка",
-        &[
-            (Panel::MidiDisplay, "spark"),
-            (Panel::SmartHome, "home"),
-            (Panel::Settings, "settings"),
-        ],
-    ),
-    (
-        "Инструменты",
-        &[
-            (Panel::DeviceAccess, "terminal"),
-            (Panel::DeviceTools, "settings"),
-            (Panel::Maintenance, "settings"),
-            (Panel::Advanced, "code"),
-            (Panel::Access, "lock"),
-        ],
-    ),
+const ALL: &[(Panel, &str)] = &[
+    (Panel::Control, "grid"),
+    (Panel::Music, "music"),
+    (Panel::Favorites, "star"),
+    (Panel::Schedules, "alarm"),
+    (Panel::Timers, "timer"),
+    (Panel::Automations, "code"),
+    (Panel::History, "history"),
+    (Panel::Home, "home"),
+    (Panel::SmartHome, "home"),
+    (Panel::MidiDisplay, "spark"),
+    (Panel::StationSettings, "settings"),
+    (Panel::DeviceAccess, "terminal"),
+    (Panel::DeviceTools, "settings"),
+    (Panel::Maintenance, "settings"),
+    (Panel::Advanced, "code"),
+    (Panel::Settings, "settings"),
+    (Panel::Access, "lock"),
 ];
+
+fn section(panel: Panel) -> u8 {
+    match panel {
+        Panel::Control | Panel::History => 0,
+        Panel::Music | Panel::Favorites => 1,
+        Panel::Automations | Panel::Schedules | Panel::Timers => 2,
+        Panel::Home | Panel::SmartHome => 3,
+        Panel::StationSettings
+        | Panel::MidiDisplay
+        | Panel::DeviceAccess
+        | Panel::DeviceTools
+        | Panel::Maintenance
+        | Panel::Advanced => 4,
+        Panel::Settings | Panel::Access => 5,
+    }
+}
 
 #[component]
 pub fn Sidebar(mut state: ControlState) -> Element {
+    let mut query = use_signal(String::new);
+    let panel = (state.panel)();
     let devices = (state.devices)();
     let selected = (state.selected)();
-    let server_ok =
-        state.server_error.read().is_none() && (!(state.loading)() || !devices.is_empty());
-    use_effect(move || {
-        let _ = (state.panel)();
-        document::eval(
-            "if (matchMedia('(max-width: 760px)').matches) document.querySelector('.navigation [aria-current=\"page\"]')?.scrollIntoView({block: 'nearest', inline: 'nearest'});",
-        );
-    });
+    let target_theme = if (state.theme)() == Theme::Dark {
+        Theme::Light
+    } else {
+        Theme::Dark
+    };
+    let search = query().trim().to_lowercase();
+    let theme_icon = if target_theme == Theme::Light {
+        "sun"
+    } else {
+        "moon"
+    };
     rsx! {
         document::Script { r#type: "module", src: asset!("/assets/mobile-menu.js") }
-        aside { class: "sidebar",
-            a { class: "brand", href: "/ui/", aria_label: "Quasar — главная",
-                span { class: "brand-mark", Icon { name: "spark", size: 24 } }
-                span { "quasar" span { class: "brand-dot", "." } }
-            }
-            section { class: "devices-section", aria_label: "Выбор колонки",
-                div { class: "nav-label device-list-heading", span { "КОЛОНКИ" } span { "{devices.len()}" } }
-                if (state.loading)() && devices.is_empty() {
-                    div { class: "station-skeleton", aria_label: "Загружаем колонки" }
-                } else if devices.is_empty() {
-                    p { class: "sidebar-empty", "Здесь появятся ваши подключённые колонки." }
+        header { class: "ocean-header",
+            a { class: "ocean-brand", href: "/ui/", aria_label: "Quasar — главная", "quasar." Icon { name: "spark", size: 24 } }
+            nav { class: "ocean-primary-nav navigation", aria_label: "Основные разделы",
+                for (group, target, label) in [(0,Panel::Control,"Пульт"),(1,Panel::Music,"Музыка"),(2,Panel::Automations,"Автоматизация"),(3,Panel::Home,"Дом"),(4,Panel::MidiDisplay,"Станция")] {
+                    button { r#type: "button", class: if section(panel) == group { "ocean-nav-tab active" } else { "ocean-nav-tab" }, aria_current: if section(panel) == group { "page" } else { "false" },
+                        onclick: move |_| state.panel.set(target), "{label}" }
                 }
-                div { class: "device-list",
-                    for device in devices {
-                        {
-                            let id = device.duid.clone();
-                            let connected = device.connected == Some(true) && server_ok;
-                            rsx! {
-                                button { key: "{id}", class: if id == selected { "device-item selected" } else { "device-item" },
-                                    aria_pressed: id == selected, onclick: move |_| { state.player.set(None); state.selected.set(id.clone()); },
-                                    span { class: "device-icon", Icon { name: "speaker", size: 20 } }
-                                    span { class: "device-copy", strong { "{device.label()}" } span { if server_ok { "{device.connection_label()}" } else { "Нет связи с сервером" } } }
-                                    span { class: if connected { "status-dot connected" } else { "status-dot" } }
-                                }
-                            }
-                        }
+            }
+            div { class: "ocean-header-actions",
+                label { class: "ocean-device-picker", title: state.device().map(|d| d.label().to_owned()).unwrap_or_else(|| "Выбор колонки".into()),
+                    span { class: "sr-only", "Выбор колонки" }
+                    select { aria_label: "Выбор колонки", value: selected,
+                        onchange: move |event| { state.player.set(None); state.selected.set(event.value()); },
+                        if devices.is_empty() { option { value: "", if (state.loading)() { "Загружаем…" } else { "Нет колонок" } } }
+                        for device in &devices { option { key: "{device.duid}", value: "{device.duid}", "{device.label()}" } }
                     }
                 }
+                button { r#type: "button", class: "ocean-header-icon", aria_label: "Поиск разделов", title: "Поиск разделов", "popovertarget": "ocean-search", Icon { name: "search", size: 24 } }
+                button { r#type: "button", class: "ocean-header-icon", aria_label: "Настройки", title: "Настройки", onclick: move |_| state.panel.set(Panel::Settings), Icon { name: "settings", size: 24 } }
+                button { r#type: "button", class: "ocean-header-icon ocean-theme", aria_label: if target_theme == Theme::Light { "Светлая тема" } else { "Тёмная тема" }, title: if target_theme == Theme::Light { "Светлая тема" } else { "Тёмная тема" },
+                    onclick: move |_| { target_theme.save(); state.theme.set(target_theme); }, Icon { name: theme_icon, size: 22 } }
+                button { r#type: "button", class: "mobile-menu-toggle ocean-header-icon", aria_label: "Открыть меню разделов", aria_haspopup: "dialog", aria_controls: "mobile-menu", Icon { name: "menu", size: 24 } }
             }
-            button { class: "mobile-menu-toggle button secondary", aria_label: "Открыть меню разделов", aria_haspopup: "dialog", aria_controls: "mobile-menu",
-                Icon { name: "menu", size: 20 }
+        }
+        div { id: "ocean-search", class: "ocean-search-panel", "popover": "auto", role: "dialog", aria_labelledby: "ocean-search-title",
+            header { h2 { id: "ocean-search-title", "Найти в Quasar" }
+                button { r#type: "button", class: "ocean-header-icon", aria_label: "Закрыть поиск", "popovertarget": "ocean-search", "popovertargetaction": "hide", Icon { name: "close", size: 22 } }
             }
-            nav { class: "navigation", aria_label: "Разделы пульта", NavigationGroups { state } }
-            dialog { id: "mobile-menu", class: "mobile-menu", aria_labelledby: "mobile-menu-title",
-                div { class: "mobile-menu-panel",
-                    header { class: "mobile-menu-heading",
-                        h2 { id: "mobile-menu-title", "Разделы пульта" }
-                        button { class: "mobile-menu-close button secondary", aria_label: "Закрыть меню", autofocus: true,
-                            Icon { name: "close", size: 20 }
-                        }
-                    }
-                    nav { class: "mobile-menu-navigation", aria_label: "Все разделы пульта", NavigationGroups { state } }
+            input { r#type: "search", aria_label: "Раздел или действие", placeholder: "Таймер, музыка, файлы…", value: query, oninput: move |event| query.set(event.value()) }
+            nav { class: "ocean-search-results", aria_label: "Результаты поиска",
+                for &(target, icon) in ALL.iter().filter(|(target,_)| search.is_empty() || target.label().to_lowercase().contains(&search)) {
+                    button { r#type: "button", onclick: move |_| { state.panel.set(target); document::eval("document.getElementById('ocean-search')?.hidePopover()"); }, Icon { name: icon, size: 22 } "{target.label()}" Icon { name: "chevron", size: 18 } }
                 }
+                if !ALL.iter().any(|(target,_)| search.is_empty() || target.label().to_lowercase().contains(&search)) { p { "Ничего не найдено" } }
             }
-            div { class: "sidebar-bottom",
-                div { class: "server-status", span { class: if server_ok { "status-dot connected" } else { "status-dot" } }
-                    span { if (state.loading)() { "Проверяем сервер…" } else if server_ok { "Сервер доступен" } else { "Сервер недоступен" } }
+        }
+        dialog { id: "mobile-menu", class: "mobile-menu", aria_labelledby: "mobile-menu-title",
+            div { class: "mobile-menu-panel",
+                header { class: "mobile-menu-heading", h2 { id: "mobile-menu-title", "Разделы пульта" }
+                    button { class: "mobile-menu-close button secondary", aria_label: "Закрыть меню", autofocus: true, Icon { name: "close", size: 22 } }
                 }
-                div { class: "theme-switch", role: "group", aria_label: "Тема оформления",
-                    for (theme, icon, label) in [(Theme::Light, "sun", "Светлая"), (Theme::Dark, "moon", "Тёмная")] {
-                        button { class: if (state.theme)() == theme { "theme-option chosen" } else { "theme-option" }, aria_pressed: (state.theme)() == theme,
-                            onclick: move |_| { theme.save(); state.theme.set(theme); }, Icon { name: icon, size: 15 } "{label}"
-                        }
-                    }
+                nav { class: "mobile-menu-navigation", aria_label: "Все разделы пульта",
+                    for &(target, icon) in ALL { button { class: if target == panel { "nav-item active" } else { "nav-item" }, onclick: move |_| state.panel.set(target), Icon { name: icon, size: 20 } "{target.label()}" } }
                 }
             }
         }
@@ -110,20 +109,18 @@ pub fn Sidebar(mut state: ControlState) -> Element {
 }
 
 #[component]
-fn NavigationGroups(mut state: ControlState) -> Element {
-    let history_count = (state.history)().len();
-    rsx! {
-        for (label, panels) in NAVIGATION_GROUPS {
-            div { class: "nav-group",
-                div { class: "nav-label", "{label}" }
-                for &(panel, icon) in panels {
-                    button { class: if (state.panel)() == panel { "nav-item active" } else { "nav-item" }, aria_current: if (state.panel)() == panel { "page" } else { "false" },
-                        onclick: move |_| state.panel.set(panel),
-                        Icon { name: icon, size: 18 } "{panel.label()}"
-                        if panel == Panel::History && history_count > 0 { span { class: "nav-count", "{history_count}" } }
-                    }
-                }
-            }
-        }
+pub fn SectionNavigation(mut state: ControlState) -> Element {
+    let panel = (state.panel)();
+    let group = section(panel);
+    let panels: Vec<_> = ALL
+        .iter()
+        .copied()
+        .filter(|(target, _)| section(*target) == group)
+        .collect();
+    if panel == Panel::Control || panels.len() < 2 {
+        return rsx! {};
     }
+    rsx! { nav { class: "ocean-section-nav", aria_label: "Разделы категории",
+        for (target, icon) in panels { button { r#type: "button", class: if target == panel { "active" } else { "" }, aria_current: if target == panel { "page" } else { "false" }, onclick: move |_| state.panel.set(target), Icon { name: icon, size: 17 } "{target.label()}" } }
+    } }
 }

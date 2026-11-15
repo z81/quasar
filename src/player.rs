@@ -468,6 +468,7 @@ pub async fn music_action(
             | "authorize_start"
             | "save"
             | "play"
+            | "transfer"
             | "seek"
             | "shuffle"
             | "repeat"

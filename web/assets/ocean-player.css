@@ -90,3 +90,7 @@
   .ocean-player .player-button { width: 38px; height: 40px; }
   .ocean-player .music-actions .player-toggle { width: 44px; height: 44px; }
 }
+.ocean-player .player-external-device { color: #72dfef; font-size: 13px; line-height: 1.4; margin-top: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ocean-player .music-transfer { width: auto; min-width: 180px; }
+.ocean-player .music-transfer .button { border-radius: 12px; min-height: 44px; padding: 10px 14px; font-size: 13px; white-space: nowrap; }
+.ocean-player .player-volume-dial .ha-dial-label { white-space: normal; width: calc(100% - 20px); left: 10px; right: auto; overflow: visible; }

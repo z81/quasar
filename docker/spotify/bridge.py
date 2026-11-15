@@ -1207,12 +1207,12 @@ class MusicService:
                               if re.fullmatch(r"spotify:track:[A-Za-z0-9]{22}", uri) else None},
                     "position_ms": position, "duration_ms": duration, "playing": playing, "source": "Spotify"}
 
-    def playback(self, fresh=False):
+    def playback(self, fresh=False, station_only=True):
         api = self.require_api()
         fetch = lambda: api.request("GET", "/me/player") or {}
         value = fetch() if fresh else self.cached("playback", 5, fetch)
         device = value.get("device") or {}
-        if not device.get("id") or device["id"] != api.device_id():
+        if station_only and (not device.get("id") or device["id"] != api.device_id()):
             raise SpotifyError("Spotify сейчас не воспроизводится на выбранной колонке. Выберите её в Spotify Connect или включите найденный трек.")
         return value
 
@@ -1226,7 +1226,26 @@ class MusicService:
                 result["message"] = "Воспроизведением AirPlay управляет устройство-отправитель."
                 return result
             try:
-                playback = self.playback()
+                playback = self.playback(station_only=False)
+                device = playback.get("device") or {}
+                try:
+                    target = self.require_api().device_id()
+                except SpotifyError:
+                    target = None
+                if not target and device.get("name") == NAME:
+                    return result
+                if device.get("id") != target or not target:
+                    item = playback.get("item") or {}
+                    track = music_track(item)
+                    if playback.get("is_playing") and track and device.get("id"):
+                        images = (item.get("album") or {}).get("images") or []
+                        covers = [i for i in images if isinstance(i, dict) and
+                                  isinstance(i.get("url"), str) and i["url"].startswith("https://i.scdn.co/")]
+                        cover = min(covers, key=lambda i: abs((i.get("width") or 300) - 300)) if covers else {}
+                        result["external"] = {"track": track, "device_name": device.get("name") or "Другом устройстве",
+                                              "cover_url": cover.get("url"), "position_ms": integer_ms(playback.get("progress_ms")),
+                                              "can_transfer": bool(target)}
+                    return result
                 blocked = (playback.get("actions") or {}).get("disallows") or playback.get("actions") or {}
                 restricted = (playback.get("device") or {}).get("is_restricted", False)
                 can = not restricted
@@ -1255,7 +1274,7 @@ class MusicService:
         if operation == "lyrics":
             return self.lyrics()
         if operation == "queue":
-            self.playback()
+            self.playback(station_only=False)
             value = self.cached("queue", 10, lambda: self.require_api().request("GET", "/me/player/queue")) or {}
             return {"tracks": [track for item in value.get("queue", [])[:50] if (track := music_track(item))],
                     "message": "Spotify отдаёт ближайшую часть очереди. Перестановка и удаление через Web API не поддерживаются."}
@@ -1317,6 +1336,12 @@ class MusicService:
                 if not isinstance(body.get("saved"), bool):
                     raise SpotifyError("Укажите состояние любимого трека")
                 api.request("PUT" if body["saved"] else "DELETE", "/me/library", {"uris": uri})
+            elif action == "transfer":
+                playback = self.playback(fresh=True, station_only=False)
+                current_uri = (playback.get("item") or {}).get("uri")
+                if not current_uri or body.get("expected_uri") != current_uri:
+                    raise SpotifyError("Трек сменился. Дождитесь обновления плеера и повторите действие.")
+                api.call("take_over")
             elif action == "play":
                 api.call("play", self.track_uri(body.get("uri")), "track")
             elif action in ("seek", "shuffle", "repeat", "queue_add"):

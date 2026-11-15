@@ -8,13 +8,23 @@ use crate::{api, icons::Icon, state::ControlState};
 
 #[derive(Clone, Default, Deserialize, PartialEq)]
 #[serde(default)]
-struct Track {
+pub(super) struct Track {
     uri: String,
-    name: String,
-    artists: String,
-    album: String,
+    pub name: String,
+    pub artists: String,
+    pub album: String,
     duration_ms: Option<u64>,
     url: Option<String>,
+}
+
+#[derive(Clone, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub(super) struct ExternalPlayback {
+    pub track: Track,
+    pub device_name: String,
+    pub cover_url: Option<String>,
+    position_ms: Option<u64>,
+    can_transfer: bool,
 }
 
 #[derive(Clone, Default, Deserialize, PartialEq)]
@@ -31,6 +41,7 @@ struct Authorization {
 #[derive(Clone, Default, Deserialize, PartialEq)]
 #[serde(default)]
 struct MusicStatus {
+    external: Option<ExternalPlayback>,
     track: Option<Track>,
     position_ms: Option<u64>,
     duration_ms: Option<u64>,
@@ -198,15 +209,24 @@ fn time_label(milliseconds: u64) -> String {
 }
 
 #[component]
-pub(super) fn MusicPanel(state: ControlState, expanded: bool) -> Element {
+pub(super) fn MusicPanel(
+    state: ControlState,
+    expanded: bool,
+    external: Signal<Option<ExternalPlayback>>,
+) -> Element {
     let duid = (state.selected)();
     rsx! {
-        if !duid.is_empty() { MusicForStation { key: "{duid}", state, duid, expanded } }
+        if !duid.is_empty() { MusicForStation { key: "{duid}", state, duid, expanded, external } }
     }
 }
 
 #[component]
-fn MusicForStation(state: ControlState, duid: String, expanded: bool) -> Element {
+fn MusicForStation(
+    state: ControlState,
+    duid: String,
+    expanded: bool,
+    mut external: Signal<Option<ExternalPlayback>>,
+) -> Element {
     let editor = Editor {
         status: use_signal(|| None::<MusicStatus>),
         received_at: use_signal(js_sys::Date::now),
@@ -255,7 +275,7 @@ fn MusicForStation(state: ControlState, duid: String, expanded: bool) -> Element
             .status
             .read()
             .as_ref()
-            .and_then(|value| value.track.as_ref())
+            .and_then(|value| value.external.as_ref().map(|e| &e.track).or(value.track.as_ref()))
             .map(|track| track.uri.clone())
             .unwrap_or_default()
     });
@@ -300,7 +320,29 @@ fn MusicForStation(state: ControlState, duid: String, expanded: bool) -> Element
             }
         });
     });
-    let snapshot = (editor.status)().unwrap_or_default();
+    use_effect(move || {
+        let latest = editor
+            .status
+            .read()
+            .as_ref()
+            .and_then(|s| s.external.clone());
+        if *external.peek() != latest {
+            external.set(latest);
+        }
+    });
+    let mut snapshot = (editor.status)().unwrap_or_default();
+    if let Some(other) = &snapshot.external {
+        snapshot.track = Some(other.track.clone());
+        snapshot.position_ms = other.position_ms;
+        snapshot.duration_ms = other.track.duration_ms;
+        snapshot.playing = true;
+    }
+    let transfer_duid = duid.clone();
+    let transfer_uri = snapshot
+        .external
+        .as_ref()
+        .map(|e| e.track.uri.clone())
+        .unwrap_or_default();
     let uri = track_uri();
     let can_send = state.can_send() && !(editor.busy)();
     let can = |name: &str| can_send && snapshot.capabilities.get(name).copied().unwrap_or(false);
@@ -337,7 +379,7 @@ fn MusicForStation(state: ControlState, duid: String, expanded: bool) -> Element
         _ => "Без повтора",
     };
     let player = (state.player)();
-    let transport_enabled = state.can_send();
+    let transport_enabled = state.can_send() && snapshot.external.is_none();
     let can_pause = player.as_ref().is_some_and(|p| p.capabilities.pause);
     let source = player
         .as_ref()
@@ -397,6 +439,15 @@ fn MusicForStation(state: ControlState, duid: String, expanded: bool) -> Element
                         span { "{time_label(duration)}" }
                     }
                 }
+                if let Some(other) = &snapshot.external {
+                    div { class: "music-actions music-transfer",
+                        button { class: "button primary", disabled: !can_send || !other.can_transfer,
+                            onclick: move |_| perform(state, transfer_duid.clone(), editor, json!({"action":"transfer","expected_uri":transfer_uri})),
+                            if (editor.busy)() { "Переносим…" } else { "Играть на колонке" }
+                        }
+                        if !other.can_transfer { span { class: "sr-only", "Колонка недоступна в Spotify Connect" } }
+                    }
+                } else {
                 div { class: "music-actions", role: "group", aria_label: "Управление воспроизведением",
                     button { class: "music-mode", disabled: !can_shuffle, aria_pressed: shuffle, aria_label: "Перемешать", title: "Перемешать", onclick: move |_| perform(state, shuffle_duid.clone(), editor, json!({"action":"shuffle","enabled":!shuffle})), Icon { name: "shuffle", size: 20 } }
                     for (action, icon, label, available) in [
@@ -413,6 +464,7 @@ fn MusicForStation(state: ControlState, duid: String, expanded: bool) -> Element
                         Icon { name: "repeat", size: 20 }
                         if repeat == "track" { span { class: "repeat-one", "1" } }
                     }
+                }
                 }
                 button { class: "music-source", r#type: "button", aria_label: "Открыть меню музыки", title: "Очередь, поиск и другие функции", aria_haspopup: if expanded { None } else { Some("dialog") },
                     "popovertarget": if expanded { None } else { Some("music-tools") }, "popovertargetaction": if expanded { None } else { Some("show") },

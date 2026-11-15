@@ -22,18 +22,45 @@ pub fn MusicPage(state: ControlState) -> Element {
 
 #[component]
 fn PlayerControls(state: ControlState, expanded: bool) -> Element {
+    let external = use_signal(|| None::<music::ExternalPlayback>);
+    let other = external();
     let player = (state.player)();
+    let title = other
+        .as_ref()
+        .map(|e| e.track.name.clone())
+        .or_else(|| player.as_ref().and_then(|p| p.title.clone()));
+    let artist = other
+        .as_ref()
+        .map(|e| e.track.artists.clone())
+        .or_else(|| player.as_ref().and_then(|p| p.artist.clone()));
     let enabled = state.can_send();
     let can_volume = enabled && player.as_ref().is_some_and(|p| p.capabilities.set_volume);
-    let album = player.as_ref().and_then(|p| p.album.clone());
-    let cover_url = player.as_ref().and_then(|p| p.cover_url.clone());
+    let album = other
+        .as_ref()
+        .map(|e| e.track.album.clone())
+        .or_else(|| player.as_ref().and_then(|p| p.album.clone()));
+    let cover_url = other
+        .as_ref()
+        .and_then(|e| e.cover_url.clone())
+        .or_else(|| {
+            if other.is_none() {
+                player.as_ref().and_then(|p| p.cover_url.clone())
+            } else {
+                None
+            }
+        });
     let device_name = state
         .device()
         .map(|device| device.label().to_owned())
         .unwrap_or_else(|| "Колонка".into());
     let volume = Control {
         id: "volume".into(),
-        label: "Громкость".into(),
+        label: if other.is_some() {
+            "Громкость колонки"
+        } else {
+            "Громкость"
+        }
+        .into(),
         kind: "range".into(),
         value: player
             .as_ref()
@@ -52,14 +79,15 @@ fn PlayerControls(state: ControlState, expanded: bool) -> Element {
             section { class: if expanded { "ocean-player is-expanded" } else { "ocean-player" }, aria_label: "Плеер выбранной колонки",
                 AlbumArt { cover_url, album: album.clone() }
                 div { class: "player-track",
-                    h2 { title: player.as_ref().and_then(|p| p.title.clone()).unwrap_or_else(|| "Музыка на колонке".into()),
-                        if let Some(title) = player.as_ref().and_then(|p| p.title.as_ref()) { "{title}" } else { "Музыка на колонке" }
+                    h2 { title: title.clone().unwrap_or_else(|| "Музыка на колонке".into()),
+                        if let Some(title) = title.as_ref() { "{title}" } else { "Музыка на колонке" }
                     }
                     p { class: "player-artist",
-                        if let Some(artist) = player.as_ref().and_then(|p| p.artist.as_ref()) { "{artist}" }
-                        if let Some(album) = album { if player.as_ref().and_then(|p| p.artist.as_ref()).is_some() { " · " } "{album}" }
+                        if let Some(artist) = artist.as_ref() { "{artist}" }
+                        if let Some(album) = album { if artist.is_some() { " · " } "{album}" }
                     }
-                    if player.as_ref().is_some_and(|p| p.muted == Some(true)) { p { class: "player-muted", "Звук выключен" } }
+                    if let Some(other) = &other { p { class: "player-external-device", "Играет на {other.device_name}" } }
+                    if other.is_none() && player.as_ref().is_some_and(|p| p.muted == Some(true)) { p { class: "player-muted", "Звук выключен" } }
                 }
                 div { class: "player-volume-dial",
                     Dial { control: volume, entity_name: device_name, disabled: !can_volume,
@@ -70,9 +98,9 @@ fn PlayerControls(state: ControlState, expanded: bool) -> Element {
                         }
                     }
                 }
-                music::MusicPanel { state, expanded }
+                music::MusicPanel { state, expanded, external }
                 if let Some(error) = (state.player_error)() { p { class: "player-note failure", "Плеер недоступен: {error}" } }
-                else if player.as_ref().is_none_or(|p| p.updated_at.is_none()) { p { class: "player-note", "Ждём состояние от колонки…" } }
+                else if other.is_none() && player.as_ref().is_none_or(|p| p.updated_at.is_none()) { p { class: "player-note", "Ждём состояние от колонки…" } }
             }
         }
     }

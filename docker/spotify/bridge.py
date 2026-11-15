@@ -834,7 +834,7 @@ class Bridge:
     def play(self, query, kind):
         if not query:
             with self.lock:
-                changes, playing, airplay = self.state_changes, self.state == "playing", self.airplay == "playing"
+                playing, airplay = self.state == "playing", self.airplay == "playing"
             if airplay or not self.api:
                 self.station.play()
                 return "ok: продолжаю"
@@ -842,10 +842,7 @@ class Bridge:
                 if not (self.station.playing and self.listening()):
                     self.station.play()
                 return "ok: уже играет"
-            self.api.call("take_over")
-            # librespot comes out of a transfer paused, play: true notwithstanding
-            if self.wait_state_change(changes, 5) != "playing":
-                self.api.call("resume")
+            self.transfer_to_station()
             return "ok: продолжаю"
         if not self.api:
             return "error: голосовой поиск в Spotify не подключён (нужны SPOTIFY_CLIENT_ID и SPOTIFY_CLIENT_SECRET)"
@@ -854,6 +851,14 @@ class Bridge:
             return f"error: в Spotify ничего не нашлось по запросу «{query}»"
         self.api.call("play", found["uri"], kind)
         return f"ok: включаю {found['title']}"
+
+    def transfer_to_station(self):
+        with self.lock:
+            changes = self.state_changes
+        self.api.call("take_over")
+        # librespot can come out of a transfer paused despite play: true.
+        if self.wait_state_change(changes, 5) != "playing":
+            self.api.call("resume")
 
     def wait_state_change(self, changes, seconds):
         """librespot's state after its next change past `changes`, or as it is after `seconds`"""
@@ -1341,7 +1346,7 @@ class MusicService:
                 current_uri = (playback.get("item") or {}).get("uri")
                 if not current_uri or body.get("expected_uri") != current_uri:
                     raise SpotifyError("Трек сменился. Дождитесь обновления плеера и повторите действие.")
-                api.call("take_over")
+                self.owner.transfer_to_station()
             elif action == "play":
                 api.call("play", self.track_uri(body.get("uri")), "track")
             elif action in ("seek", "shuffle", "repeat", "queue_add"):

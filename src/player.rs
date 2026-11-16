@@ -258,11 +258,7 @@ pub async fn status(
             player.artist = nonempty(bridge["artist"].as_str());
             if player.source.as_deref() == Some("Spotify") && player.state != "stopped" {
                 player.album = nonempty(bridge["album"].as_str());
-                player.cover_url = bridge["cover_key"]
-                    .as_str()
-                    .filter(|key| crate::remote::is_cover_key(key))
-                    .and_then(|key| cover_path(duid, key))
-                    .or_else(|| cover_url(bridge["cover_url"].as_str()));
+                player.cover_url = bridge_cover(duid, &bridge);
             } else {
                 player.album = None;
                 player.cover_url = None;
@@ -417,6 +413,14 @@ fn cover_path(duid: &str, key: &str) -> Option<String> {
     Some(url.path().to_string())
 }
 
+fn bridge_cover(duid: &str, value: &Value) -> Option<String> {
+    value["cover_key"]
+        .as_str()
+        .filter(|key| crate::remote::is_cover_key(key))
+        .and_then(|key| cover_path(duid, key))
+        .or_else(|| cover_url(value["cover_url"].as_str()))
+}
+
 /// Read-only queries for the dashboard. Tokens stay in the configured bridge.
 pub async fn music(
     axum::extract::State(state): axum::extract::State<Arc<crate::api::ApiState>>,
@@ -439,6 +443,7 @@ pub async fn music(
             .into_response();
     }
     music_response(
+        &duid,
         state
             .runtime
             .snapshot()
@@ -475,17 +480,24 @@ pub async fn music_action(
             | "queue_add"
     ) || body.to_string().len() > 16384
     {
-        return music_response(Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Некорректное действие музыки".into(),
-        )));
+        return music_response(
+            &duid,
+            Err((
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Некорректное действие музыки".into(),
+            )),
+        );
     }
     if !matches!(action, "authorize" | "authorize_start" | "save")
         && !state.registry.is_connected(&duid)
     {
-        return music_response(Err((StatusCode::CONFLICT, "Колонка не подключена".into())));
+        return music_response(
+            &duid,
+            Err((StatusCode::CONFLICT, "Колонка не подключена".into())),
+        );
     }
     music_response(
+        &duid,
         state
             .runtime
             .snapshot()
@@ -496,11 +508,19 @@ pub async fn music_action(
 }
 
 fn music_response(
+    duid: &str,
     result: Result<Value, (axum::http::StatusCode, String)>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     match result {
-        Ok(value) => axum::Json(value).into_response(),
+        Ok(mut value) => {
+            if let Some(external) = value.get_mut("external").filter(|value| value.is_object()) {
+                // Remote Spotify playback uses the same cached cover route as
+                // playback on the station, including the bridge's CDN fallback.
+                external["cover_url"] = json!(bridge_cover(duid, external));
+            }
+            axum::Json(value).into_response()
+        }
         Err((status, error)) => (status, axum::Json(json!({"error":error}))).into_response(),
     }
 }

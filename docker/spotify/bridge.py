@@ -197,7 +197,7 @@ def album_cover(covers):
 
 
 class CoverCache:
-    """Only event-selected covers can be fetched; downloads never hold the playback lock."""
+    """Only known playback covers can be fetched; downloads never hold the playback lock."""
 
     MAX_BYTES = 2 * 1024 * 1024
     TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -1248,7 +1248,8 @@ class MusicService:
                                   isinstance(i.get("url"), str) and i["url"].startswith("https://i.scdn.co/")]
                         cover = min(covers, key=lambda i: abs((i.get("width") or 300) - 300)) if covers else {}
                         result["external"] = {"track": track, "device_name": device.get("name") or "Другом устройстве",
-                                              "cover_url": cover.get("url"), "position_ms": integer_ms(playback.get("progress_ms")),
+                                              "cover_url": cover.get("url"), "cover_key": self.owner.covers.remember(cover.get("url")),
+                                              "position_ms": integer_ms(playback.get("progress_ms")),
                                               "can_transfer": bool(target)}
                     return result
                 blocked = (playback.get("actions") or {}).get("disallows") or playback.get("actions") or {}

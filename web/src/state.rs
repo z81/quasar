@@ -184,7 +184,7 @@ impl Panel {
             Self::StationOverview => "Станция",
             Self::Automations => "Сценарии и офлайн-будильники",
             Self::DeviceTools => "Диагностика и Bluetooth",
-            Self::ServerLogs => "Логи сервера",
+            Self::ServerLogs => "Логи",
             Self::Maintenance => "Обслуживание",
             Self::Access => "Доступ",
         }

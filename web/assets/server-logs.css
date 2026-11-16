@@ -1,3 +1,9 @@
+.logs-page { display: grid; gap: 16px; min-width: 0; }
+.station-log-connection { padding: 20px 24px; min-width: 0; }
+.station-log-connection summary { cursor: pointer; color: var(--secondary); }
+.station-log-target { display: grid; grid-template-columns: minmax(0, 1fr) 96px auto; gap: 12px; align-items: end; margin-top: 16px; }
+.station-log-target > .form-field { min-width: 0; margin: 0; }
+.station-log-text { margin: 0; padding: 16px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .server-logs { padding: 24px; min-width: 0; }
 .server-log-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
 .server-log-toolbar > .form-field { flex: 0 1 160px; min-width: 0; margin: 0; }
@@ -21,6 +27,9 @@
 .server-log-retention { margin: 14px 0 0; line-height: 1.6; }
 .server-log-empty { padding: 24px; color: var(--muted); }
 @media (max-width: 760px) {
+  .station-log-connection { padding: 16px; }
+  .station-log-target { grid-template-columns: minmax(0, 1fr) 80px; }
+  .station-log-target > button { grid-column: 1 / -1; }
   .server-logs { padding: 16px; }
   .server-log-toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .server-log-toolbar > .server-log-search { grid-column: 1 / -1; order: -1; }

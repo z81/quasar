@@ -378,7 +378,7 @@ async fn logs(
         return response;
     }
     if !(1..=1000).contains(&query.lines)
-        || query.filter.len() > 128
+        || query.filter.chars().count() > 128
         || !probe::valid_log_name(&query.source)
     {
         return operations::error(

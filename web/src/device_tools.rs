@@ -254,7 +254,7 @@ fn DeviceTools(state: ControlState, duid: String, ip: String) -> Element {
                     }
                     if !bluetooth.is_null() {BluetoothOutput {state,duid:duid.clone(),output:bluetooth["output"].clone(),target:applied_target(),data}}
                 }
-            } else {Logs {state,duid:duid.clone(),target:applied(),sources:status["info"]["logs"].as_array().cloned().unwrap_or_default()}}
+            } else {crate::station_logs::StationLogs {state,duid:duid.clone(),target:applied()}}
         }
     }
 }
@@ -474,37 +474,6 @@ fn BluetoothOutput(
         if output["supported"]==true && output["active"]!=true && output["running"]!=true {p {class:"field-help","Найдите внешнюю колонку, выполните сопряжение и нажмите «Вывести звук» в её строке."}}
         if output["active"]==true || output["running"]==true || output["needs_restore"]==true {
             button {class:"button secondary",disabled:(data.busy)(),onclick:move |_|{spawn(bluetooth_action(state,duid.clone(),"output_stop".into(),None,target.clone(),data));},"Вернуть встроенный динамик"}
-        }
-    }}
-}
-
-#[component]
-fn Logs(state: ControlState, duid: String, target: String, sources: Vec<Value>) -> Element {
-    let mut source = use_signal(|| "dmesg".to_owned());
-    let mut filter = use_signal(String::new);
-    let mut lines = use_signal(|| "200".to_owned());
-    let mut result = use_signal(|| None::<Value>);
-    let mut error = use_signal(|| None::<String>);
-    let mut loading = use_signal(|| false);
-    let valid = lines()
-        .parse::<usize>()
-        .is_ok_and(|value| (1..=1000).contains(&value));
-    rsx! {section {class:"card tools-logs",h2 {"Логи колонки"}
-        div {class:"tools-log-filter",
-            label {class:"form-field",span {"Журнал"}select {value:"{source}",onchange:move |event|source.set(event.value()),option {value:"dmesg","Ядро (dmesg)"}option {value:"system","Система"}for name in sources.iter().filter_map(Value::as_str){option {value:name,"{name}"}}}}
-            label {class:"form-field",span {"Фильтр текста"}input {value:"{filter}",maxlength:"128",placeholder:"Ошибка, имя службы…",oninput:move |event|filter.set(event.value())}}
-            label {class:"form-field",span {"Строк"}input {value:"{lines}",inputmode:"numeric",oninput:move |event|lines.set(event.value())}}
-            button {class:"button secondary",disabled:loading()||!valid,onclick:move |_|{
-                let join=if target.is_empty(){"?"}else{"&"};
-                let url=format!("/devices/{}/tools/logs{target}{join}source={}&lines={}&filter={}",api::encoded(&duid),api::encoded(&source()),api::encoded(&lines()),api::encoded(&filter()));
-                loading.set(true);error.set(None);spawn(async move{match api::get::<Value>(state,&url).await{Ok(value)=>result.set(Some(value)),Err(message)=>error.set(Some(message))}loading.set(false);});
-            },if loading(){"Читаем…"}else{"Показать"}}
-        }
-        p {class:"field-help","Фильтр применяется к последним выбранным строкам. Журнал читается только по кнопке."}
-        if let Some(message)=error(){p {class:"notice error",role:"alert","{message}"}}
-        if let Some(value)=result(){
-            if value["truncated"]==true {p {class:"notice","Вывод ограничен 256 КБ. Уменьшите число строк."}}
-            pre {class:"tools-log-output",tabindex:"0",aria_label:"Содержимое журнала",{value["text"].as_str().filter(|text|!text.is_empty()).unwrap_or("Подходящих строк нет")}}
         }
     }}
 }

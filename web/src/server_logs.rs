@@ -27,7 +27,28 @@ fn timestamp(value: &str) -> String {
 }
 
 #[component]
-pub fn ServerLogs(state: ControlState) -> Element {
+pub fn Logs(state: ControlState) -> Element {
+    let mut station = use_signal(|| false);
+    rsx! {
+        document::Stylesheet { href: asset!("/assets/server-logs.css") }
+        div { class: "logs-page",
+            div { class: "mode-tabs", role: "tablist", aria_label: "Источник журнала",
+                for (value, label) in [(false, "Сервер"), (true, "Колонка")] {
+                    button {
+                        class: if station() == value { "mode-tab selected" } else { "mode-tab" },
+                        role: "tab", aria_selected: station() == value,
+                        onclick: move |_| station.set(value), "{label}"
+                    }
+                }
+            }
+            if station() { crate::station_logs::StationLogsPage { state } }
+            else { ServerLogs { state } }
+        }
+    }
+}
+
+#[component]
+fn ServerLogs(state: ControlState) -> Element {
     let mut level = use_signal(String::new);
     let mut search = use_signal(String::new);
     let mut limit = use_signal(|| "200".to_owned());

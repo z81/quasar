@@ -22,6 +22,7 @@ mod ring_light;
 mod schedules;
 mod server_settings;
 mod server_logs;
+mod station_logs;
 mod settings;
 mod sidebar;
 mod smart_home;
@@ -193,7 +194,7 @@ fn App() -> Element {
                                 Panel::SmartHome => "Устройства Zigbee и Matter, подключённые к выбранной колонке.",
                                 Panel::Automations => "Сценарии на сервере и автономные будильники на колонке.",
                                 Panel::DeviceTools => "Состояние системы, история показателей, журналы и Bluetooth.",
-                                Panel::ServerLogs => "События Quasar: модель, распознавание речи, озвучка и подключения.",
+                                Panel::ServerLogs => "Журналы сервера Quasar и выбранной колонки.",
                                 Panel::Maintenance => "Пакеты, службы, системные звуки и резервные копии.",
                             } }
                         }
@@ -237,7 +238,7 @@ fn App() -> Element {
                         Panel::SmartHome => rsx! { smart_home::SmartHomePage { state } },
                         Panel::Automations => rsx! { automations::AutomationsPage { state } },
                         Panel::DeviceTools => rsx! { device_tools::DeviceToolsPage { state } },
-                        Panel::ServerLogs => rsx! { server_logs::ServerLogs { state } },
+                        Panel::ServerLogs => rsx! { server_logs::Logs { state } },
                         Panel::Maintenance => rsx! { maintenance::MaintenancePage { state } },
                         Panel::Advanced => rsx! {
                             div { class: "control-grid", composer::Advanced { state } station::StationCard { state } }

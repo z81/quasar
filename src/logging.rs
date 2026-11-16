@@ -1,5 +1,7 @@
 //! Reloadable log filtering; the environment is only the initial baseline.
 
+pub(crate) mod recent;
+
 use std::sync::OnceLock;
 
 use tracing_subscriber::layer::SubscriberExt;
@@ -14,6 +16,7 @@ pub fn init() {
     tracing_subscriber::registry()
         .with(filter)
         .with(tracing_subscriber::fmt::layer())
+        .with(recent::Recent)
         .init();
     let _ = FILTER.set(handle);
 }

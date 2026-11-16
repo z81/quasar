@@ -82,6 +82,7 @@ pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Rout
         .merge(crate::packages::router(state.clone(), auth.clone()))
         .merge(crate::system_sounds::router(state.clone(), auth.clone()))
         .merge(crate::control::router(state.control.clone()))
+        .merge(crate::server_logs::router(auth.clone()))
         .layer(axum::middleware::from_fn_with_state(
             auth.clone(),
             crate::auth::require_auth,

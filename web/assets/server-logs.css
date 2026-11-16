@@ -1,0 +1,30 @@
+.server-logs { padding: 24px; min-width: 0; }
+.server-log-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.server-log-toolbar > .form-field { flex: 0 1 160px; min-width: 0; margin: 0; }
+.server-log-toolbar > .server-log-search { flex: 1 1 240px; }
+.server-log-toolbar .button { min-height: 44px; }
+.server-log-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin: 16px 0; font-size: 12px; color: var(--secondary); }
+.server-log-summary label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.server-log-summary input { width: 16px; height: 16px; accent-color: var(--accent); }
+.server-log-output { height: 560px; max-height: 65vh; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); color: var(--text); }
+.server-log-output:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.server-log-entry { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.server-log-entry:last-child { border-bottom: 0; }
+.server-log-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; margin-bottom: 6px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.server-log-target { overflow-wrap: anywhere; }
+.server-log-level { color: var(--secondary); }
+.server-log-entry[data-level="ERROR"] .server-log-level { color: var(--error); }
+.server-log-entry[data-level="WARN"] .server-log-level { color: var(--accent-text); }
+.server-log-entry[data-level="ERROR"] { background: color-mix(in srgb, var(--error) 6%, transparent); }
+.server-log-entry pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.server-log-entry small, .server-log-retention { color: var(--muted); font-size: 12px; }
+.server-log-retention { margin: 14px 0 0; line-height: 1.6; }
+.server-log-empty { padding: 24px; color: var(--muted); }
+@media (max-width: 760px) {
+  .server-logs { padding: 16px; }
+  .server-log-toolbar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .server-log-toolbar > .server-log-search { grid-column: 1 / -1; order: -1; }
+  .server-log-toolbar input, .server-log-toolbar select { width: 100%; }
+  .server-log-toolbar > .button { min-width: 0; padding: 10px; }
+  .server-log-entry { padding: 12px; }
+}

@@ -23,6 +23,7 @@ const ALL: &[(Panel, &str)] = &[
     (Panel::Maintenance, "settings"),
     (Panel::Advanced, "code"),
     (Panel::Settings, "settings"),
+    (Panel::ServerLogs, "terminal"),
     (Panel::Access, "lock"),
 ];
 
@@ -39,7 +40,7 @@ fn section(panel: Panel) -> u8 {
         | Panel::DeviceTools
         | Panel::Maintenance
         | Panel::Advanced => 4,
-        Panel::Settings | Panel::Access => 5,
+        Panel::Settings | Panel::ServerLogs | Panel::Access => 5,
     }
 }
 

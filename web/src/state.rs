@@ -104,6 +104,7 @@ pub enum Panel {
     AutomationOverview,
     StationOverview,
     DeviceTools,
+    ServerLogs,
     Maintenance,
     Access,
 }
@@ -126,6 +127,7 @@ impl Panel {
             Self::SmartHome => "zigbee",
             Self::Automations => "scenarios",
             Self::DeviceTools => "diagnostics",
+            Self::ServerLogs => "logs",
             Self::Maintenance => "maintenance",
             Self::Access => "access",
             Self::AutomationOverview => "automation",
@@ -149,6 +151,7 @@ impl Panel {
             "zigbee" => Self::SmartHome,
             "scenarios" => Self::Automations,
             "diagnostics" => Self::DeviceTools,
+            "logs" => Self::ServerLogs,
             "maintenance" => Self::Maintenance,
             "access" => Self::Access,
             "automation" => Self::AutomationOverview,
@@ -181,6 +184,7 @@ impl Panel {
             Self::StationOverview => "Станция",
             Self::Automations => "Сценарии и офлайн-будильники",
             Self::DeviceTools => "Диагностика и Bluetooth",
+            Self::ServerLogs => "Логи сервера",
             Self::Maintenance => "Обслуживание",
             Self::Access => "Доступ",
         }

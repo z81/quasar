@@ -137,6 +137,9 @@ impl OpenRouter {
             "model": model,
             "stream": true,
             "messages": messages,
+            // The dialog protocol requires JSON even when the user asks for plain text.
+            "response_format": { "type": "json_object" },
+            "provider": { "require_parameters": true },
         });
         if let Some(reasoning) = reasoning {
             body["reasoning"] = json!({ "effort": reasoning.effort });

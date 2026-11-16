@@ -23,6 +23,7 @@ mod schedules;
 mod server_settings;
 mod server_logs;
 mod station_logs;
+mod station_preferences;
 mod settings;
 mod sidebar;
 mod smart_home;
@@ -187,7 +188,7 @@ fn App() -> Element {
                                 Panel::Schedules => "Планы на утро, важные дела и время для себя.",
                                 Panel::Timers => "Для чая, готовки и короткой паузы. Колонка напомнит сигналом.",
                                 Panel::Settings => "Модели, речь и интеграции сервера. Имя и голосовые настройки колонок.",
-                                Panel::StationSettings => "Голос, шёпот, расписание тишины и звук колонки.",
+                                Panel::StationSettings => "Голос, звук, подсветка и системные параметры колонки.",
                                 Panel::Access => "Вход в пульт и ключи для ваших интеграций.",
                                 Panel::DeviceAccess => "Терминал и файлы выбранной колонки через ADB.",
                                 Panel::MidiDisplay => "Свои надписи, рисунки и анимации дисплея и верхней подсветки Миди.",

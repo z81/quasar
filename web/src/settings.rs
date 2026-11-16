@@ -8,6 +8,7 @@ use crate::state::{ControlState, Device};
 #[component]
 pub fn Settings(state: ControlState, #[props(default)] station: bool) -> Element {
     let mut tab = use_signal(move || if station { "station" } else { "server" });
+    let mut category = use_signal(|| "general");
     let device = state.device();
     rsx! {
         div { class: "settings-tabs", role: "tablist", aria_label: "Область настроек",
@@ -25,13 +26,27 @@ pub fn Settings(state: ControlState, #[props(default)] station: bool) -> Element
             // The keyed list also resets station-scoped form drafts on selection.
             for device in device {
                 div { class: "station-settings-stack", key: "{device.duid}",
-                    DeviceSettings { state, device: device.clone() }
-                    crate::whisper_settings::WhisperSettings { state, duid: device.duid.clone() }
-                    crate::dnd_settings::DndSettings { state, duid: device.duid.clone() }
-                    crate::sound_settings::SoundSettings { state, duid: device.duid.clone() }
-                    crate::display_settings::DisplaySettings { state, device: device.clone() }
-                    crate::display_studio::DisplayStudio { state, duid: device.duid.clone() }
-                    crate::weather::WeatherSettings { state, duid: device.duid }
+                    div { class: "station-category-tabs", role: "tablist", aria_label: "Раздел настроек колонки",
+                        for (id, label) in [("general", "Основные"), ("sound", "Звук"), ("display", "Экран и сон"), ("microphones", "Микрофоны"), ("system", "Система")] {
+                            button { r#type: "button", role: "tab", aria_selected: category() == id,
+                                "data-station-category": id, onclick: move |_| category.set(id), "{label}" }
+                        }
+                    }
+                    // Keep drafts mounted when switching categories.
+                    div { class: "station-category-content", hidden: category() != "general",
+                        DeviceSettings { state, device: device.clone() }
+                        crate::whisper_settings::WhisperSettings { state, duid: device.duid.clone() }
+                        crate::dnd_settings::DndSettings { state, duid: device.duid.clone() }
+                        crate::weather::WeatherSettings { state, duid: device.duid.clone() }
+                    }
+                    div { class: "station-category-content", hidden: category() != "sound",
+                        crate::sound_settings::SoundSettings { state, duid: device.duid.clone() }
+                    }
+                    div { class: "station-category-content", hidden: category() != "display",
+                        crate::display_settings::DisplaySettings { state, device: device.clone() }
+                        crate::display_studio::DisplayStudio { state, duid: device.duid.clone() }
+                    }
+                    crate::station_preferences::StationPreferences { state, duid: device.duid, section: category().to_owned() }
                 }
             }
         }

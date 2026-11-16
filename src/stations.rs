@@ -180,4 +180,12 @@ impl StationStore {
         station.quasar_config["deviceConfig"]["dndMode"] = mode.clone();
         true
     }
+
+    pub async fn compare_config(&self, duid: &str, expected: &Value, next: &Value) -> bool {
+        let mut stations = self.stations.write().await;
+        let Some(station) = stations.get_mut(duid) else { return false; };
+        if station.quasar_config != *expected { return false; }
+        station.quasar_config = next.clone();
+        true
+    }
 }

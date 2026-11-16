@@ -46,6 +46,7 @@ mod schedules;
 mod timer_api;
 mod timer_tool;
 mod station_config;
+mod station_preferences;
 mod stations;
 mod storage;
 mod speaker;

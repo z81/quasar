@@ -79,6 +79,7 @@ pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Rout
         .merge(crate::automations::router(state.clone(), auth.clone()))
         .merge(crate::device_tools::router(state.clone(), auth.clone()))
         .merge(crate::maintenance::router(state.clone(), auth.clone()))
+        .merge(crate::station_preferences::router(state.clone(), auth.clone()))
         .merge(crate::packages::router(state.clone(), auth.clone()))
         .merge(crate::system_sounds::router(state.clone(), auth.clone()))
         .merge(crate::control::router(state.control.clone()))

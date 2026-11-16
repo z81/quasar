@@ -72,6 +72,17 @@ impl Storage {
         matches!(self, Self::Postgres(_))
     }
 
+    /// Preserve unrelated changes (including scheduled DND) made while a form was open.
+    pub async fn compare_station_config(&self, duid: &str, expected: &Value, next: &Value) -> anyhow::Result<bool> {
+        match self {
+            Self::Memory { stations, .. } => Ok(stations.compare_config(duid, expected, next).await),
+            Self::Postgres(client) => Ok(client.execute(
+                "UPDATE alice_stations SET quasar_config=$3 WHERE duid=$1 AND quasar_config=$2",
+                &[&duid, &expected, &next],
+            ).await? > 0),
+        }
+    }
+
     pub async fn get_control_value(&self, key: &str) -> anyhow::Result<Option<Value>> {
         match self {
             Self::Memory { control, .. } => Ok(control.lock().await.get(key).cloned()),

@@ -218,6 +218,8 @@ pub fn dispatch(mut state: ControlState, duid: String, path: String, body: Value
     }
     state.sending.set(true);
     state.notice.set(None);
+    let volume_target = (path == "player" && body["action"] == "set_volume")
+        .then(|| body["volume"].as_u64()).flatten();
     let submitted_draft = clear.then(|| (state.text)());
     let url = if path.starts_with("/devices/") {
         path
@@ -239,9 +241,19 @@ pub fn dispatch(mut state: ControlState, duid: String, path: String, body: Value
             },
             Err(error) => state.notice.set(Some(error)),
         }
+        // A receipt only acknowledges delivery. Keep the dial's draft until
+        // the station reports its new level, instead of flashing the old one.
+        if let Some(target) = volume_target.filter(|_| state.notice.peek().is_none()) {
+            for _ in 0..12 {
+                if *state.selected.peek() != duid { break; }
+                refresh_player(state).await;
+                if state.player.peek().as_ref().is_some_and(|player| player.volume.map(u64::from) == Some(target)) { break; }
+                gloo_timers::future::TimeoutFuture::new(500).await;
+            }
+        }
+        refresh_player(state).await;
         state.sending.set(false);
         refresh_history(state).await;
-        refresh_player(state).await;
     });
 }
 

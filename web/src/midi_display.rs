@@ -67,7 +67,8 @@ pub fn MidiDisplay(
     let mut animation = use_signal(|| initial.animation.clone());
     let mut brightness = use_signal(|| initial.brightness.clone());
     let mut duration = use_signal(|| initial.duration.clone());
-    let mut tick = use_signal(|| 0_usize);
+    let mut started_at = use_signal(js_sys::Date::now);
+    let mut elapsed = use_signal(|| 0_u64);
     let mut showing = use_signal(|| false);
     let mut feedback = use_signal(|| None::<(bool, String)>);
     let preview_duid = duid.clone();
@@ -87,6 +88,8 @@ pub fn MidiDisplay(
             .map(|preview| preview.display != draft)
             .unwrap_or(true);
         if changed {
+            started_at.set(js_sys::Date::now());
+            elapsed.set(0);
             state.station_previews.with_mut(|previews| {
                 previews.entry(preview_duid.clone()).or_default().display = draft;
             });
@@ -94,9 +97,8 @@ pub fn MidiDisplay(
     });
     use_future(move || async move {
         loop {
-            TimeoutFuture::new(350).await;
-            let next = tick.peek().wrapping_add(1);
-            tick.set(next);
+            TimeoutFuture::new(50).await;
+            elapsed.set((js_sys::Date::now() - *started_at.peek()).max(0.0) as u64);
         }
     });
     use_effect(move || {
@@ -157,7 +159,7 @@ pub fn MidiDisplay(
             brightness: brightness(),
             duration: duration(),
         },
-        tick(),
+        elapsed(),
     );
     let preview = frame.segments;
     let intensity = frame.intensity;
@@ -187,7 +189,7 @@ pub fn MidiDisplay(
                 }
             }
             if mode() == "text" {
-                label { class: "form-field", span { "Текст" } input { id: "midi-text", value: "{text}", maxlength: "32", spellcheck: "false", disabled: busy(), aria_invalid: !text_valid, oninput: move |event| { text.set(event.value()); tick.set(0); feedback.set(None); } }
+                label { class: "form-field", span { "Текст" } input { id: "midi-text", value: "{text}", maxlength: "32", spellcheck: "false", disabled: busy(), aria_invalid: !text_valid, oninput: move |event| { text.set(event.value()); feedback.set(None); } }
                     small { "До 32 символов. Латиница и цифры; длинная надпись прокручивается. Некоторые буквы выглядят условно." }
                 }
                 if !text_valid { p { class: "form-feedback failure", "Доступны цифры, A B C D E F G H I J L N O P Q R S T U Y, пробел, - и _." } }
@@ -215,6 +217,7 @@ pub fn MidiDisplay(
                         "frame" => command["segments"] = json!(segments()),
                         _ => command["animation"] = json!(animation()),
                     }
+                    started_at.set(js_sys::Date::now()); elapsed.set(0);
                     status.set(None); feedback.set(None); showing.set(true); busy.set(true); send(bridge, command);
                 }, if showing() { span { class: "spinner" } "Показываем…" } else { Icon { name: "play", size: 15 } "Показать" } }
             }

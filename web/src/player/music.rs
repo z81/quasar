@@ -381,6 +381,7 @@ fn MusicForStation(
     let player = (state.player)();
     let transport_enabled = state.can_send() && snapshot.external.is_none();
     let can_pause = player.as_ref().is_some_and(|p| p.capabilities.pause);
+    let playing = player.as_ref().is_some_and(|p| matches!(p.state.as_str(), "playing" | "buffering"));
     let source = player
         .as_ref()
         .and_then(|p| p.source.clone())
@@ -452,7 +453,7 @@ fn MusicForStation(
                     button { class: "music-mode", disabled: !can_shuffle, aria_pressed: shuffle, aria_label: "Перемешать", title: "Перемешать", onclick: move |_| perform(state, shuffle_duid.clone(), editor, json!({"action":"shuffle","enabled":!shuffle})), Icon { name: "shuffle", size: 20 } }
                     for (action, icon, label, available) in [
                         ("previous", "previous", "Предыдущий трек", player.as_ref().is_some_and(|p| p.capabilities.previous)),
-                        if can_pause { ("pause", "pause", "Пауза", true) } else { ("resume", "play", "Продолжить", player.as_ref().is_some_and(|p| p.capabilities.resume)) },
+                        if playing { ("pause", "pause", "Пауза", can_pause) } else { ("resume", "play", "Продолжить", player.as_ref().is_some_and(|p| p.capabilities.resume)) },
                         ("next", "next", "Следующий трек", player.as_ref().is_some_and(|p| p.capabilities.next)),
                     ] {
                         button { class: if matches!(action, "pause" | "resume") { "player-button player-toggle" } else { "player-button" }, disabled: !transport_enabled || !available,

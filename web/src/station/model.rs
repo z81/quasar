@@ -71,13 +71,20 @@ fn StationModelView(state: ControlState, duid: String, show_details: bool) -> El
             }
         }
     });
-    let mut tick = use_signal(|| 0_usize);
+    let mut elapsed = use_signal(|| 0_u64);
+    let mut started_at = use_signal(js_sys::Date::now);
+    let preview_duid = duid.clone();
+    let preview = use_memo(move || state.station_previews.read().get(&preview_duid).cloned().unwrap_or_default());
+    use_effect(move || {
+        let _ = preview();
+        started_at.set(js_sys::Date::now());
+        elapsed.set(0);
+    });
     let clock_duid = duid.clone();
     use_future(move || {
         let duid = clock_duid.clone();
         async move {
             loop {
-                TimeoutFuture::new(350).await;
                 now.set(js_sys::Date::now());
                 let reduced = web_sys::window()
                     .and_then(|w| {
@@ -95,23 +102,19 @@ fn StationModelView(state: ControlState, duid: String, show_details: bool) -> El
                             || (preview.display.mode == "text" && preview.display.text.len() > 4)
                     });
                 if reduced {
-                    if *tick.peek() != 4 {
-                        tick.set(4);
+                    if *elapsed.peek() != 2_500 {
+                        elapsed.set(2_500);
                     }
                 } else if animated {
-                    let next = tick.peek().wrapping_add(1);
-                    tick.set(next);
+                    elapsed.set((js_sys::Date::now() - *started_at.peek()).max(0.0) as u64);
                 }
+                let live_display = live_frame.peek().as_ref().is_some_and(|value| value["display_available"] == true);
+                TimeoutFuture::new(if animated && !reduced && !live_display { 50 } else { 350 }).await;
             }
         }
     });
-    let preview = state
-        .station_previews
-        .read()
-        .get(&duid)
-        .cloned()
-        .unwrap_or_default();
-    let frame = display_frame(&preview.display, tick());
+    let preview = preview();
+    let frame = display_frame(&preview.display, elapsed());
     let layout = use_hook(|| {
         let mut segments = Vec::new();
         for (index, x) in DISPLAY_DIGIT_X.into_iter().enumerate() {

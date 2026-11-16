@@ -95,7 +95,16 @@ pub(crate) const DISPLAY_AUXILIARY_POLYGONS: [(&str, i32, i32, &str); 14] = [
     ("L2", 148, 72, "0,2 2,0 10,0 12,2 10,4 2,4"),
 ];
 
-pub(crate) fn display_frame(draft: &DisplayDraft, tick: usize) -> DisplayFrame {
+pub(crate) fn display_frame(draft: &DisplayDraft, elapsed_ms: u64) -> DisplayFrame {
+    // The device plays one complete cycle over duration_ms, distributing the
+    // remainder across frames. Use the same boundaries for both previews.
+    let count = match draft.mode.as_str() {
+        "text" if draft.text.len() > 4 => draft.text.len() + 5,
+        "text" | "frame" => 1,
+        _ => match draft.animation.as_str() { "pulse" => 9, "orbit" => 6, _ => 4 },
+    } as u64;
+    let duration = draft.duration.parse::<u64>().unwrap_or(5).clamp(1, 15) * 1000;
+    let tick = (((elapsed_ms % duration + 1) * count - 1) / duration) as usize;
     let segments = match draft.mode.as_str() {
         "text" => text_frame(&draft.text, tick),
         "frame" => draft.segments.clone(),

@@ -8,6 +8,7 @@ alice-server работает и один: речь и ответы идут ч�
 | [gigastt](#gigastt) | Распознаёт речь моделью GigaAM v3 и замечает конец фразы | `ghcr.io/ekhodzitsky/gigastt:2.18.0` | 9876 | `/home/gigastt/.gigastt/models` |
 | [Piper](#piper) | Синтез речи, самый быстрый | `docker/piper` | 5000 | `/data` |
 | [Vosk](#vosk) | Синтез речи, звучит естественнее Piper | `docker/vosk` | 5000 | `/data` |
+| [Whisper](#whisper) | Определяет, была ли последняя фраза произнесена шёпотом | `docker/whisper` | 8080 | — |
 | [Spotify](#spotify) | Делает станцию колонкой Spotify Connect | `docker/spotify` | 8090 | `/data` |
 | [AirPlay](#airplay) | Делает станцию колонкой AirPlay 2 | `docker/airplay` | сеть хоста | `/airplay` |
 
@@ -21,8 +22,8 @@ alice-server работает и один: речь и ответы идут ч�
   - `8090` Spotify — отсюда станция сама забирает музыку, здесь же страница входа в Spotify;
   - `31116` alice-server — API управления и страница `/debug`, по желанию.
 
-  gigastt, Piper, Vosk и PostgreSQL нужны только alice-server, их порты публиковать не надо.
-- **alice-server запускается последним.** К базе он подключается и каталоги функций читает только при запуске. Если база не отвечала, станции хранятся в памяти до перезапуска. Если не отвечал Spotify, ассистент не узнает о его функциях, пока alice-server не перезапустят. gigastt и синтезатор могут подняться и позже: пока их нет, речь распознаёт и озвучивает OpenRouter.
+  gigastt, Piper, Vosk, Whisper и PostgreSQL нужны только alice-server, их порты публиковать не надо. У Whisper есть только внутренний порт `8080`; для проверки с хоста можно опубликовать его на `127.0.0.1`.
+- **alice-server запускается последним.** К базе он подключается при запуске и, если `POSTGRES_URL` задан явно, ждёт её вместо тихого перехода в память. Без базы (только для разработки) станции хранятся в памяти до перезапуска. Если не отвечал Spotify, ассистент не узнает о его функциях, пока alice-server не перезапустят. gigastt и синтезатор могут подняться и позже: пока их нет, речь распознаёт и озвучивает OpenRouter.
 - **Только домашняя сеть.** У API управления, страницы Spotify и порта станции нет авторизации. Не открывайте их в интернет.
 
 ### Какая переменная в какой контейнер
@@ -36,6 +37,7 @@ alice-server работает и один: речь и ответы идут ч�
 | gigastt | `GIGASTT_VAD` |
 | Piper | `PIPER_VOICE` |
 | Vosk | `VOSK_SPEAKER`, `VOSK_THREADS`, `VOSK_MODEL` |
+| Whisper | `WHISPER_THRESHOLD` |
 | Spotify | `STREAM_URL`, `ALICE_API_URL`, `STATION_ID`, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` и другие `SPOTIFY_*`, `MP3_BITRATE`, `AIRPLAY_FIFO_PATH` |
 
 `PIPER_VOICE` есть и у alice-server, но голос удобнее выбирать в контейнере Piper: он скачивает только этот голос.
@@ -251,6 +253,18 @@ PIPER_URL=http://vosk:5000
 | `VOSK_MODEL` | `vosk-model-tts-ru-0.9-multi` | Модель с [сайта Vosk](https://alphacephei.com/vosk/models) |
 
 Модель весит около 750 МБ и скачивается в том `/data` при первом запуске. Пока она не загрузится, контейнер не станет `healthy`. Голос можно выбрать и со стороны alice-server: `PIPER_SPEAKER=female_1`.
+
+## Whisper
+
+Сервис `docker/whisper` — локальный YAMNet, который по записи фразы оценивает, была ли она произнесена шёпотом. Результат только показывается в пульте; голос ответа выбирает обычная настройка шёпота.
+
+```bash
+docker build -t alise-whisper:latest docker/whisper
+docker run -d --name alise-whisper --restart unless-stopped \
+  --network alice -p 127.0.0.1:8096:8080 alise-whisper:latest
+```
+
+В alice-server задайте `WHISPER_DETECT_URL=http://alise-whisper:8080`. Пустое значение отключает определение. Порог `WHISPER_THRESHOLD` по умолчанию `0.45`. Подробнее — в [docker/whisper/README.md](whisper/README.md).
 
 ## Spotify
 

@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use serde_json::Value;
@@ -23,41 +24,61 @@ const COLUMNS: &str =
     "duid, platform, name, network_info, certificate, private_key, quasar_config, timezone";
 
 impl Storage {
-    pub async fn connect(url: &str) -> Self {
-        match tokio_postgres::connect(url, tokio_postgres::NoTls).await {
-            Ok((mut client, connection)) => {
-                tokio::spawn(async move {
-                    if let Err(error) = connection.await {
-                        tracing::error!("postgres connection error: {error}");
+    /// `required` is set when POSTGRES_URL is configured explicitly. In that
+    /// case the process waits for the database instead of silently starting
+    /// with an empty in-memory registry: the database also holds the owner
+    /// password, station credentials and preferences. Development without a
+    /// database keeps the old single-attempt fallback.
+    pub async fn connect(url: &str, required: bool) -> anyhow::Result<Self> {
+        let mut retry_in = Duration::from_secs(1);
+        loop {
+            match tokio_postgres::connect(url, tokio_postgres::NoTls).await {
+                Ok((mut client, connection)) => {
+                    tokio::spawn(async move {
+                        if let Err(error) = connection.await {
+                            tracing::error!("postgres connection error: {error}");
+                        }
+                    });
+                    // own table name: the TypeScript server keeps an incompatible
+                    // "stations" table, and both may share one database
+                    if let Err(error) = client
+                        .batch_execute(
+                            "CREATE TABLE IF NOT EXISTS alice_stations (\
+                             duid TEXT PRIMARY KEY, platform TEXT NOT NULL, name TEXT NOT NULL, \
+                             network_info JSONB, certificate TEXT NOT NULL, private_key TEXT NOT NULL); \
+                             ALTER TABLE alice_stations \
+                             ADD COLUMN IF NOT EXISTS quasar_config JSONB NOT NULL DEFAULT '{}'::jsonb; \
+                             ALTER TABLE alice_stations ADD COLUMN IF NOT EXISTS timezone TEXT; \
+                             CREATE TABLE IF NOT EXISTS alice_control (key TEXT PRIMARY KEY, value JSONB NOT NULL)",
+                        )
+                        .await
+                    {
+                        tracing::error!("failed to prepare the stations table: {error}");
+                        if !required {
+                            return Ok(Self::memory());
+                        }
+                    } else {
+                        if let Err(error) = reparse_configs(&mut client).await {
+                            tracing::error!("failed to re-parse the stored quasar configs: {error:#}");
+                        }
+                        tracing::info!("postgres storage connected");
+                        return Ok(Self::Postgres(client));
                     }
-                });
-                // own table name: the TypeScript server keeps an incompatible
-                // "stations" table, and both may share one database
-                if let Err(error) = client
-                    .batch_execute(
-                        "CREATE TABLE IF NOT EXISTS alice_stations (\
-                         duid TEXT PRIMARY KEY, platform TEXT NOT NULL, name TEXT NOT NULL, \
-                         network_info JSONB, certificate TEXT NOT NULL, private_key TEXT NOT NULL); \
-                         ALTER TABLE alice_stations \
-                         ADD COLUMN IF NOT EXISTS quasar_config JSONB NOT NULL DEFAULT '{}'::jsonb; \
-                         ALTER TABLE alice_stations ADD COLUMN IF NOT EXISTS timezone TEXT; \
-                         CREATE TABLE IF NOT EXISTS alice_control (key TEXT PRIMARY KEY, value JSONB NOT NULL)",
-                    )
-                    .await
-                {
-                    tracing::error!("failed to prepare the stations table: {error}");
-                    return Self::memory();
                 }
-                if let Err(error) = reparse_configs(&mut client).await {
-                    tracing::error!("failed to re-parse the stored quasar configs: {error:#}");
+                Err(error) => {
+                    tracing::warn!("postgres unavailable ({error})");
+                    if !required {
+                        tracing::warn!("using in-memory station registry");
+                        return Ok(Self::memory());
+                    }
                 }
-                tracing::info!("postgres storage connected");
-                Self::Postgres(client)
             }
-            Err(error) => {
-                tracing::warn!("postgres unavailable ({error}); using in-memory station registry");
-                Self::memory()
-            }
+            tracing::warn!(
+                "POSTGRES_URL is configured; retrying in {}s",
+                retry_in.as_secs()
+            );
+            tokio::time::sleep(retry_in).await;
+            retry_in = (retry_in * 2).min(Duration::from_secs(15));
         }
     }
 

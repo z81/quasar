@@ -278,6 +278,12 @@ pub fn StationOverview(mut state: ControlState) -> Element {
                     button { r#type: "button", class: "ocean-station-button", aria_label: label, title: label, disabled: !enabled, onclick: move |_| api::quick_action(state,action,label), Icon { name: icon, size: 26 } }
                 }
             }
+            if let Some(device) = &device {
+                div { class: "ocean-voice",
+                    div { class: "ocean-voice-heading", span { class: "card-kicker", "ПОСЛЕДНЯЯ ФРАЗА" } }
+                    crate::whisper_settings::VoiceLast { available: device.voice_detector, last: device.last_voice.clone() }
+                }
+            }
         }
     }
 }

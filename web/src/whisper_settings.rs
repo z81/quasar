@@ -3,13 +3,55 @@ use gloo_timers::future::TimeoutFuture;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::{api, icons::Icon, state::ControlState};
+use crate::{
+    api,
+    icons::Icon,
+    state::{ControlState, VoiceDetection},
+};
 
 #[derive(Clone, Deserialize)]
 struct WhisperView {
     enabled: bool,
     available: bool,
     persistent: bool,
+    #[serde(default)]
+    detection_available: bool,
+    #[serde(default)]
+    last: Option<VoiceDetection>,
+}
+
+fn voice_time(value: &str) -> String {
+    js_sys::Date::new(&value.into())
+        .to_locale_string("ru-RU", &js_sys::wasm_bindgen::JsValue::UNDEFINED)
+        .into()
+}
+
+/// The last classified utterance. Detection never changes the answer voice.
+#[component]
+pub fn VoiceLast(available: bool, last: Option<VoiceDetection>) -> Element {
+    let Some(last) = last else {
+        return rsx! {
+            div { class: "voice-last empty", aria_live: "polite",
+                span { class: "voice-badge", if available { "Детектор включён" } else { "Детектор не настроен" } }
+                p { class: "voice-text", if available { "Скажите фразу — здесь появится результат определения шёпота." } else { "Укажите адрес локального YAMNet в настройках сервера." } }
+            }
+        };
+    };
+    let badge = if last.whisper { "voice-badge whisper" } else { "voice-badge" };
+    let label = if last.whisper { "Шёпот" } else { "Обычная речь" };
+    let confidence = (last.score * 100.0).round().clamp(0.0, 100.0) as i32;
+    let time = voice_time(&last.at);
+    let seconds = last.seconds.map(|value| format!("{value:.1} с"));
+    rsx! {
+        div { class: "voice-last", aria_live: "polite",
+            div { class: "voice-head",
+                span { class: "{badge}", "{label}" }
+                span { class: "voice-meta", "Уверенность {confidence}% · {time}" }
+                if let Some(seconds) = seconds { span { class: "voice-meta", "{seconds}" } }
+            }
+            p { class: "voice-text", "«{last.text}»" }
+        }
+    }
 }
 
 #[component]
@@ -49,6 +91,8 @@ pub fn WhisperSettings(state: ControlState, duid: String) -> Element {
     let snapshot = view();
     let enabled = snapshot.as_ref().is_some_and(|value| value.enabled);
     let available = snapshot.as_ref().is_some_and(|value| value.available);
+    let detection_available = snapshot.as_ref().is_some_and(|value| value.detection_available);
+    let last = snapshot.as_ref().and_then(|value| value.last.clone());
     let disabled = busy() || snapshot.is_none() || error().is_some() || (!available && !enabled);
     rsx! {
         section { class: "card settings-card whisper-settings", aria_label: "Режим шёпота",
@@ -89,7 +133,9 @@ pub fn WhisperSettings(state: ControlState, duid: String) -> Element {
                     }
                 }
             }
-            p { class: "form-help", "Голосом: «Алиса, говори шёпотом» или «Алиса, говори обычным голосом». Автоматическое распознавание шёпота пока недоступно." }
+            VoiceLast { available: detection_available, last }
+            p { class: "form-help", "Голосом: «Алиса, говори шёпотом» или «Алиса, говори обычным голосом»." }
+            p { class: "form-help", if detection_available { "Определение шёпота показывает последнюю фразу, но не меняет голос ответа." } else { "Детектор шёпота не настроен: укажите адрес локального YAMNet в настройках сервера." } }
             p { class: "form-help", "Шёпот озвучивает ElevenLabs через OpenRouter: текст ответа передаётся этому сервису. Голос может отличаться от обычного; звук активации и музыка сохраняют свои настройки." }
             if snapshot.is_some() && !available {
                 p { class: "form-feedback failure", "Для шёпота добавьте ключ OpenRouter в настройках сервера. Основной голос Piper не поддерживает шёпот." }

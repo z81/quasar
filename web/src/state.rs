@@ -4,6 +4,20 @@ use dioxus::prelude::*;
 use serde::Deserialize;
 use serde_json::Value;
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Default)]
+pub struct VoiceDetection {
+    pub at: String,
+    pub text: String,
+    pub whisper: bool,
+    pub score: f32,
+    #[serde(default)]
+    pub threshold: Option<f32>,
+    #[serde(default)]
+    pub frames: Option<u32>,
+    #[serde(default)]
+    pub seconds: Option<f32>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Device {
     pub duid: String,
@@ -16,6 +30,10 @@ pub struct Device {
     pub quasar_config: Value,
     #[serde(default)]
     pub timezone: Option<String>,
+    #[serde(default, rename = "voiceDetector")]
+    pub voice_detector: bool,
+    #[serde(default, rename = "lastVoice")]
+    pub last_voice: Option<VoiceDetection>,
 }
 
 impl Device {

@@ -1,18 +1,44 @@
-//! Explicit per-station whisper replies. Whispering is synthesized by an
-//! expressive model; neither low microphone level nor low playback volume
-//! establishes whispered speech.
+//! Per-station explicit whisper replies and the display-only result of the
+//! local whisper detector. Whispering is synthesized by an expressive model;
+//! neither low microphone level nor low playback volume establishes it.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{ensure, Result};
-use serde::Serialize;
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::Mutex;
 
 use crate::config::Config;
 use crate::storage::Storage;
 
 pub struct WhisperService {
     storage: Arc<Storage>,
+    /// The last result per station; the panel reads it on every device poll.
+    last: Mutex<HashMap<String, Detection>>,
+}
+
+/// Display-only result of the local YAMNet classifier.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Detection {
+    pub at: String,
+    pub text: String,
+    pub whisper: bool,
+    pub score: f32,
+    #[serde(default)]
+    pub threshold: Option<f32>,
+    #[serde(default)]
+    pub frames: Option<u32>,
+    #[serde(default)]
+    pub seconds: Option<f32>,
+    #[serde(default)]
+    pub yamnet: Option<f32>,
+    #[serde(default)]
+    pub pitch: Option<f32>,
+    #[serde(default)]
+    pub flatness: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -23,12 +49,72 @@ pub struct View {
     pub model: String,
     pub voice: String,
     pub detection: &'static str,
+    pub detection_available: bool,
+    pub last: Option<Detection>,
     pub message: &'static str,
 }
 
 impl WhisperService {
     pub fn new(storage: Arc<Storage>) -> Self {
-        Self { storage }
+        Self {
+            storage,
+            last: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Stores the last detected utterance. The transcript is kept only in the
+    /// single control record for this station, not in a conversation history.
+    pub async fn record_detection(
+        &self,
+        duid: &str,
+        text: &str,
+        reply: &crate::voice_detection::Reply,
+    ) -> Result<()> {
+        let text: String = text.trim().chars().take(2000).collect();
+        if text.is_empty() {
+            return Ok(());
+        }
+        let detection = Detection {
+            at: Utc::now().to_rfc3339(),
+            text,
+            whisper: reply.whisper,
+            score: reply.score,
+            threshold: reply.threshold,
+            frames: reply.frames,
+            seconds: reply.seconds,
+            yamnet: reply.yamnet,
+            pitch: reply.pitch,
+            flatness: reply.flatness,
+        };
+        self.storage
+            .set_control_value(
+                &format!("voice:last:{duid}"),
+                &serde_json::to_value(&detection)?,
+            )
+            .await?;
+        self.last.lock().await.insert(duid.to_owned(), detection);
+        Ok(())
+    }
+
+    pub async fn last_detection(&self, duid: &str) -> Result<Option<Detection>> {
+        if let Some(detection) = self.last.lock().await.get(duid).cloned() {
+            return Ok(Some(detection));
+        }
+        let Some(value) = self
+            .storage
+            .get_control_value(&format!("voice:last:{duid}"))
+            .await?
+        else {
+            return Ok(None);
+        };
+        let Ok(detection) = serde_json::from_value::<Detection>(value) else {
+            return Ok(None);
+        };
+        self.last
+            .lock()
+            .await
+            .insert(duid.to_owned(), detection.clone());
+        Ok(Some(detection))
     }
 
     pub async fn enabled(&self, duid: &str) -> Result<bool> {
@@ -44,17 +130,26 @@ impl WhisperService {
     }
 
     pub async fn view(&self, config: &Config, duid: &str) -> Result<View> {
+        let detection_available = !config.whisper_detect_url.trim().is_empty();
         Ok(View {
             enabled: self.enabled(duid).await?,
             available: available(config),
             persistent: self.storage.is_persistent(),
             model: config.whisper_tts_model.clone(),
             voice: config.whisper_tts_voice.clone(),
-            detection: "manual",
+            detection: if detection_available { "yamnet" } else { "off" },
+            detection_available,
+            last: self.last_detection(duid).await?,
             message: if available(config) {
-                "Настоящий шёпот через ElevenLabs в OpenRouter. Включается переключателем или командой «говори шёпотом», выключается командой «говори обычным голосом». Автоопределение шёпота пока недоступно."
+                if detection_available {
+                    "Настоящий шёпот через ElevenLabs в OpenRouter. Определение шёпота показывает последнюю фразу, но голос ответа не меняет."
+                } else {
+                    "Настоящий шёпот через ElevenLabs в OpenRouter. Включается переключателем или командой «говори шёпотом»."
+                }
+            } else if detection_available {
+                "Piper не поддерживает шёпот: для ответов шёпотом нужен ключ OpenRouter. Определение шёпота уже работает и показывает последнюю фразу."
             } else {
-                "Для шёпота добавьте ключ OpenRouter в настройках сервера. Piper не поддерживает шёпот. Автоопределение шёпота пока недоступно."
+                "Для шёпота добавьте ключ OpenRouter в настройках сервера. Piper не поддерживает шёпот."
             },
         })
     }

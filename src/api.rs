@@ -104,8 +104,24 @@ async fn no_cache(request: axum::extract::Request, next: axum::middleware::Next)
 }
 
 async fn devices(State(state): State<Arc<ApiState>>) -> Response {
+    let context = state.runtime.snapshot();
+    let detector_available = context.detector.is_some();
+    let whisper = context.whisper.clone();
     let mut response = match state.storage.list().await {
-        Ok(stations) => Json(stations.iter().map(|station| state.device(station)).collect::<Vec<_>>()).into_response(),
+        Ok(stations) => {
+            let mut devices = Vec::with_capacity(stations.len());
+            for station in stations {
+                let mut device = state.device(&station);
+                device["voiceDetector"] = json!(detector_available);
+                if let Ok(Some(last)) = whisper.last_detection(&station.duid).await {
+                    if let Ok(value) = serde_json::to_value(last) {
+                        device["lastVoice"] = value;
+                    }
+                }
+                devices.push(device);
+            }
+            Json(devices).into_response()
+        }
         Err(error) => internal_error("GET /devices", &error),
     };
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));

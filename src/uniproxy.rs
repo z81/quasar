@@ -62,6 +62,9 @@ pub struct UniproxyContext {
     pub schedules: Arc<crate::schedules::Scheduler>,
     pub speakers: Arc<crate::speaker::SpeakerService>,
     pub whisper: Arc<crate::whisper::WhisperService>,
+    /// Optional local YAMNet classifier; detection is shown in the panel but
+    /// does not change the answer's voice.
+    pub detector: Option<Arc<crate::voice_detection::Detector>>,
     /// MCP servers: their tools as functions, their live context in the state
     pub mcp: Arc<Mcp>,
     pub cache: ResponseCache,

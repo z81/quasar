@@ -145,3 +145,13 @@ body, button, input, textarea, select { font-family: Manrope, -apple-system, Bli
   .ocean-search-panel { padding: 20px; }
 }
 @media (prefers-reduced-motion: reduce) { .app, .app *, .app *::before, .app *::after { scroll-behavior: auto; } }
+
+.ocean-voice { display: grid; gap: 8px; margin-top: 14px; }
+.ocean-voice-heading { display: flex; align-items: center; justify-content: space-between; }
+.voice-last { display: grid; gap: 6px; min-width: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--glass-control); }
+.voice-last.empty { border-style: dashed; }
+.voice-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.voice-badge { display: inline-flex; align-items: center; min-height: 24px; padding: 2px 10px; border-radius: 999px; color: var(--green); background: var(--green-soft); font-size: 12px; font-weight: 700; }
+.voice-badge.whisper { color: var(--accent-text); background: var(--accent-soft); }
+.voice-text { margin: 0; overflow-wrap: anywhere; color: var(--text); font-size: 14px; line-height: 1.45; }
+.voice-meta { color: var(--muted); font-size: 12px; }

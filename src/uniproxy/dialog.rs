@@ -315,6 +315,25 @@ impl Request {
             self.dialog.finish_turn(&self.target.dialog_id, false);
             return;
         }
+        // Display-only whisper detection runs after the answer is on its way:
+        // the local classifier must never delay speech, and its result only
+        // feeds the panel's last-utterance card.
+        if let Some(detector) = self.context.detector.clone() {
+            let whisper = self.context.whisper.clone();
+            let duid = self.device_id.clone();
+            let heard = text.clone();
+            let audio = ogg.clone();
+            tokio::spawn(async move {
+                match detector.classify(&audio).await {
+                    Ok(reply) => {
+                        if let Err(error) = whisper.record_detection(&duid, &heard, &reply).await {
+                            tracing::warn!("cannot store whisper detection: {error:#}");
+                        }
+                    }
+                    Err(error) => tracing::debug!("whisper detection skipped: {error:#}"),
+                }
+            });
+        }
         // MatchedUser may arrive while the utterance is transcribed, so biometry is read only now (as in TS)
         let mut metadata = InputMetadata::new(biometry.get());
         metadata.speaker = speaker;

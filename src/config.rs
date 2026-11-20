@@ -19,6 +19,9 @@ pub struct BootstrapConfig {
     pub port: u16,
     pub api_port: u16,
     pub postgres_url: String,
+    /// An explicitly configured database is required: falling back to memory
+    /// would silently hide the station registry and owner settings.
+    pub postgres_required: bool,
     pub glagol_jwt_key: Vec<u8>,
 }
 
@@ -27,9 +30,11 @@ impl BootstrapConfig {
         let port = bootstrap_port("PORT", "31115")?;
         let api_port = bootstrap_port("API_PORT", "31116")?;
         ensure!(port != api_port, "PORT и API_PORT должны различаться");
-        let postgres_url = env::var("POSTGRES_URL")
+        let configured_postgres = env::var("POSTGRES_URL")
             .ok()
-            .filter(|value| !value.is_empty())
+            .filter(|value| !value.is_empty());
+        let postgres_required = configured_postgres.is_some();
+        let postgres_url = configured_postgres
             .unwrap_or_else(|| "postgres://quasar:quasar@localhost/quasar".to_string());
         // Use the database driver's parser, including its supported keyword and
         // Unix-socket formats. Its error is replaced so credentials stay private.
@@ -45,6 +50,7 @@ impl BootstrapConfig {
             port,
             api_port,
             postgres_url,
+            postgres_required,
             glagol_jwt_key,
         })
     }
@@ -190,6 +196,8 @@ pub struct Config {
     /// Separate expressive model: Piper and Flash voices cannot synthesize whispering.
     pub whisper_tts_model: String,
     pub whisper_tts_voice: String,
+    /// Local YAMNet classifier; empty disables whisper detection (replies are unaffected).
+    pub whisper_detect_url: String,
     pub tts_pcm_sample_rate: u32,
     pub tts_format: TtsFormat,
     pub tts_speed: f32,

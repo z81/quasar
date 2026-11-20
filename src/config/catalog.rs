@@ -87,6 +87,7 @@ pub fn definitions() -> Vec<SettingDefinition> {
         field("OPENROUTER_TTS_STREAMING", "Говорить во время подготовки ответа", "Начинает озвучивать ответ до окончания генерации. Работает и с Piper.", "tts", "boolean", "true"),
         field("WHISPER_TTS_MODEL", "Модель шёпота", "Отдельный выразительный голос через тот же ключ OpenRouter: Piper и Eleven Flash не поддерживают шёпот. Используется только при включённых ответах шёпотом.", "tts", "select", "elevenlabs/eleven-v3").options(&["elevenlabs/eleven-v3", "elevenlabs/eleven-v3-conversational", "elevenlabs/eleven-v4", "elevenlabs/eleven-v4-turbo"]),
         field("WHISPER_TTS_VOICE", "Голос шёпота", "Голос ElevenLabs для шёпота, например alice. Для шёпота требуется ключ OpenRouter даже при основном голосе Piper.", "tts", "text", "alice"),
+        field("WHISPER_DETECT_URL", "Детектор шёпота", "Адрес локального сервиса YAMNet, например http://alise-whisper:8080. Пустое значение отключает определение шёпота; голос ответа не меняется.", "tts", "text", ""),
         field("PIPER_URL", "Адрес Piper", "Базовый HTTP(S) адрес сервера синтеза, например http://piper:5000.", "tts", "text", ""),
         field("PIPER_VOICE", "Голос Piper", "Пустое значение — голос, выбранный на сервере Piper.", "tts", "text", ""),
         field("PIPER_SPEAKER", "Имя диктора Piper", "Для моделей с несколькими дикторами; необязательно.", "tts", "text", ""),

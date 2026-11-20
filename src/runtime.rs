@@ -168,6 +168,7 @@ async fn prepare(
     let piper = (config.tts_provider == TtsProvider::Piper)
         .then(|| crate::piper::Piper::from_config(&config))
         .flatten();
+    let detector = crate::voice_detection::Detector::from_config(&config).map(Arc::new);
     Ok(Arc::new(UniproxyContext {
         prompt_generator,
         functions,
@@ -180,6 +181,7 @@ async fn prepare(
         schedules,
         speakers,
         whisper,
+        detector,
         gigastt,
         piper,
         updates,

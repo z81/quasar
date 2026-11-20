@@ -60,6 +60,7 @@ mod updates;
 mod weather;
 mod weather_api;
 mod weather_tool;
+mod voice_detection;
 mod whisper;
 mod whisper_api;
 
@@ -107,7 +108,9 @@ async fn main() -> Result<()> {
     logging::init();
 
     let bootstrap = config::BootstrapConfig::from_env()?;
-    let storage = Arc::new(storage::Storage::connect(&bootstrap.postgres_url).await);
+    let storage = Arc::new(
+        storage::Storage::connect(&bootstrap.postgres_url, bootstrap.postgres_required).await?,
+    );
     let environment = config::Environment::capture();
     let (config, settings_revision) = server_settings::initial_config(&storage, &environment).await?;
     let weather = Arc::new(weather::WeatherService::new(storage.clone())?);

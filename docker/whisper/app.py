@@ -127,7 +127,10 @@ def classify(ogg: bytes) -> dict:
     # breathy/whispered sounds and very low for voiced ones.
     voicing = max(0.0, min(1.0, (0.55 - pitch) / 0.35))
     flat = max(0.0, min(1.0, (flatness - 0.005) / 0.05))
-    acoustic = (voicing + flat) / 2.0 if frames else 0.0
+    # Pitch strength is the main signal; flatness only confirms breathiness.
+    # A voiced whisper (some speakers keep the vocal folds active) is closer
+    # to ordinary speech and stays undetected instead of causing false alarms.
+    acoustic = (0.75 * voicing + 0.25 * flat) if frames else 0.0
     score = max(yamnet, acoustic)
     return {
         "whisper": score >= THRESHOLD,

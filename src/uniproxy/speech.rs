@@ -23,7 +23,7 @@ use tokio::task::JoinSet;
 use super::outbox::Outbox;
 use super::UniproxyContext;
 use crate::audio::{Encoded, Transcoder};
-use crate::config::TtsFormat;
+use crate::config::{TtsFormat, TtsProvider};
 use crate::piper::Piper;
 
 /// Chunks synthesized ahead of the one being encoded, so the next words are
@@ -197,8 +197,8 @@ async fn feed(
 /// The rate of the PCM the part's encoder takes: OpenRouter's raw PCM as it
 /// comes, anything decoded at SPEECH_RATE
 fn pcm_rate(context: &UniproxyContext) -> u32 {
-    match (&context.piper, context.config.tts_format) {
-        (None, TtsFormat::Pcm) => context.config.tts_pcm_sample_rate,
+    match (context.config.tts_provider, context.config.tts_format) {
+        (TtsProvider::OpenRouter, TtsFormat::Pcm) => context.config.tts_pcm_sample_rate,
         _ => SPEECH_RATE,
     }
 }
@@ -220,9 +220,13 @@ fn synthesize(context: &Arc<UniproxyContext>, text: String, style: SpeechStyle, 
         let started = Instant::now();
         let synthesized = if style == SpeechStyle::Whisper {
             synthesize_whisper(&context, &text, &pcm, started).await
-        } else { match &context.piper {
-            Some(piper) => synthesize_piper(&context, piper, &text, &pcm, started).await,
-            None => synthesize_openrouter(&context, &text, &pcm, started).await,
+        } else { match context.config.tts_provider {
+            TtsProvider::Piper => match &context.piper {
+                Some(piper) => synthesize_piper(&context, piper, &text, &pcm, started).await,
+                None => synthesize_openrouter(&context, &text, &pcm, started).await,
+            },
+            TtsProvider::Local => synthesize_local(&context, &text, &pcm, started).await,
+            TtsProvider::OpenRouter => synthesize_openrouter(&context, &text, &pcm, started).await,
         }};
         match synthesized {
             Ok(synthesis) => synthesis.log(&text, speech_rate(&context, style)),
@@ -339,6 +343,25 @@ async fn synthesize_openrouter(
         TtsFormat::Pcm => "pcm, resampled",
     };
     Ok(decode(decoder, speech, pcm, started, &AtomicBool::new(false)).await?.labelled(label.to_string()))
+}
+
+/// The chunk by a local OpenAI-compatible TTS (Qwen3-TTS): raw PCM at 24 kHz
+async fn synthesize_local(
+    context: &UniproxyContext,
+    text: &str,
+    pcm: &mpsc::UnboundedSender<Result<Bytes>>,
+    started: Instant,
+) -> Result<Synthesis> {
+    let local = context.local_tts.as_ref().context("Локальный синтез речи не настроен")?;
+    let speech = local.speech_stream(
+        &context.config.local_tts_model,
+        &context.config.local_tts_voice,
+        &None,
+        1.0,
+        TtsFormat::Pcm,
+        text,
+    ).await?;
+    Ok(forward(speech, pcm, started).await?.labelled("qwen-local".to_owned()))
 }
 
 /// Raw PCM at the encoder's rate, forwarded as it arrives

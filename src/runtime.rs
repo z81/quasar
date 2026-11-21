@@ -101,6 +101,12 @@ async fn prepare(
         .as_ref()
         .map(|url| crate::openrouter::OpenRouter::new(url, "", config.openrouter_timeout_ms, None))
         .transpose()?;
+    // LOCAL_TTS_URL: normal speech from a local OpenAI-compatible TTS
+    let local_tts = config
+        .local_tts_url
+        .as_ref()
+        .map(|url| crate::openrouter::OpenRouter::new(url, "", config.openrouter_timeout_ms, None))
+        .transpose()?;
     let llm = match &config.anthropic {
         Some(anthropic) => crate::agent::Llm::Anthropic(crate::anthropic::Anthropic::new(
             &anthropic.base_url,
@@ -188,6 +194,7 @@ async fn prepare(
         speakers,
         whisper,
         whisper_tts,
+        local_tts,
         detector,
         gigastt,
         piper,

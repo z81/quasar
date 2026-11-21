@@ -225,7 +225,7 @@ GET дополнительно возвращает `mcp.servers`, `mcp.baseline
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
-| `TTS_PROVIDER` | `openrouter` | `openrouter`, либо `piper` для локального сервера Piper или Vosk |
+| `TTS_PROVIDER` | `openrouter` | `openrouter`, `piper` для Piper/Vosk или `local` для локального Qwen3-TTS |
 | `OPENROUTER_TTS_MODEL` | `google/gemini-3.8-flash-lite-tts` | Модель синтеза OpenRouter |
 | `OPENROUTER_TTS_VOICE` | `Kore` | Голос. Он должен быть у выбранной модели |
 | `OPENROUTER_TTS_FORMAT` | `pcm` | `pcm` или `mp3`. `mp3` нужен для моделей, которые не отдают PCM |
@@ -233,6 +233,9 @@ GET дополнительно возвращает `mcp.servers`, `mcp.baseline
 | `OPENROUTER_TTS_SPEED` | `1` | Скорость речи |
 | `OPENROUTER_TTS_INSTRUCTIONS` | — | Инструкции для голоса, если модель их понимает |
 | `OPENROUTER_TTS_STREAMING` | `true` | Говорить, пока LLM пишет ответ. `false`: ждать весь текст |
+| `LOCAL_TTS_URL` | — | OpenAI-совместимый адрес Qwen3-TTS, например `http://192.168.1.133:8090/v1`. Обязателен при `TTS_PROVIDER=local` |
+| `LOCAL_TTS_MODEL` | `qwen3-tts-ru` | Модель локального синтеза |
+| `LOCAL_TTS_VOICE` | `alice` | Голос локального синтеза |
 | `PIPER_URL` | — | Адрес сервера Piper или Vosk, например `http://piper:5000`. Обязателен при `TTS_PROVIDER=piper` |
 | `PIPER_VOICE` | — | Голос Piper. По умолчанию — голос, с которым запущен сервер |
 | `PIPER_SPEAKER`, `PIPER_SPEAKER_ID` | — | Голос многоголосой модели по имени или номеру |
@@ -278,7 +281,18 @@ PIPER_URL=http://piper:5000
 - **Piper** — самый быстрый: фраза синтезируется примерно за 0,1 с. Ударения он ставит по словарю espeak-ng и иногда ошибается.
 - **Vosk** берёт ударения из большого словаря, и голоса звучат естественнее. Зато он медленнее, 0,3–0,8 с на фразу, и занимает около 2,3 ГБ памяти.
 
-Как их запустить и выбрать голос, описано в [docker/README.md](docker/README.md#piper).
+**Qwen3-TTS** работает по OpenAI-совместимому протоколу и отдаёт PCM (s16le, 24 кГц, моно):
+
+```
+TTS_PROVIDER=local
+LOCAL_TTS_URL=http://192.168.1.133:8090/v1
+LOCAL_TTS_MODEL=qwen3-tts-ru
+LOCAL_TTS_VOICE=alice
+```
+
+Сервер должен поддерживать `POST /audio/speech` с `response_format=pcm`. Локальный Qwen3-TTS звучит естественнее Piper и работает быстрее реального времени, но требует GPU и отдельного сервиса.
+
+Как запустить Piper или Vosk и выбрать голос, описано в [docker/README.md](docker/README.md#piper).
 
 ## Синтез шёпота
 

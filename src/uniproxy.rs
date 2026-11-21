@@ -64,6 +64,8 @@ pub struct UniproxyContext {
     pub whisper: Arc<crate::whisper::WhisperService>,
     /// Local OpenAI-compatible whisper TTS (WHISPER_TTS_URL); None: ElevenLabs via OpenRouter
     pub whisper_tts: Option<crate::openrouter::OpenRouter>,
+    /// Local OpenAI-compatible normal TTS (LOCAL_TTS_URL)
+    pub local_tts: Option<crate::openrouter::OpenRouter>,
     /// Optional local YAMNet classifier; detection is shown in the panel but
     /// does not change the answer's voice.
     pub detector: Option<Arc<crate::voice_detection::Detector>>,
@@ -81,6 +83,7 @@ impl UniproxyContext {
     pub fn can_speak(&self) -> bool {
         match self.config.tts_provider {
             crate::config::TtsProvider::Piper => self.piper.is_some(),
+            crate::config::TtsProvider::Local => self.local_tts.is_some(),
             crate::config::TtsProvider::OpenRouter => !self.config.openrouter_api_key.is_empty(),
         }
     }

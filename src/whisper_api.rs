@@ -47,7 +47,7 @@ async fn update(State(state): State<Arc<ApiState>>, Path(duid): Path<String>, Js
     if let Err(error) = station(&state, &duid).await { return error; }
     let context = state.runtime.snapshot();
     if body.enabled && !crate::whisper::available(&context.config) {
-        return error(StatusCode::BAD_REQUEST, "Для шёпота нужен ключ OpenRouter в настройках сервера");
+        return error(StatusCode::BAD_REQUEST, "Для шёпота нужен локальный Qwen3-TTS или ключ OpenRouter в настройках сервера");
     }
     if let Err(cause) = context.whisper.set(&context.config, &duid, body.enabled).await {
         tracing::warn!("cannot save whisper preference: {cause}");

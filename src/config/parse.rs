@@ -103,6 +103,14 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
             "WHISPER_TTS_URL: укажите базовый адрес без query и fragment"
         );
     }
+    let local_tts_url = values.optional("LOCAL_TTS_URL");
+    if let Some(address) = local_tts_url.as_deref() {
+        let parsed = url("LOCAL_TTS_URL", address, &["http", "https"])?;
+        ensure!(
+            parsed.query().is_none() && parsed.fragment().is_none(),
+            "LOCAL_TTS_URL: укажите базовый адрес без query и fragment"
+        );
+    }
     let gigastt_url = values.optional("GIGASTT_URL");
     let speaker_embedding_url = values.optional("SPEAKER_EMBEDDING_URL");
     if let Some(address) = speaker_embedding_url.as_deref() {
@@ -149,8 +157,12 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
     };
     let tts_provider = match values.lower("TTS_PROVIDER").as_str() {
         "piper" => TtsProvider::Piper,
+        "local" => TtsProvider::Local,
         _ => TtsProvider::OpenRouter,
     };
+    if tts_provider == TtsProvider::Local && local_tts_url.is_none() {
+        bail!("LOCAL_TTS_URL: задайте адрес локального синтеза");
+    }
     let tts_speed = values.number("OPENROUTER_TTS_SPEED")? as f32;
     let speaker_id = values
         .optional("PIPER_SPEAKER_ID")
@@ -207,6 +219,9 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
         },
         tts_speed,
         tts_provider,
+        local_tts_url: local_tts_url.map(|url| url.trim_end_matches('/').to_owned()),
+        local_tts_model: values.required("LOCAL_TTS_MODEL")?,
+        local_tts_voice: values.required("LOCAL_TTS_VOICE")?,
         piper,
         tts_streaming: values.boolean("OPENROUTER_TTS_STREAMING"),
         processor_model: values.required(if anthropic.is_some() {

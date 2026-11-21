@@ -123,6 +123,8 @@ pub enum TtsProvider {
     OpenRouter,
     /// a Piper HTTP server (PIPER_*), OpenRouter as fallback
     Piper,
+    /// a local OpenAI-compatible TTS (LOCAL_TTS_*)
+    Local,
 }
 
 /// TTS_PROVIDER=piper: the Piper HTTP server and how it speaks
@@ -208,6 +210,10 @@ pub struct Config {
     pub tts_format: TtsFormat,
     pub tts_speed: f32,
     pub tts_provider: TtsProvider,
+    /// set with TTS_PROVIDER=local: an OpenAI-compatible Qwen3-TTS server
+    pub local_tts_url: Option<String>,
+    pub local_tts_model: String,
+    pub local_tts_voice: String,
     /// set with TTS_PROVIDER=piper
     pub piper: Option<PiperConfig>,
     /// speak an answer while the LLM still writes it (the TS fork's
@@ -276,6 +282,9 @@ pub fn readiness_issues(config: &Config) -> Vec<String> {
     }
     if config.tts_provider == TtsProvider::Piper && config.piper.is_none() {
         issues.push("Задайте PIPER_URL для синтеза речи".to_string());
+    }
+    if config.tts_provider == TtsProvider::Local && config.local_tts_url.is_none() {
+        issues.push("Задайте LOCAL_TTS_URL для локального синтеза речи".to_string());
     }
     issues
 }

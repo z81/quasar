@@ -62,6 +62,8 @@ struct Dialog {
     answers: Option<Answers>,
     /// Frozen for all streamed/continued parts of the current answer.
     speech_style: SpeechStyle,
+    /// The voice chosen for this voice input; Auto resolves it from the detector.
+    auto_style: Option<SpeechStyle>,
 }
 
 /// The connection's current dialog, shared by the receive loop and the turns
@@ -73,6 +75,16 @@ impl DialogSlot {
         if let Some(dialog) = self.lock().as_mut().filter(|dialog| dialog.id == id) {
             dialog.speech_style = style;
         }
+    }
+
+    fn set_auto_style(&self, id: &str, style: Option<SpeechStyle>) {
+        if let Some(dialog) = self.lock().as_mut().filter(|dialog| dialog.id == id) {
+            dialog.auto_style = style;
+        }
+    }
+
+    fn auto_style(&self, id: &str) -> Option<SpeechStyle> {
+        self.lock().as_ref().filter(|dialog| dialog.id == id).and_then(|dialog| dialog.auto_style)
     }
 
     fn speech_style(&self, id: &str) -> SpeechStyle {
@@ -207,6 +219,7 @@ fn open(slot: &mut Option<Dialog>, context: &Arc<UniproxyContext>, zone: &Zone) 
         awaiting_input: false,
         answers: None,
         speech_style: SpeechStyle::Normal,
+        auto_style: None,
     };
     tracing::info!("dialog {} started", dialog.id);
     let opened = (dialog.id.clone(), dialog.agent.clone());
@@ -289,9 +302,18 @@ impl Request {
             return;
         }
         let ended_by_gigastt = endpoint.is_some();
-        let (Transcript { text, speech_ended_at }, speaker) = tokio::join!(
+        let (Transcript { text, speech_ended_at }, speaker, detection) = tokio::join!(
             transcribe(&self.context, recognition, &ogg, ended_at, endpoint),
             self.context.speakers.process(self.context.config.speaker_embedding_url.as_deref(), &self.device_id, &ogg, None),
+            async {
+                match tokio::time::timeout(Duration::from_millis(600), detect_whisper(&self.context, &ogg)).await {
+                    Ok(detection) => detection,
+                    Err(_) => {
+                        tracing::debug!("whisper detection timed out");
+                        None
+                    }
+                }
+            },
         );
         let speaker = match speaker {
             crate::speaker::Outcome::Identity(speaker) => speaker,
@@ -315,25 +337,33 @@ impl Request {
             self.dialog.finish_turn(&self.target.dialog_id, false);
             return;
         }
-        // Display-only whisper detection runs after the answer is on its way:
-        // the local classifier must never delay speech, and its result only
-        // feeds the panel's last-utterance card.
-        if let Some(detector) = self.context.detector.clone() {
-            let whisper = self.context.whisper.clone();
-            let duid = self.device_id.clone();
-            let heard = text.clone();
-            let audio = ogg.clone();
-            tokio::spawn(async move {
-                match detector.classify(&audio).await {
-                    Ok(reply) => {
-                        if let Err(error) = whisper.record_detection(&duid, &heard, &reply).await {
-                            tracing::warn!("cannot store whisper detection: {error:#}");
-                        }
-                    }
-                    Err(error) => tracing::debug!("whisper detection skipped: {error:#}"),
-                }
-            });
+        // The detector ran in parallel with recognition; store its result and
+        // freeze the voice for this input. In Auto mode the LLM answer starts
+        // after recognition, so the detector has long finished by then.
+        if let Some(reply) = &detection {
+            if let Err(error) = self.context.whisper.record_detection(&self.device_id, &text, reply).await {
+                tracing::warn!("cannot store whisper detection: {error:#}");
+            }
         }
+        let mode = match self.context.whisper.mode(&self.device_id).await {
+            Ok(mode) => mode,
+            Err(error) => {
+                tracing::warn!("cannot read whisper mode: {error}");
+                crate::whisper::Mode::Off
+            }
+        };
+        let style = match mode {
+            crate::whisper::Mode::Always => SpeechStyle::Whisper,
+            crate::whisper::Mode::Off => SpeechStyle::Normal,
+            crate::whisper::Mode::Auto => {
+                if detection.as_ref().is_some_and(|reply| reply.whisper) {
+                    SpeechStyle::Whisper
+                } else {
+                    SpeechStyle::Normal
+                }
+            }
+        };
+        self.dialog.set_auto_style(&self.target.dialog_id, Some(style));
         // MatchedUser may arrive while the utterance is transcribed, so biometry is read only now (as in TS)
         let mut metadata = InputMetadata::new(biometry.get());
         metadata.speaker = speaker;
@@ -345,6 +375,7 @@ impl Request {
 
     /// TextInput with an external event pushed through the API
     pub async fn answer_event(mut self, agent: Arc<Agent>, event: String) {
+        self.dialog.set_auto_style(&self.target.dialog_id, None);
         let agent = self.dialog.for_speaker(&self.target.dialog_id, None, &self.context, &self.zone, &agent);
         let metadata = InputMetadata::new(None);
         let live_context = self.live_context.take();
@@ -353,6 +384,7 @@ impl Request {
 
     /// TextInput with text pushed through the API as if the user said it
     pub async fn answer_utterance(mut self, agent: Arc<Agent>, text: String) {
+        self.dialog.set_auto_style(&self.target.dialog_id, None);
         let agent = self.dialog.for_speaker(&self.target.dialog_id, None, &self.context, &self.zone, &agent);
         let metadata = InputMetadata::new(None);
         let live_context = self.live_context.take();
@@ -370,6 +402,7 @@ impl Request {
 
     /// TextInput with text pushed through the API: spoken as is
     pub async fn answer_tts(self, text: String) {
+        self.dialog.set_auto_style(&self.target.dialog_id, None);
         let _guard = self
             .feedback
             .as_ref()
@@ -458,6 +491,9 @@ impl Request {
             Some(enabled) => Some(self.context.whisper.set(&self.context.config, &self.device_id, enabled).await),
             None => None,
         };
+        if preference_command.is_some() {
+            self.dialog.set_auto_style(&self.target.dialog_id, None);
+        }
         let style = match self.preferred_speech_style().await {
             Ok(style) => style,
             Err(error) => {
@@ -501,7 +537,14 @@ impl Request {
     }
 
     async fn preferred_speech_style(&self) -> anyhow::Result<SpeechStyle> {
-        Ok(if self.context.whisper.enabled(&self.device_id).await? { SpeechStyle::Whisper } else { SpeechStyle::Normal })
+        if let Some(style) = self.dialog.auto_style(&self.target.dialog_id) {
+            return Ok(style);
+        }
+        let mode = self.context.whisper.mode(&self.device_id).await?;
+        Ok(match mode {
+            crate::whisper::Mode::Always => SpeechStyle::Whisper,
+            crate::whisper::Mode::Off | crate::whisper::Mode::Auto => SpeechStyle::Normal,
+        })
     }
 
     fn can_speak(&self, style: SpeechStyle) -> bool {
@@ -701,6 +744,19 @@ impl Request {
             }
         }
         report(result);
+    }
+}
+
+/// The local YAMNet classifier on the finished utterance; it runs in parallel
+/// with recognition, so Auto mode adds no latency before the answer.
+async fn detect_whisper(context: &UniproxyContext, ogg: &[u8]) -> Option<crate::voice_detection::Reply> {
+    let detector = context.detector.as_ref()?;
+    match detector.classify(ogg).await {
+        Ok(reply) => Some(reply),
+        Err(error) => {
+            tracing::debug!("whisper detection skipped: {error:#}");
+            None
+        }
     }
 }
 

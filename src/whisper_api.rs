@@ -12,6 +12,7 @@ use serde_json::json;
 
 use crate::api::ApiState;
 use crate::auth::AuthManager;
+use crate::whisper::Mode;
 
 pub fn router(auth: Arc<AuthManager>) -> Router<Arc<ApiState>> {
     Router::new()
@@ -40,16 +41,23 @@ async fn view(State(state): State<Arc<ApiState>>, Path(duid): Path<String>) -> R
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Update {
-    enabled: bool,
+    enabled: Option<bool>,
+    mode: Option<Mode>,
 }
 
 async fn update(State(state): State<Arc<ApiState>>, Path(duid): Path<String>, Json(body): Json<Update>) -> Response {
     if let Err(error) = station(&state, &duid).await { return error; }
     let context = state.runtime.snapshot();
-    if body.enabled && !crate::whisper::available(&context.config) {
+    let mode = match (body.mode, body.enabled) {
+        (Some(mode), None) => mode,
+        (None, Some(enabled)) => if enabled { Mode::Always } else { Mode::Off },
+        (None, None) => return error(StatusCode::BAD_REQUEST, "Укажите enabled или mode"),
+        (Some(_), Some(_)) => return error(StatusCode::BAD_REQUEST, "Укажите что-то одно: enabled или mode"),
+    };
+    if mode != Mode::Off && !crate::whisper::available(&context.config) {
         return error(StatusCode::BAD_REQUEST, "Для шёпота нужен локальный Qwen3-TTS или ключ OpenRouter в настройках сервера");
     }
-    if let Err(cause) = context.whisper.set(&context.config, &duid, body.enabled).await {
+    if let Err(cause) = context.whisper.set_mode(&context.config, &duid, mode).await {
         tracing::warn!("cannot save whisper preference: {cause}");
         return error(StatusCode::SERVICE_UNAVAILABLE, "Не удалось сохранить режим шёпота");
     }

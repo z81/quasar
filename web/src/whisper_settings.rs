@@ -12,6 +12,8 @@ use crate::{
 #[derive(Clone, Deserialize)]
 struct WhisperView {
     enabled: bool,
+    #[serde(default)]
+    mode: String,
     available: bool,
     persistent: bool,
     #[serde(default)]
@@ -89,32 +91,33 @@ pub fn WhisperSettings(state: ControlState, duid: String) -> Element {
         }
     });
     let snapshot = view();
+    let mode = snapshot.as_ref().map(|value| value.mode.clone()).unwrap_or_else(|| "off".to_owned());
     let enabled = snapshot.as_ref().is_some_and(|value| value.enabled);
     let available = snapshot.as_ref().is_some_and(|value| value.available);
     let detection_available = snapshot.as_ref().is_some_and(|value| value.detection_available);
     let last = snapshot.as_ref().and_then(|value| value.last.clone());
-    let disabled = busy() || snapshot.is_none() || error().is_some() || (!available && !enabled);
+    let disabled = busy() || snapshot.is_none() || error().is_some() || (!available && mode != "off");
     rsx! {
         section { class: "card settings-card whisper-settings", aria_label: "Режим шёпота",
             div { class: "card-heading",
                 span { class: "card-kicker", Icon { name: "volume-down", size: 16 } "ГОЛОС АЛИСЫ" }
-                span { class: "subtle-pill", if busy() { "Сохраняем…" } else if error().is_some() { "Нет связи" } else if snapshot.is_none() { "Загружаем…" } else if enabled { "Шёпот включён" } else { "Обычный голос" } }
+                span { class: "subtle-pill", if busy() { "Сохраняем…" } else if error().is_some() { "Нет связи" } else if snapshot.is_none() { "Загружаем…" } else if mode == "auto" { "Авто по голосу" } else if enabled { "Шёпот включён" } else { "Обычный голос" } }
             }
             h2 { "Режим шёпота" }
-            p { class: "settings-intro", "Алиса озвучивает ответы шёпотом, пока вы не выключите этот режим. Настройка действует только на выбранную колонку." }
+            p { class: "settings-intro", "Алиса выбирает голос ответа: обычный, всегда шёпотом или автоматически по детектору. Настройка действует только на выбранную колонку." }
             label { class: "toggle-field",
-                span { strong { "Отвечать шёпотом" } small { "Применяется сразу к следующим ответам" } }
-                input { r#type: "checkbox", checked: enabled, disabled,
+                span { strong { "Голос ответа" } small { "Авто: шёпот, если фраза сказана шёпотом" } }
+                select { value: "{mode}", disabled,
                     onchange: move |event| {
                         if disabled { return; }
-                        let next = event.checked();
+                        let next = event.value();
                         busy.set(true);
                         feedback.set(None);
                         let next_revision = *revision.peek() + 1;
                         revision.set(next_revision);
                         let url = format!("/devices/{}/whisper", api::encoded(&duid));
                         dioxus::core::spawn_forever(async move {
-                            let result = match api::mutate(state, "PUT", &url, Some(&json!({ "enabled": next }))).await {
+                            let result = match api::mutate(state, "PUT", &url, Some(&json!({ "mode": next }))).await {
                                 Ok(response) => response.json::<WhisperView>().await.map_err(|_| "Сервер вернул непонятный ответ".to_owned()),
                                 Err(error) => Err(error),
                             };
@@ -122,7 +125,12 @@ pub fn WhisperSettings(state: ControlState, duid: String) -> Element {
                                 Ok(value) => {
                                     if let Ok(mut current) = view.try_write() { *current = Some(value); }
                                     if let Ok(mut current) = error.try_write() { *current = None; }
-                                    if let Ok(mut current) = feedback.try_write() { *current = Some((true, if next { "Ответы шёпотом включены" } else { "Обычный голос включён" }.to_owned())); }
+                                    let message = match next.as_str() {
+                                        "auto" => "Авто-режим включён",
+                                        "always" => "Ответы шёпотом включены",
+                                        _ => "Обычный голос включён",
+                                    };
+                                    if let Ok(mut current) = feedback.try_write() { *current = Some((true, message.to_owned())); }
                                 }
                                 Err(message) => {
                                     if let Ok(mut current) = feedback.try_write() { *current = Some((false, message)); }
@@ -130,15 +138,18 @@ pub fn WhisperSettings(state: ControlState, duid: String) -> Element {
                             }
                             if let Ok(mut current) = busy.try_write() { *current = false; }
                         });
-                    }
+                    },
+                    option { value: "off", "Обычный голос" }
+                    option { value: "always", "Всегда шёпотом" }
+                    option { value: "auto", "Авто: по голосу" }
                 }
             }
             VoiceLast { available: detection_available, last }
             p { class: "form-help", "Голосом: «Алиса, говори шёпотом» или «Алиса, говори обычным голосом»." }
-            p { class: "form-help", if detection_available { "Определение шёпота показывает последнюю фразу, но не меняет голос ответа." } else { "Детектор шёпота не настроен: укажите адрес локального YAMNet в настройках сервера." } }
-            p { class: "form-help", "Шёпот озвучивает ElevenLabs через OpenRouter: текст ответа передаётся этому сервису. Голос может отличаться от обычного; звук активации и музыка сохраняют свои настройки." }
+            p { class: "form-help", if detection_available { "В авто-режиме детектор выбирает голос ответа; в остальных режимах он только показывает последнюю фразу." } else { "Детектор шёпота не настроен: укажите адрес локального YAMNet в настройках сервера." } }
+            p { class: "form-help", "Шёпот озвучивает локальный Qwen3-TTS или ElevenLabs через OpenRouter. Голос может отличаться от обычного; звук активации и музыка сохраняют свои настройки." }
             if snapshot.is_some() && !available {
-                p { class: "form-feedback failure", "Для шёпота добавьте ключ OpenRouter в настройках сервера. Основной голос Piper не поддерживает шёпот." }
+                p { class: "form-feedback failure", "Для шёпота нужен локальный Qwen3-TTS или ключ OpenRouter в настройках сервера." }
             }
             if snapshot.as_ref().is_some_and(|value| !value.persistent) {
                 p { class: "form-feedback failure", "База недоступна: настройка шёпота сбросится после перезапуска сервера." }

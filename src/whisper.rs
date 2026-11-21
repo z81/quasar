@@ -8,7 +8,7 @@ use std::sync::Arc;
 use anyhow::{ensure, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 use crate::config::Config;
@@ -18,6 +18,16 @@ pub struct WhisperService {
     storage: Arc<Storage>,
     /// The last result per station; the panel reads it on every device poll.
     last: Mutex<HashMap<String, Detection>>,
+}
+
+/// When the station answers in a whisper. `Auto` uses the local YAMNet
+/// detector on the current utterance; text inputs stay in a normal voice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    Off,
+    Always,
+    Auto,
 }
 
 /// Display-only result of the local YAMNet classifier.
@@ -44,6 +54,7 @@ pub struct Detection {
 #[derive(Serialize)]
 pub struct View {
     pub enabled: bool,
+    pub mode: Mode,
     pub available: bool,
     pub persistent: bool,
     pub model: String,
@@ -117,31 +128,51 @@ impl WhisperService {
         Ok(Some(detection))
     }
 
-    pub async fn enabled(&self, duid: &str) -> Result<bool> {
+    pub async fn mode(&self, duid: &str) -> Result<Mode> {
         match self.storage.get_control_value(&format!("whisper:{duid}")).await? {
-            None => Ok(false),
-            Some(value) => value.as_bool().ok_or_else(|| anyhow::anyhow!("Invalid stored whisper preference")),
+            None => Ok(Mode::Off),
+            Some(Value::Bool(true)) => Ok(Mode::Always),
+            Some(Value::Bool(false)) => Ok(Mode::Off),
+            Some(Value::String(value)) if value == "always" => Ok(Mode::Always),
+            Some(Value::String(value)) if value == "auto" => Ok(Mode::Auto),
+            Some(Value::String(value)) if value == "off" => Ok(Mode::Off),
+            Some(_) => Err(anyhow::anyhow!("Invalid stored whisper preference")),
         }
     }
 
-    pub async fn set(&self, config: &Config, duid: &str, enabled: bool) -> Result<()> {
+    pub async fn enabled(&self, duid: &str) -> Result<bool> {
+        Ok(self.mode(duid).await? != Mode::Off)
+    }
+
+    pub async fn set_mode(&self, config: &Config, duid: &str, mode: Mode) -> Result<()> {
         ensure!(
-            !enabled || available(config),
+            mode == Mode::Off || available(config),
             "Для шёпота нужен локальный сервер Qwen3-TTS или ключ OpenRouter в настройках сервера"
         );
-        self.storage.set_control_value(&format!("whisper:{duid}"), &json!(enabled)).await
+        let value = match mode {
+            Mode::Off => "off",
+            Mode::Always => "always",
+            Mode::Auto => "auto",
+        };
+        self.storage.set_control_value(&format!("whisper:{duid}"), &json!(value)).await
+    }
+
+    pub async fn set(&self, config: &Config, duid: &str, enabled: bool) -> Result<()> {
+        self.set_mode(config, duid, if enabled { Mode::Always } else { Mode::Off }).await
     }
 
     pub async fn view(&self, config: &Config, duid: &str) -> Result<View> {
         let detection_available = !config.whisper_detect_url.trim().is_empty();
         let local = config.whisper_tts_url.is_some();
+        let mode = self.mode(duid).await?;
         let (model, voice) = if local {
             (config.whisper_tts_local_model.clone(), config.whisper_tts_local_voice.clone())
         } else {
             (config.whisper_tts_model.clone(), config.whisper_tts_voice.clone())
         };
         Ok(View {
-            enabled: self.enabled(duid).await?,
+            enabled: mode != Mode::Off,
+            mode,
             available: available(config),
             persistent: self.storage.is_persistent(),
             model,
@@ -150,17 +181,31 @@ impl WhisperService {
             detection_available,
             last: self.last_detection(duid).await?,
             message: if local {
-                if detection_available {
-                    "Настоящий шёпот локально через Qwen3-TTS. Определение шёпота показывает последнюю фразу, но голос ответа не меняет."
+                if mode == Mode::Auto {
+                    if detection_available {
+                        "Шёпот локально через Qwen3-TTS. Авто: если фраза сказана шёпотом — ответ шёпотом, иначе обычным голосом."
+                    } else {
+                        "Авто-режим требует детектор шёпота: укажите адрес YAMNet в настройках сервера."
+                    }
+                } else if detection_available {
+                    "Настоящий шёпот локально через Qwen3-TTS. Определение шёпота показывает последнюю фразу; режим включается переключателем или командой «говори шёпотом»."
                 } else {
                     "Настоящий шёпот локально через Qwen3-TTS. Включается переключателем или командой «говори шёпотом»."
                 }
             } else if available(config) {
-                if detection_available {
-                    "Настоящий шёпот через ElevenLabs в OpenRouter. Определение шёпота показывает последнюю фразу, но голос ответа не меняет."
+                if mode == Mode::Auto {
+                    if detection_available {
+                        "Шёпот через ElevenLabs в OpenRouter. Авто: если фраза сказана шёпотом — ответ шёпотом, иначе обычным голосом."
+                    } else {
+                        "Авто-режим требует детектор шёпота: укажите адрес YAMNet в настройках сервера."
+                    }
+                } else if detection_available {
+                    "Настоящий шёпот через ElevenLabs в OpenRouter. Определение шёпота показывает последнюю фразу; режим включается переключателем или командой «говори шёпотом»."
                 } else {
                     "Настоящий шёпот через ElevenLabs в OpenRouter. Включается переключателем или командой «говори шёпотом»."
                 }
+            } else if mode == Mode::Auto {
+                "Для авто-шёпота нужен локальный Qwen3-TTS или ключ OpenRouter в настройках сервера."
             } else if detection_available {
                 "Piper не поддерживает шёпот: для ответов шёпотом нужен локальный Qwen3-TTS или ключ OpenRouter. Определение шёпота уже работает и показывает последнюю фразу."
             } else {

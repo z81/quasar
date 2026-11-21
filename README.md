@@ -1,6 +1,6 @@
 # alice-server
 
-Свой сервер для Яндекс.Станции (Quasar) с голосовым ассистентом. Он эмулирует облако Яндекса, с которым общается прошивка станции, а ответы пользователю готовит LLM через [OpenRouter](https://openrouter.ai) или напрямую через API Anthropic. Речь распознаётся и синтезируется через OpenRouter или локально: GigaAM, Piper, Vosk.
+Свой сервер для Яндекс.Станции (Quasar) с голосовым ассистентом. Он эмулирует облако Яндекса, с которым общается прошивка станции, а ответы пользователю готовит LLM через [OpenRouter](https://openrouter.ai) или напрямую через API Anthropic. Речь распознаётся и синтезируется через OpenRouter или локально: GigaAM, Whisper large-v3 на GPU, Piper, Vosk.
 
 [Запуск](#запуск) · [Подключение станции](#подключение-станции) · [Настройка](#настройка) · [Docker Compose](docker/README.md)
 
@@ -40,7 +40,8 @@
 - **Голосовой диалог.** Речь со станции распознаётся, LLM пишет ответ, и станция начинает говорить, пока модель ещё дописывает текст.
 - **Распознавание речи:**
   - OpenRouter (Whisper);
-  - GigaAM v3 через [gigastt](https://github.com/ekhodzitsky/gigastt). Он распознаёт речь, пока станция записывает, и сам замечает конец фразы, так что станция перестаёт слушать сразу после паузы, а не через 5 секунд.
+  - GigaAM v3 через [gigastt](https://github.com/ekhodzitsky/gigastt). Он распознаёт речь, пока станция записывает, и сам замечает конец фразы, так что станция перестаёт слушать сразу после паузы, а не через 5 секунд;
+  - Whisper large-v3 на GPU через `whisper.cpp`: уточняет финальный текст после GigaAM, не заменяя потоковое распознавание.
 - **Синтез речи:** OpenRouter, [Piper](https://github.com/OHF-Voice/piper1-gpl) или [Vosk TTS](https://github.com/alphacep/vosk-tts). Образы локальных синтезаторов лежат в `docker/`. Если локальный синтезатор не ответил, фразу озвучивает OpenRouter.
 - **Функции:**
   - управление станцией: громкость, пауза, Bluetooth;
@@ -220,6 +221,7 @@ GET дополнительно возвращает `mcp.servers`, `mcp.baseline
 | `GIGASTT_URL` | — | Адрес gigastt, например `http://gigastt:9876`. Обязателен при `STT_PROVIDER=gigaam` |
 | `STT_END_OF_SPEECH` | `server` с gigastt, иначе `station` | Кто решает, что фраза закончилась: сервер по паузе или станция по своему таймауту |
 | `GIGASTT_MIN_SILENCE_MS` | `800` | Сколько тишины после последнего слова считать концом фразы. С VAD у gigastt это его порог, без VAD сервер дожидается этой тишины после того, как gigastt нашёл паузу (не меньше 600 мс). Больше — Алиса дольше ждёт продолжения фразы. Станция сама перестаёт слушать примерно через 5 секунд |
+| `WHISPER_STT_URL` | — | Адрес локального whisper.cpp server, например `http://192.168.1.133:8098`. Если задан, финальный текст уточняется Whisper large-v3 на GPU; потоковое распознавание и конец фразы остаются за GigaAM |
 
 ### Синтез речи
 
@@ -268,6 +270,30 @@ GIGASTT_URL=http://gigastt:9876
 ```
 
 Если контейнеру gigastt не задать `GIGASTT_VAD=true`, он тоже замечает конец фразы, но грубее. Если gigastt недоступен или вернул ошибку, фразу распознаёт OpenRouter.
+
+## Уточнение Whisper на GPU
+
+Whisper large-v3 — офлайн-модель: он не умеет отдавать партиалы по мере речи. Поэтому GigaAM остаётся потоковым распознавателем, а Whisper уточняет уже готовый финальный текст. Реакция остаётся быстрой, точность финала — как у large-v3.
+
+Сервер на `whisper.cpp` с Vulkan:
+
+```
+git clone https://github.com/ggml-org/whisper.cpp
+cd whisper.cpp
+cmake -B build -DGGML_VULKAN=ON -DWHISPER_BUILD_SERVER=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j4 --target whisper-server
+bash models/download-ggml-model.sh large-v3-q5_0
+./build/bin/whisper-server -m models/ggml-large-v3-q5_0.bin \
+  --host 0.0.0.0 --port 8098 -l ru -t 4
+```
+
+В alice-server:
+
+```
+WHISPER_STT_URL=http://192.168.1.133:8098
+```
+
+Если Whisper недоступен или вернул пустой текст, остаётся распознавание GigaAM.
 
 ## Локальный синтез речи
 

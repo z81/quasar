@@ -111,6 +111,14 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
             "LOCAL_TTS_URL: укажите базовый адрес без query и fragment"
         );
     }
+    let whisper_stt_url = values.optional("WHISPER_STT_URL");
+    if let Some(address) = whisper_stt_url.as_deref() {
+        let parsed = url("WHISPER_STT_URL", address, &["http", "https"])?;
+        ensure!(
+            parsed.query().is_none() && parsed.fragment().is_none(),
+            "WHISPER_STT_URL: укажите базовый адрес без query и fragment"
+        );
+    }
     let gigastt_url = values.optional("GIGASTT_URL");
     let speaker_embedding_url = values.optional("SPEAKER_EMBEDDING_URL");
     if let Some(address) = speaker_embedding_url.as_deref() {
@@ -198,6 +206,7 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
         stt_model: values.required("OPENROUTER_STT_MODEL")?,
         stt_language: values.optional("OPENROUTER_STT_LANGUAGE"),
         stt_provider,
+        whisper_stt_url: whisper_stt_url.map(|url| url.trim_end_matches('/').to_owned()),
         gigastt_url,
         speaker_embedding_url,
         end_of_speech,

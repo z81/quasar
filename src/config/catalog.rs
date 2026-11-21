@@ -77,6 +77,7 @@ pub fn definitions() -> Vec<SettingDefinition> {
         field("STT_END_OF_SPEECH", "Окончание фразы", "Автоматически: для GigaAM — сервер, иначе — колонка.", "stt", "select", "").options(&["", "server", "station"]),
         field("OPENROUTER_STT_MODEL", "Модель распознавания OpenRouter", "Основное или резервное распознавание речи.", "stt", "text", "openai/whisper-large-v3"),
         field("OPENROUTER_STT_LANGUAGE", "Язык распознавания", "Например ru. Пустое значение — определять язык автоматически.", "stt", "text", "ru"),
+        field("WHISPER_STT_URL", "Whisper STT (GPU)", "Адрес локального whisper.cpp server, например http://192.168.1.133:8098. Если задан, финальный текст уточняется Whisper large-v3; стриминг остаётся за GigaAM.", "stt", "text", ""),
         field("TTS_PROVIDER", "Синтез речи", "Провайдер, который озвучивает ответы Алисы: OpenRouter, Piper или локальный Qwen3-TTS.", "tts", "select", "openrouter").options(&["openrouter", "piper", "local"]),
         field("OPENROUTER_TTS_MODEL", "Модель голоса OpenRouter", "Основной голос или резервный при сбое Piper.", "tts", "text", "google/gemini-3.8-flash-lite-tts"),
         field("OPENROUTER_TTS_VOICE", "Голос OpenRouter", "Имя голоса, поддерживаемого выбранной моделью.", "tts", "text", "Kore"),

@@ -183,6 +183,8 @@ pub struct Config {
     pub stt_model: String,
     pub stt_language: Option<String>,
     pub stt_provider: SttProvider,
+    /// WHISPER_STT_URL: a local whisper.cpp server that refines the final text
+    pub whisper_stt_url: Option<String>,
     /// the gigastt server's HTTP address (STT_PROVIDER=gigaam), e.g. http://gigastt:9876
     pub gigastt_url: Option<String>,
     /// Optional local ECAPA embedding service; empty disables household recognition.

@@ -107,6 +107,12 @@ async fn prepare(
         .as_ref()
         .map(|url| crate::openrouter::OpenRouter::new(url, "", config.openrouter_timeout_ms, None))
         .transpose()?;
+    // WHISPER_STT_URL: a local whisper.cpp server refining the final transcript
+    let whisper_stt = config
+        .whisper_stt_url
+        .as_ref()
+        .map(|url| crate::whisper_stt::WhisperStt::new(url, config.openrouter_timeout_ms))
+        .transpose()?;
     let llm = match &config.anthropic {
         Some(anthropic) => crate::agent::Llm::Anthropic(crate::anthropic::Anthropic::new(
             &anthropic.base_url,
@@ -195,6 +201,7 @@ async fn prepare(
         whisper,
         whisper_tts,
         local_tts,
+        whisper_stt,
         detector,
         gigastt,
         piper,

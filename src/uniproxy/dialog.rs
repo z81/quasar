@@ -715,7 +715,7 @@ async fn transcribe(
     endpoint: Option<Endpoint>,
 ) -> Transcript {
     let buffered = |text| Transcript { text, speech_ended_at: None };
-    let (transcript, provider) = match recognition {
+    let (mut transcript, provider) = match recognition {
         Some(recognition) => match recognition.finish(FINAL_TRANSCRIPT_WAIT.saturating_sub(ended_at.elapsed())).await {
             Ok(transcript) => (transcript, "gigastt"),
             Err(error) => match endpoint {
@@ -732,6 +732,23 @@ async fn transcribe(
         },
         None => (buffered(transcribe_buffered(context, ogg).await), "OpenRouter"),
     };
+    let mut provider = provider.to_string();
+    if let Some(whisper) = &context.whisper_stt {
+        if !ogg.is_empty() {
+            match audio::ogg_to_wav(ogg).await {
+                Ok(wav) => match whisper.transcribe(&wav, context.config.stt_language.as_deref()).await {
+                    Ok(text) if !text.is_empty() => {
+                        tracing::info!("whisper refined '{}' -> '{}'", transcript.text, text);
+                        transcript.text = text;
+                        provider.push_str(" + whisper");
+                    }
+                    Ok(_) => {}
+                    Err(error) => tracing::warn!("whisper refinement failed: {error:#}"),
+                },
+                Err(error) => tracing::warn!("whisper refinement: transcoding failed: {error:#}"),
+            }
+        }
+    }
     tracing::info!(
         "transcribed by {provider} {} ms after the end of the utterance",
         ended_at.elapsed().as_millis(),

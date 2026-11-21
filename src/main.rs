@@ -63,6 +63,7 @@ mod weather_tool;
 mod voice_detection;
 mod whisper;
 mod whisper_api;
+mod whisper_stt;
 
 use std::sync::Arc;
 

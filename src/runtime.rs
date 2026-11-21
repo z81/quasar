@@ -95,6 +95,12 @@ async fn prepare(
         config.openrouter_timeout_ms,
         config.processor_reasoning.as_deref(),
     )?;
+    // WHISPER_TTS_URL: a local OpenAI-compatible Qwen3-TTS server, no key needed
+    let whisper_tts = config
+        .whisper_tts_url
+        .as_ref()
+        .map(|url| crate::openrouter::OpenRouter::new(url, "", config.openrouter_timeout_ms, None))
+        .transpose()?;
     let llm = match &config.anthropic {
         Some(anthropic) => crate::agent::Llm::Anthropic(crate::anthropic::Anthropic::new(
             &anthropic.base_url,
@@ -181,6 +187,7 @@ async fn prepare(
         schedules,
         speakers,
         whisper,
+        whisper_tts,
         detector,
         gigastt,
         piper,

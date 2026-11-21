@@ -266,6 +266,8 @@ docker run -d --name alise-whisper --restart unless-stopped \
 
 В alice-server задайте `WHISPER_DETECT_URL=http://alise-whisper:8080`. Пустое значение отключает определение. Порог `WHISPER_THRESHOLD` по умолчанию `0.45`. Подробнее — в [docker/whisper/README.md](whisper/README.md).
 
+Синтез шёпота по умолчанию идёт через ElevenLabs (`WHISPER_TTS_MODEL`, `WHISPER_TTS_VOICE`). Чтобы озвучивать шёпот локально через Qwen3-TTS, задайте `WHISPER_TTS_URL` — базовый адрес OpenAI-совместимого API, например `http://192.168.1.133:8090/v1`. Тогда ключ OpenRouter для шёпота не нужен; модель и голос задаются `WHISPER_TTS_LOCAL_MODEL` (по умолчанию `qwen3-tts-ru`) и `WHISPER_TTS_LOCAL_VOICE` (`whisper`).
+
 ## Spotify
 
 Делает станцию колонкой Spotify Connect: внутри работает [librespot](https://github.com/librespot-org/librespot), и в приложении Spotify появляется устройство «Алиса». Как это устроено, описано в [основном README](../README.md#spotify). Нужен Spotify Premium.

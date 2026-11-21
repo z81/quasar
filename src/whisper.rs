@@ -125,38 +125,53 @@ impl WhisperService {
     }
 
     pub async fn set(&self, config: &Config, duid: &str, enabled: bool) -> Result<()> {
-        ensure!(!enabled || available(config), "Для шёпота нужен ключ OpenRouter в настройках сервера");
+        ensure!(
+            !enabled || available(config),
+            "Для шёпота нужен локальный сервер Qwen3-TTS или ключ OpenRouter в настройках сервера"
+        );
         self.storage.set_control_value(&format!("whisper:{duid}"), &json!(enabled)).await
     }
 
     pub async fn view(&self, config: &Config, duid: &str) -> Result<View> {
         let detection_available = !config.whisper_detect_url.trim().is_empty();
+        let local = config.whisper_tts_url.is_some();
+        let (model, voice) = if local {
+            (config.whisper_tts_local_model.clone(), config.whisper_tts_local_voice.clone())
+        } else {
+            (config.whisper_tts_model.clone(), config.whisper_tts_voice.clone())
+        };
         Ok(View {
             enabled: self.enabled(duid).await?,
             available: available(config),
             persistent: self.storage.is_persistent(),
-            model: config.whisper_tts_model.clone(),
-            voice: config.whisper_tts_voice.clone(),
+            model,
+            voice,
             detection: if detection_available { "yamnet" } else { "off" },
             detection_available,
             last: self.last_detection(duid).await?,
-            message: if available(config) {
+            message: if local {
+                if detection_available {
+                    "Настоящий шёпот локально через Qwen3-TTS. Определение шёпота показывает последнюю фразу, но голос ответа не меняет."
+                } else {
+                    "Настоящий шёпот локально через Qwen3-TTS. Включается переключателем или командой «говори шёпотом»."
+                }
+            } else if available(config) {
                 if detection_available {
                     "Настоящий шёпот через ElevenLabs в OpenRouter. Определение шёпота показывает последнюю фразу, но голос ответа не меняет."
                 } else {
                     "Настоящий шёпот через ElevenLabs в OpenRouter. Включается переключателем или командой «говори шёпотом»."
                 }
             } else if detection_available {
-                "Piper не поддерживает шёпот: для ответов шёпотом нужен ключ OpenRouter. Определение шёпота уже работает и показывает последнюю фразу."
+                "Piper не поддерживает шёпот: для ответов шёпотом нужен локальный Qwen3-TTS или ключ OpenRouter. Определение шёпота уже работает и показывает последнюю фразу."
             } else {
-                "Для шёпота добавьте ключ OpenRouter в настройках сервера. Piper не поддерживает шёпот."
+                "Для шёпота добавьте локальный Qwen3-TTS или ключ OpenRouter в настройках сервера. Piper не поддерживает шёпот."
             },
         })
     }
 }
 
 pub fn available(config: &Config) -> bool {
-    !config.openrouter_api_key.is_empty()
+    config.whisper_tts_url.is_some() || !config.openrouter_api_key.is_empty()
 }
 
 /// Deliberately exact commands: an explanation, quote, negation or external

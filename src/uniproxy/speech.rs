@@ -121,7 +121,7 @@ async fn stream_speech(
 ) -> Result<()> {
     // dropping the guard closes the stream, dropping the encoder kills ffmpeg
     let stream = outbox.open_tts_stream(reference_message_id)?;
-    let (encoder, input, mut output) = Transcoder::pcm_to_ogg(pcm_rate(context))?;
+    let (encoder, input, mut output) = Transcoder::pcm_to_ogg(speech_rate(context, style))?;
     let drain = async {
         let mut buffer = vec![0; 16_384];
         loop {
@@ -203,6 +203,12 @@ fn pcm_rate(context: &UniproxyContext) -> u32 {
     }
 }
 
+/// Whisper is always 24 kHz: local Qwen3-TTS streams it, ElevenLabs is decoded
+/// to it. Normal speech follows the provider's rate.
+fn speech_rate(context: &UniproxyContext, style: SpeechStyle) -> u32 {
+    if style == SpeechStyle::Whisper { SPEECH_RATE } else { pcm_rate(context) }
+}
+
 /// Requests the synthesis of a chunk; its PCM comes through the returned
 /// channel as it arrives. Dropping the set aborts the task, which kills its
 /// decoder
@@ -219,7 +225,7 @@ fn synthesize(context: &Arc<UniproxyContext>, text: String, style: SpeechStyle, 
             None => synthesize_openrouter(&context, &text, &pcm, started).await,
         }};
         match synthesized {
-            Ok(synthesis) => synthesis.log(&text, pcm_rate(&context)),
+            Ok(synthesis) => synthesis.log(&text, speech_rate(&context, style)),
             Err(error) => {
                 let failed = format!("synthesis failed after {} ms", started.elapsed().as_millis());
                 let _ = pcm.send(Err(error.context(failed)));
@@ -229,16 +235,29 @@ fn synthesize(context: &Arc<UniproxyContext>, text: String, style: SpeechStyle, 
     receiver
 }
 
-/// Eleven v3/v4 interpret the delivery tag as acoustic whispering. MP3 is
-/// decoded at the current encoder's rate, independently of normal TTS's
-/// format/rate. Whisper failures never fall back to a normal speaking voice.
+/// Local Qwen3-TTS streams 24 kHz PCM and needs no delivery tag. Eleven v3/v4
+/// interpret the delivery tag as acoustic whispering; their MP3 is decoded to
+/// 24 kHz. Whisper failures never fall back to a normal speaking voice.
 async fn synthesize_whisper(
     context: &UniproxyContext,
     text: &str,
     pcm: &mpsc::UnboundedSender<Result<Bytes>>,
     started: Instant,
 ) -> Result<Synthesis> {
-    let decoder = Transcoder::decode_to_pcm(Encoded::Mp3, pcm_rate(context))?;
+    if let Some(local) = &context.whisper_tts {
+        let speech = local
+            .speech_stream(
+                &context.config.whisper_tts_local_model,
+                &context.config.whisper_tts_local_voice,
+                &None,
+                1.0,
+                TtsFormat::Pcm,
+                text,
+            )
+            .await?;
+        return Ok(forward(speech, pcm, started).await?.labelled("whisper-local".to_owned()));
+    }
+    let decoder = Transcoder::decode_to_pcm(Encoded::Mp3, SPEECH_RATE)?;
     // Do not let square brackets from ordinary answer text insert competing
     // ElevenLabs delivery tags after the whisper tag.
     let text = format!("[whispers] {}", text.replace(['[', ']'], ""));

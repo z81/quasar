@@ -180,15 +180,15 @@ impl OpenRouter {
             body["instructions"] = json!(instructions);
         }
 
-        let response = self
+        let mut request = self
             .client
             .post(format!("{}/audio/speech", self.base_url))
-            .bearer_auth(&self.api_key)
             .header("X-Title", "alice-server")
-            .json(&body)
-            .send()
-            .await
-            .context("speech request failed")?;
+            .json(&body);
+        if !self.api_key.is_empty() {
+            request = request.bearer_auth(&self.api_key);
+        }
+        let response = request.send().await.context("speech request failed")?;
 
         if !response.status().is_success() {
             let status = response.status();

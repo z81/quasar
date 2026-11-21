@@ -62,6 +62,8 @@ pub struct UniproxyContext {
     pub schedules: Arc<crate::schedules::Scheduler>,
     pub speakers: Arc<crate::speaker::SpeakerService>,
     pub whisper: Arc<crate::whisper::WhisperService>,
+    /// Local OpenAI-compatible whisper TTS (WHISPER_TTS_URL); None: ElevenLabs via OpenRouter
+    pub whisper_tts: Option<crate::openrouter::OpenRouter>,
     /// Optional local YAMNet classifier; detection is shown in the panel but
     /// does not change the answer's voice.
     pub detector: Option<Arc<crate::voice_detection::Detector>>,

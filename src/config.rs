@@ -196,6 +196,12 @@ pub struct Config {
     /// Separate expressive model: Piper and Flash voices cannot synthesize whispering.
     pub whisper_tts_model: String,
     pub whisper_tts_voice: String,
+    /// Local OpenAI-compatible whisper TTS (Qwen3-TTS), e.g. http://192.168.1.133:8090/v1.
+    /// None: ElevenLabs through OpenRouter.
+    pub whisper_tts_url: Option<String>,
+    /// The model and voice of the local whisper TTS server.
+    pub whisper_tts_local_model: String,
+    pub whisper_tts_local_voice: String,
     /// Local YAMNet classifier; empty disables whisper detection (replies are unaffected).
     pub whisper_detect_url: String,
     pub tts_pcm_sample_rate: u32,

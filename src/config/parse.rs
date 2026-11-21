@@ -95,6 +95,14 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
     if let Some(address) = piper_url.as_deref() {
         url("PIPER_URL", address, &["http", "https"])?;
     }
+    let whisper_tts_url = values.optional("WHISPER_TTS_URL");
+    if let Some(address) = whisper_tts_url.as_deref() {
+        let parsed = url("WHISPER_TTS_URL", address, &["http", "https"])?;
+        ensure!(
+            parsed.query().is_none() && parsed.fragment().is_none(),
+            "WHISPER_TTS_URL: укажите базовый адрес без query и fragment"
+        );
+    }
     let gigastt_url = values.optional("GIGASTT_URL");
     let speaker_embedding_url = values.optional("SPEAKER_EMBEDDING_URL");
     if let Some(address) = speaker_embedding_url.as_deref() {
@@ -187,6 +195,9 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
         tts_instructions: values.optional("OPENROUTER_TTS_INSTRUCTIONS"),
         whisper_tts_model: values.required("WHISPER_TTS_MODEL")?,
         whisper_tts_voice: values.required("WHISPER_TTS_VOICE")?,
+        whisper_tts_url: whisper_tts_url.map(|url| url.trim_end_matches('/').to_owned()),
+        whisper_tts_local_model: values.required("WHISPER_TTS_LOCAL_MODEL")?,
+        whisper_tts_local_voice: values.required("WHISPER_TTS_LOCAL_VOICE")?,
         whisper_detect_url: values.text("WHISPER_DETECT_URL"),
         tts_pcm_sample_rate: values.integer("OPENROUTER_TTS_PCM_SAMPLE_RATE")? as u32,
         tts_format: if values.lower("OPENROUTER_TTS_FORMAT") == "mp3" {

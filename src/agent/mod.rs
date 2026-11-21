@@ -73,6 +73,8 @@ pub struct AgentOutput {
     /// true when no function results are pending (the turn is complete)
     pub finished: bool,
     pub should_listen: bool,
+    /// The LLM's style tag (laugh, excited, sad, whisper); None is normal
+    pub voice: Option<String>,
     pub text: OutputText,
 }
 
@@ -267,6 +269,7 @@ impl Agent {
                         directives,
                         finished,
                         should_listen: structured.require_more_input,
+                        voice: structured.voice.clone(),
                         text: OutputText::Complete(structured.text.clone()),
                     };
                     (finished, results, Some(part))
@@ -300,6 +303,7 @@ impl Agent {
             directives: Vec::new(),
             finished: true,
             should_listen: false,
+            voice: None,
             text: OutputText::Complete(String::new()),
         });
         Ok(())
@@ -376,7 +380,7 @@ impl Agent {
         }
         if scanned.text_started && self.stream_text {
             match header(&answer.scanner.fields) {
-                Some((calls, continue_dialog)) => {
+                Some((calls, continue_dialog, voice)) => {
                     let (directives, results) = self.run_calls(&calls, executor);
                     let finished = results.is_empty();
                     let (chunks, receiver) = mpsc::unbounded_channel();
@@ -384,6 +388,7 @@ impl Agent {
                         directives,
                         finished,
                         should_listen: continue_dialog,
+                        voice,
                         text: OutputText::Streaming(receiver),
                     });
                     answer.part = Some(StreamingPart {
@@ -487,10 +492,15 @@ fn failed_after_header(part: Option<StreamingPart>, error: anyhow::Error) -> Res
 }
 
 /// The part's header once the members before the text are known
-fn header(fields: &serde_json::Map<String, Value>) -> Option<(Vec<FunctionCall>, bool)> {
+fn header(fields: &serde_json::Map<String, Value>) -> Option<(Vec<FunctionCall>, bool, Option<String>)> {
     let calls = protocol::parse_function_calls(fields.get("function_calls")?).ok()?;
     fields.get("can_cache")?.as_bool()?;
-    Some((calls, fields.get("continue_dialog")?.as_bool()?))
+    let voice = fields
+        .get("voice")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| matches!(value.as_str(), "normal" | "laugh" | "excited" | "sad" | "whisper"));
+    Some((calls, fields.get("continue_dialog")?.as_bool()?, voice))
 }
 
 /// One LLM answer while it arrives

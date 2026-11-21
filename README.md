@@ -238,6 +238,10 @@ GET дополнительно возвращает `mcp.servers`, `mcp.baseline
 | `LOCAL_TTS_URL` | — | OpenAI-совместимый адрес Qwen3-TTS, например `http://192.168.1.133:8090/v1`. Обязателен при `TTS_PROVIDER=local` |
 | `LOCAL_TTS_MODEL` | `qwen3-tts-ru` | Модель локального синтеза |
 | `LOCAL_TTS_VOICE` | `alice` | Голос локального синтеза |
+| `LOCAL_TTS_VOICE_LAUGH` | — | Необязательный голос для стиля `laugh` от LLM; пусто — обычный голос |
+| `LOCAL_TTS_VOICE_EXCITED` | — | Необязательный голос для стиля `excited` |
+| `LOCAL_TTS_VOICE_SAD` | — | Необязательный голос для стиля `sad` |
+| `LOCAL_TTS_VOICE_WHISPER` | — | Необязательный голос для стиля `whisper`; пусто — голос из `WHISPER_TTS_LOCAL_VOICE` |
 | `PIPER_URL` | — | Адрес сервера Piper или Vosk, например `http://piper:5000`. Обязателен при `TTS_PROVIDER=piper` |
 | `PIPER_VOICE` | — | Голос Piper. По умолчанию — голос, с которым запущен сервер |
 | `PIPER_SPEAKER`, `PIPER_SPEAKER_ID` | — | Голос многоголосой модели по имени или номеру |
@@ -335,6 +339,17 @@ WHISPER_TTS_LOCAL_VOICE=whisper
 ```
 
 Сервер должен быть OpenAI-совместимым: `POST /audio/speech` с `response_format=pcm` (s16le, 24 кГц, моно). Если `WHISPER_TTS_URL` пуст, используется ElevenLabs.
+
+## Стиль голоса от LLM
+
+LLM может добавить в JSON поле `"voice"` перед `"text"`:
+
+- `"laugh"` — шутка, смех, ответ на шутку;
+- `"excited"` — радостная новость, восторг;
+- `"sad"` — грустная новость, сочувствие;
+- `"whisper"` — тихий или секретный ответ.
+
+Поле необязательное: обычный ответ идёт обычным голосом. Голоса для стилей задаются в `LOCAL_TTS_VOICE_LAUGH`, `LOCAL_TTS_VOICE_EXCITED`, `LOCAL_TTS_VOICE_SAD`, `LOCAL_TTS_VOICE_WHISPER`; если поле пустое, используется `LOCAL_TTS_VOICE` или голос шёпота.
 
 ## Определение шёпота
 

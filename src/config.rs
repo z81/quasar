@@ -216,6 +216,11 @@ pub struct Config {
     pub local_tts_url: Option<String>,
     pub local_tts_model: String,
     pub local_tts_voice: String,
+    /// Optional per-style voices the LLM may ask for (laugh/excited/sad/whisper)
+    pub local_tts_voice_laugh: Option<String>,
+    pub local_tts_voice_excited: Option<String>,
+    pub local_tts_voice_sad: Option<String>,
+    pub local_tts_voice_whisper: Option<String>,
     /// set with TTS_PROVIDER=piper
     pub piper: Option<PiperConfig>,
     /// speak an answer while the LLM still writes it (the TS fork's

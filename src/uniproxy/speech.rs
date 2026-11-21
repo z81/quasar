@@ -81,6 +81,7 @@ pub async fn speak_text(
     reference_message_id: &str,
     speech_end: Option<SpeechEnd>,
     style: SpeechStyle,
+    voice: Option<&str>,
 ) -> Result<()> {
     if text.is_empty() {
         return Ok(());
@@ -88,7 +89,7 @@ pub async fn speak_text(
     let (chunks, receiver) = mpsc::unbounded_channel();
     let _ = chunks.send(text.to_string());
     drop(chunks);
-    speak(context, outbox, receiver, reference_message_id, speech_end, style).await
+    speak(context, outbox, receiver, reference_message_id, speech_end, style, voice).await
 }
 
 /// Speaks the chunks of a part through one TTS stream, closed once the
@@ -100,9 +101,10 @@ pub async fn speak(
     reference_message_id: &str,
     speech_end: Option<SpeechEnd>,
     style: SpeechStyle,
+    voice: Option<&str>,
 ) -> Result<()> {
     anyhow::ensure!(if style == SpeechStyle::Whisper { crate::whisper::available(&context.config) } else { context.can_speak() }, "Синтез речи не настроен в настройках сервера Quasar");
-    let speech = stream_speech(context, outbox, chunks, reference_message_id, speech_end, style);
+    let speech = stream_speech(context, outbox, chunks, reference_message_id, speech_end, style, voice);
     match tokio::time::timeout(SPEECH_LIFETIME, speech).await {
         Ok(result) => result,
         Err(_) => Err(anyhow!(
@@ -118,6 +120,7 @@ async fn stream_speech(
     reference_message_id: &str,
     mut speech_end: Option<SpeechEnd>,
     style: SpeechStyle,
+    voice: Option<&str>,
 ) -> Result<()> {
     // dropping the guard closes the stream, dropping the encoder kills ffmpeg
     let stream = outbox.open_tts_stream(reference_message_id)?;
@@ -135,7 +138,7 @@ async fn stream_speech(
             }
         }
     };
-    tokio::try_join!(feed(context, &mut chunks, input, style), drain)?;
+    tokio::try_join!(feed(context, &mut chunks, input, style, voice), drain)?;
     encoder.finish().await
 }
 
@@ -146,6 +149,7 @@ async fn feed(
     chunks: &mut mpsc::UnboundedReceiver<String>,
     mut input: ChildStdin,
     style: SpeechStyle,
+    voice: Option<&str>,
 ) -> Result<()> {
     // dropping the set (on an abort) cancels the requests still running
     let mut syntheses = JoinSet::new();
@@ -158,7 +162,7 @@ async fn feed(
             let Some(text) = waiting.pop_front() else {
                 break;
             };
-            started.push_back(synthesize(context, text, style, &mut syntheses));
+            started.push_back(synthesize(context, text, style, voice.map(|value| value.to_owned()), &mut syntheses));
         }
         if started.is_empty() && !more_text {
             break;
@@ -212,7 +216,13 @@ fn speech_rate(context: &UniproxyContext, style: SpeechStyle) -> u32 {
 /// Requests the synthesis of a chunk; its PCM comes through the returned
 /// channel as it arrives. Dropping the set aborts the task, which kills its
 /// decoder
-fn synthesize(context: &Arc<UniproxyContext>, text: String, style: SpeechStyle, syntheses: &mut JoinSet<()>) -> Pcm {
+fn synthesize(
+    context: &Arc<UniproxyContext>,
+    text: String,
+    style: SpeechStyle,
+    voice: Option<String>,
+    syntheses: &mut JoinSet<()>,
+) -> Pcm {
     let (pcm, receiver) = mpsc::unbounded_channel();
     let context = context.clone();
     syntheses.spawn(async move {
@@ -225,7 +235,7 @@ fn synthesize(context: &Arc<UniproxyContext>, text: String, style: SpeechStyle, 
                 Some(piper) => synthesize_piper(&context, piper, &text, &pcm, started).await,
                 None => synthesize_openrouter(&context, &text, &pcm, started).await,
             },
-            TtsProvider::Local => synthesize_local(&context, &text, &pcm, started).await,
+            TtsProvider::Local => synthesize_local(&context, &text, &pcm, started, voice.as_deref()).await,
             TtsProvider::OpenRouter => synthesize_openrouter(&context, &text, &pcm, started).await,
         }};
         match synthesized {
@@ -351,17 +361,34 @@ async fn synthesize_local(
     text: &str,
     pcm: &mpsc::UnboundedSender<Result<Bytes>>,
     started: Instant,
+    voice: Option<&str>,
 ) -> Result<Synthesis> {
+    let config = &context.config;
+    let voice = match voice {
+        Some(value) if value.eq_ignore_ascii_case("laugh") => {
+            config.local_tts_voice_laugh.as_deref().unwrap_or(&config.local_tts_voice)
+        }
+        Some(value) if value.eq_ignore_ascii_case("excited") => {
+            config.local_tts_voice_excited.as_deref().unwrap_or(&config.local_tts_voice)
+        }
+        Some(value) if value.eq_ignore_ascii_case("sad") => {
+            config.local_tts_voice_sad.as_deref().unwrap_or(&config.local_tts_voice)
+        }
+        Some(value) if value.eq_ignore_ascii_case("whisper") => {
+            config.local_tts_voice_whisper.as_deref().unwrap_or(config.whisper_tts_local_voice.as_str())
+        }
+        _ => &config.local_tts_voice,
+    };
     let local = context.local_tts.as_ref().context("Локальный синтез речи не настроен")?;
     let speech = local.speech_stream(
-        &context.config.local_tts_model,
-        &context.config.local_tts_voice,
+        &config.local_tts_model,
+        voice,
         &None,
         1.0,
         TtsFormat::Pcm,
         text,
     ).await?;
-    Ok(forward(speech, pcm, started).await?.labelled("qwen-local".to_owned()))
+    Ok(forward(speech, pcm, started).await?.labelled(format!("qwen-local:{voice}")))
 }
 
 /// Raw PCM at the encoder's rate, forwarded as it arrives

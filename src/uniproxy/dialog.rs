@@ -443,6 +443,7 @@ impl Request {
                     &self.target.reference_message_id,
                     None,
                     style,
+                    None,
                 )
                 .await;
                 if let Some(feedback) = &self.feedback {
@@ -526,7 +527,7 @@ impl Request {
                 }
             };
             if let Some(feedback) = &self.feedback { feedback.answer(&text).await; }
-            self.deliver(AgentOutput { directives: Vec::new(), finished: true, should_listen: false, text: OutputText::Complete(text) }).await;
+            self.deliver(AgentOutput { directives: Vec::new(), finished: true, should_listen: false, voice: None, text: OutputText::Complete(text) }).await;
             if let Some(feedback) = &self.feedback { feedback.completed().await; }
             return;
         }
@@ -569,7 +570,7 @@ impl Request {
                         feedback.completed().await;
                     }
                     let _ = parts.send(AgentOutput {
-                        directives: Vec::new(), finished: true, should_listen: false,
+                        directives: Vec::new(), finished: true, should_listen: false, voice: None,
                         text: OutputText::Complete(String::new()),
                     });
                     return;
@@ -583,7 +584,7 @@ impl Request {
                 feedback.failed("Языковая модель не настроена. Откройте настройки сервера Quasar.").await;
             }
             let _ = parts.send(AgentOutput {
-                directives: Vec::new(), finished: true, should_listen: false,
+                directives: Vec::new(), finished: true, should_listen: false, voice: None,
                 text: OutputText::Complete("Сначала настройте языковую модель в пульте Quasar.".to_owned()),
             });
             return;
@@ -627,6 +628,7 @@ impl Request {
                 directives: Vec::new(),
                 finished: true,
                 should_listen: false,
+                voice: None,
                 text: OutputText::Complete(ERROR_RESPONSE_TEXT.to_string()),
             });
         } else if let Some(feedback) = &self.feedback {
@@ -720,9 +722,19 @@ impl Request {
             return;
         }
         let reference_message_id = &self.target.reference_message_id;
+        let voice = part.voice.clone();
         let result = match part.text {
             OutputText::Complete(text) => {
-                speech::speak_text(&self.context, &self.outbox, &text, reference_message_id, self.speech_end, style).await
+                speech::speak_text(
+                    &self.context,
+                    &self.outbox,
+                    &text,
+                    reference_message_id,
+                    self.speech_end,
+                    style,
+                    voice.as_deref(),
+                )
+                .await
             }
             OutputText::Streaming(chunks) => {
                 speech::speak(
@@ -732,6 +744,7 @@ impl Request {
                     reference_message_id,
                     self.speech_end,
                     style,
+                    voice.as_deref(),
                 )
                 .await
             }

@@ -66,6 +66,8 @@ pub struct UniproxyContext {
     pub whisper_tts: Option<crate::openrouter::OpenRouter>,
     /// Local OpenAI-compatible normal TTS (LOCAL_TTS_URL)
     pub local_tts: Option<crate::openrouter::OpenRouter>,
+    /// Local VoiceDesign TTS for free-text styles (DESIGN_TTS_URL)
+    pub design_tts: Option<crate::openrouter::OpenRouter>,
     /// Local whisper.cpp server refining the final transcript (WHISPER_STT_URL)
     pub whisper_stt: Option<crate::whisper_stt::WhisperStt>,
     /// Optional local YAMNet classifier; detection is shown in the panel but

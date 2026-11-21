@@ -111,6 +111,14 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
             "LOCAL_TTS_URL: укажите базовый адрес без query и fragment"
         );
     }
+    let design_tts_url = values.optional("DESIGN_TTS_URL");
+    if let Some(address) = design_tts_url.as_deref() {
+        let parsed = url("DESIGN_TTS_URL", address, &["http", "https"])?;
+        ensure!(
+            parsed.query().is_none() && parsed.fragment().is_none(),
+            "DESIGN_TTS_URL: укажите базовый адрес без query и fragment"
+        );
+    }
     let whisper_stt_url = values.optional("WHISPER_STT_URL");
     if let Some(address) = whisper_stt_url.as_deref() {
         let parsed = url("WHISPER_STT_URL", address, &["http", "https"])?;
@@ -236,6 +244,10 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
         local_tts_voice_sad: values.optional("LOCAL_TTS_VOICE_SAD"),
         local_tts_voice_angry: values.optional("LOCAL_TTS_VOICE_ANGRY"),
         local_tts_voice_whisper: values.optional("LOCAL_TTS_VOICE_WHISPER"),
+        design_tts_url: design_tts_url.map(|url| url.trim_end_matches('/').to_owned()),
+        design_tts_model: values.required("DESIGN_TTS_MODEL")?,
+        design_tts_voice: values.text("DESIGN_TTS_VOICE"),
+        design_tts_prefix: values.text("DESIGN_TTS_PREFIX"),
         piper,
         tts_streaming: values.boolean("OPENROUTER_TTS_STREAMING"),
         processor_model: values.required(if anthropic.is_some() {

@@ -113,6 +113,12 @@ async fn prepare(
         .as_ref()
         .map(|url| crate::whisper_stt::WhisperStt::new(url, config.openrouter_timeout_ms))
         .transpose()?;
+    // DESIGN_TTS_URL: a local VoiceDesign server for free-text styles from the LLM
+    let design_tts = config
+        .design_tts_url
+        .as_ref()
+        .map(|url| crate::openrouter::OpenRouter::new(url, "", config.openrouter_timeout_ms, None))
+        .transpose()?;
     let llm = match &config.anthropic {
         Some(anthropic) => crate::agent::Llm::Anthropic(crate::anthropic::Anthropic::new(
             &anthropic.base_url,
@@ -201,6 +207,7 @@ async fn prepare(
         whisper,
         whisper_tts,
         local_tts,
+        design_tts,
         whisper_stt,
         detector,
         gigastt,

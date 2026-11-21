@@ -243,6 +243,10 @@ GET дополнительно возвращает `mcp.servers`, `mcp.baseline
 | `LOCAL_TTS_VOICE_SAD` | — | Необязательный голос для стиля `sad` |
 | `LOCAL_TTS_VOICE_ANGRY` | — | Необязательный голос для стиля `angry` |
 | `LOCAL_TTS_VOICE_WHISPER` | — | Необязательный голос для стиля `whisper`; пусто — голос из `WHISPER_TTS_LOCAL_VOICE` |
+| `DESIGN_TTS_URL` | — | OpenAI-совместимый адрес VoiceDesign, например `http://192.168.1.133:8091/v1`. Пусто — свободные стили от LLM отключены |
+| `DESIGN_TTS_MODEL` | `qwen3-tts-design` | Модель на сервере VoiceDesign |
+| `DESIGN_TTS_VOICE` | — | Голос VoiceDesign; обычно пусто, голос задаёт инструкция |
+| `DESIGN_TTS_PREFIX` | 18-летняя A | Фиксированное описание голоса, к которому добавляется стиль от LLM |
 | `PIPER_URL` | — | Адрес сервера Piper или Vosk, например `http://piper:5000`. Обязателен при `TTS_PROVIDER=piper` |
 | `PIPER_VOICE` | — | Голос Piper. По умолчанию — голос, с которым запущен сервер |
 | `PIPER_SPEAKER`, `PIPER_SPEAKER_ID` | — | Голос многоголосой модели по имени или номеру |
@@ -351,7 +355,9 @@ LLM может добавить в JSON поле `"voice"` перед `"text"`:
 - `"angry"` — просьба ответить сердито, строго или недовольно;
 - `"whisper"` — тихий или секретный ответ.
 
-Поле необязательное: обычный ответ идёт обычным голосом. Голоса для стилей задаются в `LOCAL_TTS_VOICE_LAUGH`, `LOCAL_TTS_VOICE_EXCITED`, `LOCAL_TTS_VOICE_SAD`, `LOCAL_TTS_VOICE_WHISPER`; если поле пустое, используется `LOCAL_TTS_VOICE` или голос шёпота.
+Поле необязательное: обычный ответ идёт обычным голосом. Голоса для стилей задаются в `LOCAL_TTS_VOICE_LAUGH`, `LOCAL_TTS_VOICE_EXCITED`, `LOCAL_TTS_VOICE_SAD`, `LOCAL_TTS_VOICE_ANGRY`, `LOCAL_TTS_VOICE_WHISPER`; если поле пустое, используется `LOCAL_TTS_VOICE` или голос шёпота.
+
+Если `DESIGN_TTS_URL` задан, LLM может вместо `voice` вернуть свободный `style` — короткую английскую строку вроде `tired, sleepy, low energy, quiet`. Quasar добавит её к `DESIGN_TTS_PREFIX` и отправит в VoiceDesign. Голос может слегка отличаться от обычного, зато манеру выбирает сама LLM, без заранее заготовленных голосов.
 
 ## Определение шёпота
 

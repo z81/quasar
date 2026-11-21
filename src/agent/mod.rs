@@ -73,8 +73,10 @@ pub struct AgentOutput {
     /// true when no function results are pending (the turn is complete)
     pub finished: bool,
     pub should_listen: bool,
-    /// The LLM's style tag (laugh, excited, sad, whisper); None is normal
+    /// The LLM's style tag (laugh, excited, sad, angry, whisper); None is normal
     pub voice: Option<String>,
+    /// A free-text VoiceDesign style; overrides `voice` when configured
+    pub style: Option<String>,
     pub text: OutputText,
 }
 
@@ -270,6 +272,7 @@ impl Agent {
                         finished,
                         should_listen: structured.require_more_input,
                         voice: structured.voice.clone(),
+                        style: structured.style.clone(),
                         text: OutputText::Complete(structured.text.clone()),
                     };
                     (finished, results, Some(part))
@@ -304,6 +307,7 @@ impl Agent {
             finished: true,
             should_listen: false,
             voice: None,
+            style: None,
             text: OutputText::Complete(String::new()),
         });
         Ok(())
@@ -380,7 +384,7 @@ impl Agent {
         }
         if scanned.text_started && self.stream_text {
             match header(&answer.scanner.fields) {
-                Some((calls, continue_dialog, voice)) => {
+                Some((calls, continue_dialog, voice, style)) => {
                     let (directives, results) = self.run_calls(&calls, executor);
                     let finished = results.is_empty();
                     let (chunks, receiver) = mpsc::unbounded_channel();
@@ -389,6 +393,7 @@ impl Agent {
                         finished,
                         should_listen: continue_dialog,
                         voice,
+                        style,
                         text: OutputText::Streaming(receiver),
                     });
                     answer.part = Some(StreamingPart {
@@ -492,7 +497,7 @@ fn failed_after_header(part: Option<StreamingPart>, error: anyhow::Error) -> Res
 }
 
 /// The part's header once the members before the text are known
-fn header(fields: &serde_json::Map<String, Value>) -> Option<(Vec<FunctionCall>, bool, Option<String>)> {
+fn header(fields: &serde_json::Map<String, Value>) -> Option<(Vec<FunctionCall>, bool, Option<String>, Option<String>)> {
     let calls = protocol::parse_function_calls(fields.get("function_calls")?).ok()?;
     fields.get("can_cache")?.as_bool()?;
     let voice = fields
@@ -500,7 +505,12 @@ fn header(fields: &serde_json::Map<String, Value>) -> Option<(Vec<FunctionCall>,
         .and_then(Value::as_str)
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| matches!(value.as_str(), "normal" | "laugh" | "excited" | "sad" | "angry" | "whisper"));
-    Some((calls, fields.get("continue_dialog")?.as_bool()?, voice))
+    let style = fields
+        .get("style")
+        .and_then(Value::as_str)
+        .map(|value| value.trim().chars().take(240).collect::<String>())
+        .filter(|value| !value.is_empty() && !value.chars().any(char::is_control));
+    Some((calls, fields.get("continue_dialog")?.as_bool()?, voice, style))
 }
 
 /// One LLM answer while it arrives

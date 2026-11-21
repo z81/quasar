@@ -82,6 +82,7 @@ pub async fn speak_text(
     speech_end: Option<SpeechEnd>,
     style: SpeechStyle,
     voice: Option<&str>,
+    style_instruction: Option<&str>,
 ) -> Result<()> {
     if text.is_empty() {
         return Ok(());
@@ -89,7 +90,7 @@ pub async fn speak_text(
     let (chunks, receiver) = mpsc::unbounded_channel();
     let _ = chunks.send(text.to_string());
     drop(chunks);
-    speak(context, outbox, receiver, reference_message_id, speech_end, style, voice).await
+    speak(context, outbox, receiver, reference_message_id, speech_end, style, voice, style_instruction).await
 }
 
 /// Speaks the chunks of a part through one TTS stream, closed once the
@@ -102,9 +103,10 @@ pub async fn speak(
     speech_end: Option<SpeechEnd>,
     style: SpeechStyle,
     voice: Option<&str>,
+    style_instruction: Option<&str>,
 ) -> Result<()> {
     anyhow::ensure!(if style == SpeechStyle::Whisper { crate::whisper::available(&context.config) } else { context.can_speak() }, "Синтез речи не настроен в настройках сервера Quasar");
-    let speech = stream_speech(context, outbox, chunks, reference_message_id, speech_end, style, voice);
+    let speech = stream_speech(context, outbox, chunks, reference_message_id, speech_end, style, voice, style_instruction);
     match tokio::time::timeout(SPEECH_LIFETIME, speech).await {
         Ok(result) => result,
         Err(_) => Err(anyhow!(
@@ -121,6 +123,7 @@ async fn stream_speech(
     mut speech_end: Option<SpeechEnd>,
     style: SpeechStyle,
     voice: Option<&str>,
+    style_instruction: Option<&str>,
 ) -> Result<()> {
     // dropping the guard closes the stream, dropping the encoder kills ffmpeg
     let stream = outbox.open_tts_stream(reference_message_id)?;
@@ -138,7 +141,7 @@ async fn stream_speech(
             }
         }
     };
-    tokio::try_join!(feed(context, &mut chunks, input, style, voice), drain)?;
+    tokio::try_join!(feed(context, &mut chunks, input, style, voice, style_instruction), drain)?;
     encoder.finish().await
 }
 
@@ -150,6 +153,7 @@ async fn feed(
     mut input: ChildStdin,
     style: SpeechStyle,
     voice: Option<&str>,
+    style_instruction: Option<&str>,
 ) -> Result<()> {
     // dropping the set (on an abort) cancels the requests still running
     let mut syntheses = JoinSet::new();
@@ -162,7 +166,14 @@ async fn feed(
             let Some(text) = waiting.pop_front() else {
                 break;
             };
-            started.push_back(synthesize(context, text, style, voice.map(|value| value.to_owned()), &mut syntheses));
+            started.push_back(synthesize(
+                context,
+                text,
+                style,
+                voice.map(|value| value.to_owned()),
+                style_instruction.map(|value| value.to_owned()),
+                &mut syntheses,
+            ));
         }
         if started.is_empty() && !more_text {
             break;
@@ -221,6 +232,7 @@ fn synthesize(
     text: String,
     style: SpeechStyle,
     voice: Option<String>,
+    style_instruction: Option<String>,
     syntheses: &mut JoinSet<()>,
 ) -> Pcm {
     let (pcm, receiver) = mpsc::unbounded_channel();
@@ -235,7 +247,19 @@ fn synthesize(
                 Some(piper) => synthesize_piper(&context, piper, &text, &pcm, started).await,
                 None => synthesize_openrouter(&context, &text, &pcm, started).await,
             },
-            TtsProvider::Local => synthesize_local(&context, &text, &pcm, started, voice.as_deref()).await,
+            TtsProvider::Local => {
+                if let (Some(instruction), Some(_)) = (style_instruction.as_deref(), context.design_tts.as_ref()) {
+                    match synthesize_design(&context, &text, &pcm, started, instruction).await {
+                        Ok(synthesis) => Ok(synthesis),
+                        Err(error) => {
+                            tracing::warn!("design TTS failed: {error:#}");
+                            synthesize_local(&context, &text, &pcm, started, voice.as_deref()).await
+                        }
+                    }
+                } else {
+                    synthesize_local(&context, &text, &pcm, started, voice.as_deref()).await
+                }
+            }
             TtsProvider::OpenRouter => synthesize_openrouter(&context, &text, &pcm, started).await,
         }};
         match synthesized {
@@ -392,6 +416,34 @@ async fn synthesize_local(
         text,
     ).await?;
     Ok(forward(speech, pcm, started).await?.labelled(format!("qwen-local:{voice}")))
+}
+
+/// A free-text style from the LLM: VoiceDesign generates the delivery from
+/// the fixed voice prefix plus the requested manner.
+async fn synthesize_design(
+    context: &UniproxyContext,
+    text: &str,
+    pcm: &mpsc::UnboundedSender<Result<Bytes>>,
+    started: Instant,
+    instruction: &str,
+) -> Result<Synthesis> {
+    let design = context.design_tts.as_ref().context("VoiceDesign не настроен")?;
+    let instructions = format!(
+        "{} {}",
+        context.config.design_tts_prefix.trim(),
+        instruction.trim()
+    );
+    let speech = design
+        .speech_stream(
+            &context.config.design_tts_model,
+            &context.config.design_tts_voice,
+            &Some(instructions),
+            1.0,
+            TtsFormat::Pcm,
+            text,
+        )
+        .await?;
+    Ok(forward(speech, pcm, started).await?.labelled("qwen-design".to_owned()))
 }
 
 /// Raw PCM at the encoder's rate, forwarded as it arrives

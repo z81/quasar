@@ -26,8 +26,10 @@ pub struct StructuredResponse {
     pub can_cache: bool,
     pub function_calls: Vec<FunctionCall>,
     pub require_more_input: bool,
-    /// The LLM's style tag: laugh, excited, sad, whisper or normal (None)
+    /// The LLM's style tag: laugh, excited, sad, angry, whisper or normal (None)
     pub voice: Option<String>,
+    /// A free-text VoiceDesign style for a manner the tags do not cover
+    pub style: Option<String>,
     pub text: String,
 }
 
@@ -51,6 +53,8 @@ struct RawResponse {
     #[serde(default)]
     voice: Option<String>,
     #[serde(default)]
+    style: Option<String>,
+    #[serde(default)]
     text: Option<String>,
 }
 
@@ -64,6 +68,10 @@ pub fn parse_llm_response(raw: &str) -> anyhow::Result<StructuredResponse> {
             .voice
             .map(|value| value.trim().to_ascii_lowercase())
             .filter(|value| matches!(value.as_str(), "normal" | "laugh" | "excited" | "sad" | "angry" | "whisper")),
+        style: raw
+            .style
+            .map(|value| value.trim().chars().take(240).collect::<String>())
+            .filter(|value| !value.is_empty() && !value.chars().any(char::is_control)),
         text: raw.text.unwrap_or_default(),
     })
 }

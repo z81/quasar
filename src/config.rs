@@ -222,6 +222,11 @@ pub struct Config {
     pub local_tts_voice_sad: Option<String>,
     pub local_tts_voice_angry: Option<String>,
     pub local_tts_voice_whisper: Option<String>,
+    /// DESIGN_TTS_URL: a local VoiceDesign server for free-text styles from the LLM
+    pub design_tts_url: Option<String>,
+    pub design_tts_model: String,
+    pub design_tts_voice: String,
+    pub design_tts_prefix: String,
     /// set with TTS_PROVIDER=piper
     pub piper: Option<PiperConfig>,
     /// speak an answer while the LLM still writes it (the TS fork's

@@ -234,6 +234,7 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
         local_tts_voice_laugh: values.optional("LOCAL_TTS_VOICE_LAUGH"),
         local_tts_voice_excited: values.optional("LOCAL_TTS_VOICE_EXCITED"),
         local_tts_voice_sad: values.optional("LOCAL_TTS_VOICE_SAD"),
+        local_tts_voice_angry: values.optional("LOCAL_TTS_VOICE_ANGRY"),
         local_tts_voice_whisper: values.optional("LOCAL_TTS_VOICE_WHISPER"),
         piper,
         tts_streaming: values.boolean("OPENROUTER_TTS_STREAMING"),

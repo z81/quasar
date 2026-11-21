@@ -92,6 +92,7 @@ pub fn definitions() -> Vec<SettingDefinition> {
         field("LOCAL_TTS_VOICE_LAUGH", "Голос для смеха", "Необязательный голос для стиля laugh от LLM; пусто — обычный голос.", "tts", "text", ""),
         field("LOCAL_TTS_VOICE_EXCITED", "Голос для восторга", "Необязательный голос для стиля excited от LLM; пусто — обычный голос.", "tts", "text", ""),
         field("LOCAL_TTS_VOICE_SAD", "Голос для грусти", "Необязательный голос для стиля sad от LLM; пусто — обычный голос.", "tts", "text", ""),
+        field("LOCAL_TTS_VOICE_ANGRY", "Голос для злости", "Необязательный голос для стиля angry от LLM; пусто — обычный голос.", "tts", "text", ""),
         field("LOCAL_TTS_VOICE_WHISPER", "Голос для шёпота по стилю", "Необязательный голос для стиля whisper от LLM; пусто — голос шёпота из WHISPER_TTS_LOCAL_VOICE.", "tts", "text", ""),
         field("WHISPER_TTS_MODEL", "Модель шёпота", "Отдельный выразительный голос через тот же ключ OpenRouter: Piper и Eleven Flash не поддерживают шёпот. Используется только при включённых ответах шёпотом.", "tts", "select", "elevenlabs/eleven-v3").options(&["elevenlabs/eleven-v3", "elevenlabs/eleven-v3-conversational", "elevenlabs/eleven-v4", "elevenlabs/eleven-v4-turbo"]),
         field("WHISPER_TTS_VOICE", "Голос шёпота", "Голос ElevenLabs для шёпота, например alice. Для шёпота требуется ключ OpenRouter даже при основном голосе Piper.", "tts", "text", "alice"),

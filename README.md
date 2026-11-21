@@ -241,6 +241,7 @@ GET дополнительно возвращает `mcp.servers`, `mcp.baseline
 | `LOCAL_TTS_VOICE_LAUGH` | — | Необязательный голос для стиля `laugh` от LLM; пусто — обычный голос |
 | `LOCAL_TTS_VOICE_EXCITED` | — | Необязательный голос для стиля `excited` |
 | `LOCAL_TTS_VOICE_SAD` | — | Необязательный голос для стиля `sad` |
+| `LOCAL_TTS_VOICE_ANGRY` | — | Необязательный голос для стиля `angry` |
 | `LOCAL_TTS_VOICE_WHISPER` | — | Необязательный голос для стиля `whisper`; пусто — голос из `WHISPER_TTS_LOCAL_VOICE` |
 | `PIPER_URL` | — | Адрес сервера Piper или Vosk, например `http://piper:5000`. Обязателен при `TTS_PROVIDER=piper` |
 | `PIPER_VOICE` | — | Голос Piper. По умолчанию — голос, с которым запущен сервер |
@@ -347,6 +348,7 @@ LLM может добавить в JSON поле `"voice"` перед `"text"`:
 - `"laugh"` — шутка, смех, ответ на шутку;
 - `"excited"` — радостная новость, восторг;
 - `"sad"` — грустная новость, сочувствие;
+- `"angry"` — просьба ответить сердито, строго или недовольно;
 - `"whisper"` — тихий или секретный ответ.
 
 Поле необязательное: обычный ответ идёт обычным голосом. Голоса для стилей задаются в `LOCAL_TTS_VOICE_LAUGH`, `LOCAL_TTS_VOICE_EXCITED`, `LOCAL_TTS_VOICE_SAD`, `LOCAL_TTS_VOICE_WHISPER`; если поле пустое, используется `LOCAL_TTS_VOICE` или голос шёпота.

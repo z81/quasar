@@ -63,7 +63,7 @@ pub fn parse_llm_response(raw: &str) -> anyhow::Result<StructuredResponse> {
         voice: raw
             .voice
             .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| matches!(value.as_str(), "normal" | "laugh" | "excited" | "sad" | "whisper")),
+            .filter(|value| matches!(value.as_str(), "normal" | "laugh" | "excited" | "sad" | "angry" | "whisper")),
         text: raw.text.unwrap_or_default(),
     })
 }

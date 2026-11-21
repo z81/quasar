@@ -220,6 +220,7 @@ pub struct Config {
     pub local_tts_voice_laugh: Option<String>,
     pub local_tts_voice_excited: Option<String>,
     pub local_tts_voice_sad: Option<String>,
+    pub local_tts_voice_angry: Option<String>,
     pub local_tts_voice_whisper: Option<String>,
     /// set with TTS_PROVIDER=piper
     pub piper: Option<PiperConfig>,

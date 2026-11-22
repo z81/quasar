@@ -355,6 +355,8 @@ WHISPER_TTS_LOCAL_VOICE=whisper
 
 Все ответы идут в VoiceDesign по `DESIGN_TTS_URL`; `DESIGN_TTS_PREFIX` по умолчанию пуст, style используется как есть. `LOCAL_TTS_VOICE` — только резерв, если style пуст или VoiceDesign недоступен. Если нужен стабильный акцент, лучше записать 5–12 с речи носителя и склонировать её в Base.
 
+Qwen рекомендует описывать голос естественным языком, а не только списком прилагательных: можно описать персонажа и ситуацию. Официальные примеры instructions: «Speak in an incredulous tone, but with a hint of panic beginning to creep into your voice», «Male, 17 years old, tenor range, gaining confidence — deeper breath support now, though vowels still tighten when nervous». Для стабильного персонажа Qwen предлагает сначала создать голос через VoiceDesign, а потом клонировать его в Base.
+
 ## Определение шёпота
 
 Сервис `docker/whisper` — локальный YAMNet, который по записи фразы оценивает, была ли она произнесена шёпотом. Результат показывается на главной и в настройках шёпота как «последняя фраза». В режиме «Авто» он также выбирает голос ответа: услышал шёпот — отвечает шёпотом, услышал обычную речь — обычным голосом. Текстовые команды из пульта в авто-режиме всегда озвучиваются обычным голосом.

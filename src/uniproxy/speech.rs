@@ -250,6 +250,8 @@ fn synthesize(
             TtsProvider::Local => {
                 if let Some(voice) = voice.as_deref() {
                     synthesize_local(&context, &text, &pcm, started, Some(voice)).await
+                } else if let Some(tag) = style_instruction.as_deref().and_then(style_tag) {
+                    synthesize_local(&context, &text, &pcm, started, Some(tag)).await
                 } else if let (Some(instruction), Some(_)) = (style_instruction.as_deref(), context.design_tts.as_ref()) {
                     match synthesize_design(&context, &text, &pcm, started, instruction).await {
                         Ok(synthesis) => Ok(synthesis),
@@ -424,6 +426,26 @@ async fn synthesize_local(
         text,
     ).await?;
     Ok(forward(speech, pcm, started).await?.labelled(format!("qwen-local:{voice}")))
+}
+
+/// A free-text style that asks for a gender/regional voice: use a registered
+/// Base voice instead of VoiceDesign's fixed female prefix.
+fn style_tag(instruction: &str) -> Option<&'static str> {
+    let mut male = false;
+    let mut dagestani = false;
+    for word in instruction.split(|character: char| !character.is_alphanumeric()) {
+        let word = word.to_lowercase();
+        if matches!(word.as_str(), "male" | "man" | "masculine" | "boy") || word.starts_with("муж") {
+            male = true;
+        }
+        if matches!(word.as_str(), "dagestan" | "dagestani" | "caucasian" | "caucasus")
+            || word.starts_with("дагестан")
+            || word.starts_with("кавказ")
+        {
+            dagestani = true;
+        }
+    }
+    if dagestani { Some("dagestani") } else if male { Some("male") } else { None }
 }
 
 /// A free-text style from the LLM: VoiceDesign generates the delivery from

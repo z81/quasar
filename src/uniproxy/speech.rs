@@ -41,10 +41,11 @@ const SPEECH_RATE: u32 = 24_000;
 /// At most this much of a chunk's text goes into its log line
 const LOGGED_TEXT_CHARS: usize = 40;
 
-/// The fixed text a VoiceDesign voice is cloned from: long enough for a
-/// stable speaker, short enough not to delay the first answer audio much.
+/// The fixed text a VoiceDesign voice is cloned from. Qwen's Base clones from
+/// a 3-second clip; this one lasts about 4.5 s, enough for a stable speaker
+/// without delaying the first answer audio much.
 const DESIGN_REFERENCE_TEXT: &str =
-    "Привет! Меня зовут Алиса. Я внимательно слушаю тебя и готова помочь с любым вопросом.";
+    "Привет! Меня зовут Алиса. Я готова помочь с любым вопросом.";
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum SpeechStyle {

@@ -119,14 +119,21 @@ async fn prepare(
         .as_ref()
         .map(|url| crate::openrouter::OpenRouter::new(url, "", config.openrouter_timeout_ms, None))
         .transpose()?;
-    let llm = match &config.anthropic {
-        Some(anthropic) => crate::agent::Llm::Anthropic(crate::anthropic::Anthropic::new(
+    let llm = match (&config.anthropic, &config.codex) {
+        (Some(anthropic), _) => crate::agent::Llm::Anthropic(crate::anthropic::Anthropic::new(
             &anthropic.base_url,
             &anthropic.api_key,
             anthropic.timeout_ms,
             anthropic.effort.as_deref(),
         )?),
-        None => crate::agent::Llm::OpenRouter(openrouter.clone()),
+        (_, Some(codex)) => crate::agent::Llm::Codex(crate::codex::Codex::new(
+            &codex.base_url,
+            &codex.token,
+            codex.account_id.as_deref(),
+            codex.timeout_ms,
+            codex.effort.as_deref(),
+        )?),
+        _ => crate::agent::Llm::OpenRouter(openrouter.clone()),
     };
     let unchanged_remote = previous.filter(|previous| {
         previous.config.function_server_urls == config.function_server_urls

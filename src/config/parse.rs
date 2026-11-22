@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use anyhow::{bail, ensure, Context, Result};
 
 use super::{
-    definitions, AnthropicConfig, Config, EndOfSpeech, McpServerConfig, PiperConfig, SttProvider,
-    TtsFormat, TtsProvider, Values,
+    definitions, AnthropicConfig, CodexConfig, Config, EndOfSpeech, McpServerConfig, PiperConfig,
+    SttProvider, TtsFormat, TtsProvider, Values,
 };
 
 pub(super) fn config(supplied: &Values) -> Result<Config> {
@@ -83,10 +83,10 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
         }
     }
     let values = Parsed(values);
-    for key in ["OPENROUTER_BASE_URL", "ANTHROPIC_BASE_URL"] {
+    for key in ["OPENROUTER_BASE_URL", "ANTHROPIC_BASE_URL", "CODEX_BASE_URL"] {
         url(key, &values.required(key)?, &["http", "https"])?;
     }
-    for key in ["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"] {
+    for key in ["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "CODEX_TOKEN"] {
         if let Some(secret) = values.optional(key) {
             credential(key, &secret)?;
         }
@@ -162,6 +162,19 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
             timeout_ms: values.integer("ANTHROPIC_TIMEOUT_MS")?,
             effort: values
                 .optional("ANTHROPIC_PROCESSOR_EFFORT")
+                .map(|value| value.to_ascii_lowercase()),
+        })
+    } else {
+        None
+    };
+    let codex = if processor_provider == "codex" {
+        Some(CodexConfig {
+            token: values.text("CODEX_TOKEN"),
+            base_url: values.text("CODEX_BASE_URL"),
+            account_id: values.optional("CODEX_ACCOUNT_ID"),
+            timeout_ms: values.integer("CODEX_TIMEOUT_MS")?,
+            effort: values
+                .optional("CODEX_PROCESSOR_EFFORT")
                 .map(|value| value.to_ascii_lowercase()),
         })
     } else {
@@ -245,12 +258,13 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
         design_tts_prefix: values.text("DESIGN_TTS_PREFIX"),
         piper,
         tts_streaming: values.boolean("OPENROUTER_TTS_STREAMING"),
-        processor_model: values.required(if anthropic.is_some() {
-            "ANTHROPIC_PROCESSOR_MODEL"
-        } else {
-            "OPENROUTER_PROCESSOR_MODEL"
+        processor_model: values.required(match processor_provider.as_str() {
+            "anthropic" => "ANTHROPIC_PROCESSOR_MODEL",
+            "codex" => "CODEX_PROCESSOR_MODEL",
+            _ => "OPENROUTER_PROCESSOR_MODEL",
         })?,
         anthropic,
+        codex,
         processor_reasoning: values
             .optional("OPENROUTER_PROCESSOR_REASONING")
             .map(|value| value.to_ascii_lowercase()),

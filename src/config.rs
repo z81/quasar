@@ -163,6 +163,20 @@ pub struct AnthropicConfig {
     pub effort: Option<String>,
 }
 
+/// PROCESSOR_PROVIDER=codex: the dialog goes to the Codex backend or the
+/// OpenAI Responses API
+#[derive(Clone)]
+pub struct CodexConfig {
+    /// a Codex access token or an OpenAI API key
+    pub token: String,
+    pub base_url: String,
+    /// the ChatGPT account id; None: taken from the token's JWT claim
+    pub account_id: Option<String>,
+    pub timeout_ms: u64,
+    /// `reasoning.effort`; None: not sent, the model's default
+    pub effort: Option<String>,
+}
+
 /// Who decides that the user stopped speaking
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EndOfSpeech {
@@ -229,6 +243,8 @@ pub struct Config {
     pub tts_streaming: bool,
     /// set with PROCESSOR_PROVIDER=anthropic; None: OpenRouter answers the dialog
     pub anthropic: Option<AnthropicConfig>,
+    /// set with PROCESSOR_PROVIDER=codex
+    pub codex: Option<CodexConfig>,
     /// the dialog's model at its provider
     pub processor_model: String,
     /// the dialog LLM's reasoning effort, sent as `reasoning: {effort}`; None:
@@ -269,8 +285,9 @@ impl Config {
 /// An absent optional fallback credential does not disable a healthy local provider.
 pub fn readiness_issues(config: &Config) -> Vec<String> {
     let mut issues = Vec::new();
+    let primary_ready = config.anthropic.is_some() || config.codex.is_some();
     if config.openrouter_api_key.is_empty()
-        && (config.anthropic.is_none()
+        && (!primary_ready
             || config.stt_provider == SttProvider::OpenRouter
             || config.tts_provider == TtsProvider::OpenRouter)
     {
@@ -284,6 +301,13 @@ pub fn readiness_issues(config: &Config) -> Vec<String> {
         .is_some_and(|provider| provider.api_key.is_empty())
     {
         issues.push("Задайте ANTHROPIC_API_KEY для выбранной модели".to_string());
+    }
+    if config
+        .codex
+        .as_ref()
+        .is_some_and(|provider| provider.token.is_empty())
+    {
+        issues.push("Задайте CODEX_TOKEN для выбранной модели".to_string());
     }
     if config.stt_provider == SttProvider::GigaAm && config.gigastt_url.is_none() {
         issues.push("Задайте GIGASTT_URL для распознавания речи".to_string());

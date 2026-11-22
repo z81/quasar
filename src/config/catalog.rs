@@ -58,7 +58,7 @@ impl SettingDefinition {
 pub fn definitions() -> Vec<SettingDefinition> {
     let field = SettingDefinition::new;
     vec![
-        field("PROCESSOR_PROVIDER", "Провайдер модели", "Сервис, который отвечает на запросы Алисы.", "processor", "select", "openrouter").options(&["openrouter", "anthropic"]),
+        field("PROCESSOR_PROVIDER", "Провайдер модели", "Сервис, который отвечает на запросы Алисы.", "processor", "select", "openrouter").options(&["openrouter", "anthropic", "codex"]),
         field("OPENROUTER_API_KEY", "Ключ OpenRouter", "Для модели и распознавания/синтеза речи, в том числе резервных.", "processor", "password", ""),
         field("OPENROUTER_BASE_URL", "Адрес OpenRouter API", "Базовый HTTP(S) адрес совместимого API.", "processor", "text", "https://openrouter.ai/api/v1"),
         field("OPENROUTER_TIMEOUT_MS", "Таймаут OpenRouter, мс", "Ожидание подключения и данных от API.", "processor", "integer", "10000").range(1., 300_000.),
@@ -69,6 +69,12 @@ pub fn definitions() -> Vec<SettingDefinition> {
         field("ANTHROPIC_TIMEOUT_MS", "Таймаут Anthropic, мс", "Ожидание подключения и данных от API.", "processor", "integer", "10000").range(1., 300_000.),
         field("ANTHROPIC_PROCESSOR_MODEL", "Модель Anthropic", "Используется, когда провайдер модели — Anthropic.", "processor", "text", "claude-opus-5-5"),
         field("ANTHROPIC_PROCESSOR_EFFORT", "Размышление модели Anthropic", "Пустое значение оставляет выбор самой модели.", "processor", "select", "low").options(&["", "low", "medium", "high", "xhigh", "max"]),
+        field("CODEX_TOKEN", "Токен Codex", "Access token из ~/.codex/auth.json или ключ OpenAI API. Для токена Codex аккаунт берётся из JWT.", "processor", "password", ""),
+        field("CODEX_BASE_URL", "Адрес Codex API", "https://chatgpt.com/backend-api/codex для токена Codex; https://api.openai.com/v1 для ключа OpenAI.", "processor", "text", "https://chatgpt.com/backend-api/codex"),
+        field("CODEX_ACCOUNT_ID", "ID аккаунта Codex", "Необязательно: нужен, если в токене нет chatgpt_account_id.", "processor", "text", ""),
+        field("CODEX_TIMEOUT_MS", "Таймаут Codex, мс", "Ожидание подключения и данных от API.", "processor", "integer", "30000").range(1., 300_000.),
+        field("CODEX_PROCESSOR_MODEL", "Модель Codex", "Используется, когда провайдер модели — Codex, например gpt-5.5.", "processor", "text", "gpt-5.5"),
+        field("CODEX_PROCESSOR_EFFORT", "Размышление модели Codex", "Пустое значение оставляет выбор самой модели.", "processor", "select", "low").options(&["", "low", "medium", "high", "xhigh"]),
         field("PROCESSOR_CACHE_SIZE", "Кэш ответов", "Максимальное число ответов в кэше. Ноль отключает кэш.", "processor", "integer", "1000").range(0., 100_000.),
         field("STT_PROVIDER", "Распознавание речи", "GigaAM распознаёт речь локально; OpenRouter используется при сбое, если задан ключ.", "stt", "select", "openrouter").options(&["openrouter", "gigaam"]),
         field("GIGASTT_URL", "Адрес GigaAM", "Адрес gigastt: http:// или ws://, например http://gigastt:9876.", "stt", "text", ""),

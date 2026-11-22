@@ -1,6 +1,6 @@
 # alice-server
 
-Свой сервер для Яндекс.Станции (Quasar) с голосовым ассистентом. Он эмулирует облако Яндекса, с которым общается прошивка станции, а ответы пользователю готовит LLM через [OpenRouter](https://openrouter.ai) или напрямую через API Anthropic. Речь распознаётся и синтезируется через OpenRouter или локально: GigaAM, Whisper large-v3 на GPU, Piper, Vosk.
+Свой сервер для Яндекс.Станции (Quasar) с голосовым ассистентом. Он эмулирует облако Яндекса, с которым общается прошивка станции, а ответы пользователю готовит LLM через [OpenRouter](https://openrouter.ai), напрямую через API Anthropic или через Codex/OpenAI Responses API. Речь распознаётся и синтезируется через OpenRouter или локально: GigaAM, Whisper large-v3 на GPU, Piper, Vosk.
 
 [Запуск](#запуск) · [Подключение станции](#подключение-станции) · [Настройка](#настройка) · [Docker Compose](docker/README.md)
 
@@ -62,10 +62,10 @@
 ## Требования
 
 - **Станция с root-доступом,** в конфиге которой адреса Яндекса заменены на адрес этого сервера (см. [Подключение станции](#подключение-станции)). Проверено на Яндекс.Станции Миди с прошивкой 0.369.
-- **Токен OpenRouter** ([openrouter.ai/keys](https://openrouter.ai/settings/keys)).
+- **Токен OpenRouter** ([openrouter.ai/keys](https://openrouter.ai/settings/keys)), либо ключ Anthropic/токен Codex, если модель отвечает напрямую. Для облачных распознавания и синтеза всё равно нужен OpenRouter.
 - **Docker,** где ffmpeg уже есть в образе. Или Rust и ffmpeg, чтобы собрать сервер из исходников.
 - **По желанию** ([как запустить](docker/README.md)):
-  - ключ API Anthropic, чтобы отвечала модель Anthropic напрямую;
+  - ключ API Anthropic или токен Codex, чтобы отвечала модель Anthropic/Codex напрямую;
   - PostgreSQL;
   - gigastt для распознавания;
   - Piper или Vosk для синтеза;
@@ -194,7 +194,7 @@ GET дополнительно возвращает `mcp.servers`, `mcp.baseline
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
-| `PROCESSOR_PROVIDER` | `openrouter` | Кто отвечает пользователю: `openrouter` или `anthropic`, то есть API Anthropic напрямую. Речь в обоих случаях идёт через OpenRouter или локальные серверы |
+| `PROCESSOR_PROVIDER` | `openrouter` | Кто отвечает пользователю: `openrouter`, `anthropic` (API Anthropic напрямую) или `codex` (Codex backend / OpenAI Responses API). Речь в любом случае идёт через OpenRouter или локальные серверы |
 | `OPENROUTER_PROCESSOR_MODEL` | `google/gemini-3.8-flash` | Модель OpenRouter, которая отвечает пользователю |
 | `OPENROUTER_PROCESSOR_REASONING` | — | Глубина рассуждений: `none`, `minimal`, `low`, `medium`, `high`. Пустое значение оставляет настройку модели по умолчанию. Если модель не принимает параметр, сервер перестаёт его отправлять |
 | `ANTHROPIC_API_KEY` | — | Ключ API Anthropic. Обязателен при `PROCESSOR_PROVIDER=anthropic` |
@@ -202,6 +202,12 @@ GET дополнительно возвращает `mcp.servers`, `mcp.baseline
 | `ANTHROPIC_PROCESSOR_EFFORT` | `low` | Сколько модель думает перед ответом: `low`, `medium`, `high`, `xhigh`, `max`. Чем выше, тем дольше пауза перед ответом. Пустое значение оставляет настройку модели по умолчанию |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Адрес API Anthropic |
 | `ANTHROPIC_TIMEOUT_MS` | `10000` | Таймаут запросов к Anthropic |
+| `CODEX_TOKEN` | — | Access token из `~/.codex/auth.json` или ключ OpenAI API. Обязателен при `PROCESSOR_PROVIDER=codex` |
+| `CODEX_BASE_URL` | `https://chatgpt.com/backend-api/codex` | Адрес Codex API. Для ключа OpenAI API укажите `https://api.openai.com/v1` |
+| `CODEX_ACCOUNT_ID` | — | ID аккаунта ChatGPT. Обычно берётся из JWT токена; задайте, если в токене его нет |
+| `CODEX_PROCESSOR_MODEL` | `gpt-5.5` | Модель Codex, которая отвечает пользователю |
+| `CODEX_PROCESSOR_EFFORT` | `low` | `reasoning.effort`: `low`, `medium`, `high`, `xhigh`. Пустое значение оставляет выбор модели |
+| `CODEX_TIMEOUT_MS` | `30000` | Таймаут запросов к Codex |
 | `PROCESSOR_PROMPT_TEMPLATE_PATH` | `prompt.handlebars` | Шаблон системного промпта |
 | `PROCESSOR_PROMPT_STATE_TEMPLATE_PATH` | `prompt-state.handlebars` | Шаблон сообщения о состоянии |
 | `PROCESSOR_CACHE_SIZE` | `1000` | Сколько ответов помнить в кэше. `0` выключает кэш |
@@ -210,6 +216,20 @@ GET дополнительно возвращает `mcp.servers`, `mcp.baseline
 | `PROCESSOR_MCP_SERVER_URLS` | — | [Серверы MCP](#home-assistant) через запятую, каждый как `<адрес>#<префикс>` |
 | `PROCESSOR_MCP_SERVER_TOKENS` | — | Их токены через запятую: `<префикс>:<токен>`. Уходят в заголовке `Authorization: Bearer` |
 | `PROCESSOR_MCP_LIVE_CONTEXT` | `true` | Показывать модели в каждом ходе состояние умного дома (инструмент `GetLiveContext`) |
+
+### Codex
+
+`PROCESSOR_PROVIDER=codex` отправляет диалог в Codex backend или в OpenAI
+Responses API. Для токена Codex из `~/.codex/auth.json` берите
+`tokens.access_token`; `CODEX_BASE_URL` по умолчанию уже указывает на Codex
+backend, а `CODEX_ACCOUNT_ID` обычно извлекается из JWT. Если в токене нет
+`chatgpt_account_id`, впишите `tokens.account_id` из того же файла в
+`CODEX_ACCOUNT_ID`.
+
+Для обычного ключа OpenAI API поставьте `CODEX_BASE_URL=https://api.openai.com/v1`
+и выберите модель Codex в `CODEX_PROCESSOR_MODEL`, например `gpt-5.2-codex`.
+Access token Codex со временем истекает — тогда обновите `CODEX_TOKEN`. Ключ
+OpenAI API так не истекает.
 
 ### Распознавание речи
 

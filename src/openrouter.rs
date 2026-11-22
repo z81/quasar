@@ -362,6 +362,9 @@ pub struct ChatStream {
     /// network chunks, so lines are decoded only once complete
     buffer: Vec<u8>,
     done: bool,
+    /// a normal end of the format's stream: `[DONE]`, `message_stop` or
+    /// `response.completed`
+    completed: bool,
     format: StreamFormat,
     /// the reasoning effort the request asked for
     reasoning: Option<String>,
@@ -375,6 +378,9 @@ pub enum StreamFormat {
     ChatCompletions,
     /// Anthropic's Messages API: the text deltas of content blocks, then `message_stop`
     Messages,
+    /// OpenAI's Responses API (Codex): `response.output_text.delta`, then
+    /// `response.completed`
+    Responses,
 }
 
 /// What one SSE event of a chat stream means
@@ -411,6 +417,30 @@ impl StreamFormat {
                 Some("message_stop") => return StreamEvent::End,
                 _ => None,
             },
+            Self::Responses => match value["type"].as_str() {
+                // reasoning deltas are not the answer; only visible output text is
+                Some("response.output_text.delta") => value["delta"].as_str(),
+                Some("response.completed") => return StreamEvent::End,
+                Some("response.incomplete") => {
+                    return StreamEvent::Failed(anyhow::anyhow!(
+                        "the answer stopped early: {}",
+                        value["response"]["incomplete_details"]
+                    ));
+                }
+                Some("response.failed") => {
+                    return StreamEvent::Failed(anyhow::anyhow!(
+                        "the answer failed: {}",
+                        value["response"]["error"]
+                    ));
+                }
+                Some("error") => {
+                    return StreamEvent::Failed(anyhow::anyhow!(
+                        "chat stream error: {}",
+                        value["error"]
+                    ));
+                }
+                _ => None,
+            },
         };
         match content {
             Some(content) if !content.is_empty() => StreamEvent::Content(content.to_string()),
@@ -434,7 +464,15 @@ pub struct ChatTiming {
 impl ChatStream {
     /// The answer of a request that `timing` started
     pub fn new(response: reqwest::Response, format: StreamFormat, reasoning: Option<String>, timing: ChatTiming) -> Self {
-        Self { stream: Box::pin(response.bytes_stream()), buffer: Vec::new(), done: false, format, reasoning, timing }
+        Self {
+            stream: Box::pin(response.bytes_stream()),
+            buffer: Vec::new(),
+            done: false,
+            completed: false,
+            format,
+            reasoning,
+            timing,
+        }
     }
 
     pub fn timing(&self) -> ChatTiming {
@@ -467,6 +505,7 @@ impl futures_util::Stream for ChatStream {
                 if let Some(data) = line.strip_prefix("data:").map(str::trim_start) {
                     if data == "[DONE]" {
                         self.done = true;
+                        self.completed = true;
                         return Poll::Ready(None);
                     }
                     if let Ok(value) = serde_json::from_str::<Value>(data) {
@@ -483,6 +522,7 @@ impl futures_util::Stream for ChatStream {
                             }
                             StreamEvent::End => {
                                 self.done = true;
+                                self.completed = true;
                                 return Poll::Ready(None);
                             }
                             StreamEvent::Other => {}
@@ -502,6 +542,11 @@ impl futures_util::Stream for ChatStream {
                 }
                 Poll::Ready(None) => {
                     self.done = true;
+                    if matches!(self.format, StreamFormat::Responses) && !self.completed {
+                        return Poll::Ready(Some(Err(anyhow::anyhow!(
+                            "responses stream closed before response.completed"
+                        ))));
+                    }
                     return Poll::Ready(None);
                 }
                 Poll::Pending => return Poll::Pending,

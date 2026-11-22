@@ -20,6 +20,7 @@ use stream::{AnswerScanner, TextChunker};
 use tokio::sync::{mpsc, Mutex};
 
 use crate::anthropic::Anthropic;
+use crate::codex::Codex;
 use crate::openrouter::{ChatMessage, ChatStream, OpenRouter};
 
 const MAX_AGENT_ITERATIONS: usize = 5;
@@ -114,6 +115,7 @@ const STATE_MESSAGE: usize = 1;
 pub enum Llm {
     OpenRouter(OpenRouter),
     Anthropic(Anthropic),
+    Codex(Codex),
 }
 
 impl Llm {
@@ -121,6 +123,7 @@ impl Llm {
         match self {
             Self::OpenRouter(openrouter) => openrouter.chat_stream(model, messages).await,
             Self::Anthropic(anthropic) => anthropic.chat_stream(model, messages).await,
+            Self::Codex(codex) => codex.chat_stream(model, messages).await,
         }
     }
 }

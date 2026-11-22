@@ -7,6 +7,7 @@ mod alarm_protocol;
 mod animation_presets;
 mod anthropic;
 mod api;
+mod codex;
 mod audio;
 mod auth;
 mod automations;

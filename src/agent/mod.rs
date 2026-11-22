@@ -508,7 +508,7 @@ fn header(fields: &serde_json::Map<String, Value>) -> Option<(Vec<FunctionCall>,
     let style = fields
         .get("style")
         .and_then(Value::as_str)
-        .map(|value| value.trim().chars().take(240).collect::<String>())
+        .map(|value| value.trim().chars().take(400).collect::<String>())
         .filter(|value| {
             !value.is_empty()
                 && !value.eq_ignore_ascii_case("neutral")

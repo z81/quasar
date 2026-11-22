@@ -70,7 +70,7 @@ pub fn parse_llm_response(raw: &str) -> anyhow::Result<StructuredResponse> {
             .filter(|value| matches!(value.as_str(), "normal" | "laugh" | "excited" | "sad" | "angry" | "male" | "dagestani" | "whisper")),
         style: raw
             .style
-            .map(|value| value.trim().chars().take(240).collect::<String>())
+            .map(|value| value.trim().chars().take(400).collect::<String>())
             .filter(|value| {
                 !value.is_empty()
                     && !value.eq_ignore_ascii_case("neutral")

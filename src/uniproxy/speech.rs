@@ -248,16 +248,18 @@ fn synthesize(
                 None => synthesize_openrouter(&context, &text, &pcm, started).await,
             },
             TtsProvider::Local => {
-                if let (Some(instruction), Some(_)) = (style_instruction.as_deref(), context.design_tts.as_ref()) {
+                if let Some(voice) = voice.as_deref() {
+                    synthesize_local(&context, &text, &pcm, started, Some(voice)).await
+                } else if let (Some(instruction), Some(_)) = (style_instruction.as_deref(), context.design_tts.as_ref()) {
                     match synthesize_design(&context, &text, &pcm, started, instruction).await {
                         Ok(synthesis) => Ok(synthesis),
                         Err(error) => {
                             tracing::warn!("design TTS failed: {error:#}");
-                            synthesize_local(&context, &text, &pcm, started, voice.as_deref()).await
+                            synthesize_local(&context, &text, &pcm, started, None).await
                         }
                     }
                 } else {
-                    synthesize_local(&context, &text, &pcm, started, voice.as_deref()).await
+                    synthesize_local(&context, &text, &pcm, started, None).await
                 }
             }
             TtsProvider::OpenRouter => synthesize_openrouter(&context, &text, &pcm, started).await,

@@ -71,7 +71,12 @@ pub fn parse_llm_response(raw: &str) -> anyhow::Result<StructuredResponse> {
         style: raw
             .style
             .map(|value| value.trim().chars().take(240).collect::<String>())
-            .filter(|value| !value.is_empty() && !value.chars().any(char::is_control)),
+            .filter(|value| {
+                !value.is_empty()
+                    && !value.eq_ignore_ascii_case("neutral")
+                    && !value.eq_ignore_ascii_case("normal")
+                    && !value.chars().any(char::is_control)
+            }),
         text: raw.text.unwrap_or_default(),
     })
 }

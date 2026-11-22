@@ -355,9 +355,9 @@ LLM может добавить в JSON поле `"voice"` перед `"text"`:
 - `"angry"` — просьба ответить сердито, строго или недовольно;
 - `"whisper"` — тихий или секретный ответ.
 
-Поле необязательное: обычный ответ идёт обычным голосом. Голоса для стилей задаются в `LOCAL_TTS_VOICE_LAUGH`, `LOCAL_TTS_VOICE_EXCITED`, `LOCAL_TTS_VOICE_SAD`, `LOCAL_TTS_VOICE_ANGRY`, `LOCAL_TTS_VOICE_WHISPER`; если поле пустое, используется `LOCAL_TTS_VOICE` или голос шёпота.
+`style` обязателен: для обычного ответа LLM пишет `"neutral"`, для эмоции — короткое описание манеры. База голоса задана отдельно в `DESIGN_TTS_PREFIX` (18-летняя A), поэтому в `style` не нужно повторять пол и возраст. Голоса для частых стилей задаются в `LOCAL_TTS_VOICE_LAUGH`, `LOCAL_TTS_VOICE_EXCITED`, `LOCAL_TTS_VOICE_SAD`, `LOCAL_TTS_VOICE_ANGRY`, `LOCAL_TTS_VOICE_WHISPER`; если поле `voice` не задано, используется `LOCAL_TTS_VOICE`.
 
-Если `DESIGN_TTS_URL` задан, LLM может вместо `voice` вернуть свободный `style` — короткую английскую строку вроде `tired, sleepy, low energy, quiet`. Quasar добавит её к `DESIGN_TTS_PREFIX` и отправит в VoiceDesign. Голос может слегка отличаться от обычного, зато манеру выбирает сама LLM, без заранее заготовленных голосов.
+Если `DESIGN_TTS_URL` задан, свободный `style` (например, `tired, sleepy, low energy, quiet`) уходит в VoiceDesign: Quasar добавит его к `DESIGN_TTS_PREFIX`. `neutral` и известные `voice` остаются на стабильном Base. Голос свободного стиля может слегка отличаться от обычного, зато манеру выбирает сама LLM.
 
 ## Определение шёпота
 

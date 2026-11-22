@@ -39,7 +39,12 @@ impl Codex {
             .read_timeout(timeout)
             .build()
             .context("failed to build HTTP client")?;
-        let token = token.trim().to_string();
+        let token = token.trim();
+        let token = token
+            .strip_prefix("Bearer ")
+            .unwrap_or(token)
+            .trim()
+            .to_string();
         let account_id = account_id
             .map(str::trim)
             .filter(|value| !value.is_empty())

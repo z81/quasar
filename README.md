@@ -344,14 +344,16 @@ WHISPER_TTS_LOCAL_VOICE=whisper
 
 Каждый ответ LLM сопровождает поле `style` — полное английское описание голоса для VoiceDesign. Готовых голосов для стилей нет: LLM сама решает, как звучит ответ.
 
-- `"neutral"` — обычный голос, стабильный Base `LOCAL_TTS_VOICE`;
-- всё остальное — полное описание: пол, возраст, тембр, акцент, манера. Например:
-  - мужской: `A Russian man, 30 years old, deep calm voice. Native Russian pronunciation.`
-  - дагестанский: `A Russian man, 30 years old, speaking with a pronounced Dagestani/Caucasian accent, guttural, distinctive intonation.`
-  - устало: `A young Russian woman, 18 years old, soft low voice, tired, sleepy, low energy, quiet.`
-  - смех: `A young Russian woman, 18 years old, soft low voice, laughing warmly and cheerfully.`
+Обычный ответ:
+`A young Russian woman, 18 years old, soft low-pitched natural voice, calm and friendly. Native Russian pronunciation.`
 
-`neutral` идёт в Base, остальное — в VoiceDesign по `DESIGN_TTS_URL`. `DESIGN_TTS_PREFIX` по умолчанию пуст: style используется как есть, без фиксированного женского префикса. Если нужен стабильный акцент, лучше записать 5–12 с речи носителя и склонировать её в Base.
+Другие примеры:
+- мужской: `A Russian man, 30 years old, deep calm voice. Native Russian pronunciation.`
+- дагестанский: `A Russian man, 30 years old, speaking with a pronounced Dagestani/Caucasian accent, guttural, distinctive intonation.`
+- устало: `A young Russian woman, 18 years old, soft low voice, tired, sleepy, low energy, quiet.`
+- смех: `A young Russian woman, 18 years old, soft low voice, laughing warmly and cheerfully.`
+
+Все ответы идут в VoiceDesign по `DESIGN_TTS_URL`; `DESIGN_TTS_PREFIX` по умолчанию пуст, style используется как есть. `LOCAL_TTS_VOICE` — только резерв, если style пуст или VoiceDesign недоступен. Если нужен стабильный акцент, лучше записать 5–12 с речи носителя и склонировать её в Base.
 
 ## Определение шёпота
 

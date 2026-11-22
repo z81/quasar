@@ -403,6 +403,12 @@ async fn synthesize_local(
         Some(value) if value.eq_ignore_ascii_case("angry") => {
             config.local_tts_voice_angry.as_deref().unwrap_or(&config.local_tts_voice)
         }
+        Some(value) if value.eq_ignore_ascii_case("male") => {
+            config.local_tts_voice_male.as_deref().unwrap_or(&config.local_tts_voice)
+        }
+        Some(value) if value.eq_ignore_ascii_case("dagestani") => {
+            config.local_tts_voice_dagestani.as_deref().unwrap_or(&config.local_tts_voice)
+        }
         Some(value) if value.eq_ignore_ascii_case("whisper") => {
             config.local_tts_voice_whisper.as_deref().unwrap_or(config.whisper_tts_local_voice.as_str())
         }

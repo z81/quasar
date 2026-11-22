@@ -243,6 +243,8 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
         local_tts_voice_excited: values.optional("LOCAL_TTS_VOICE_EXCITED"),
         local_tts_voice_sad: values.optional("LOCAL_TTS_VOICE_SAD"),
         local_tts_voice_angry: values.optional("LOCAL_TTS_VOICE_ANGRY"),
+        local_tts_voice_male: values.optional("LOCAL_TTS_VOICE_MALE"),
+        local_tts_voice_dagestani: values.optional("LOCAL_TTS_VOICE_DAGESTANI"),
         local_tts_voice_whisper: values.optional("LOCAL_TTS_VOICE_WHISPER"),
         design_tts_url: design_tts_url.map(|url| url.trim_end_matches('/').to_owned()),
         design_tts_model: values.required("DESIGN_TTS_MODEL")?,

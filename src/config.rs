@@ -221,6 +221,8 @@ pub struct Config {
     pub local_tts_voice_excited: Option<String>,
     pub local_tts_voice_sad: Option<String>,
     pub local_tts_voice_angry: Option<String>,
+    pub local_tts_voice_male: Option<String>,
+    pub local_tts_voice_dagestani: Option<String>,
     pub local_tts_voice_whisper: Option<String>,
     /// DESIGN_TTS_URL: a local VoiceDesign server for free-text styles from the LLM
     pub design_tts_url: Option<String>,

@@ -67,7 +67,7 @@ pub fn parse_llm_response(raw: &str) -> anyhow::Result<StructuredResponse> {
         voice: raw
             .voice
             .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| matches!(value.as_str(), "normal" | "laugh" | "excited" | "sad" | "angry" | "whisper")),
+            .filter(|value| matches!(value.as_str(), "normal" | "laugh" | "excited" | "sad" | "angry" | "male" | "dagestani" | "whisper")),
         style: raw
             .style
             .map(|value| value.trim().chars().take(240).collect::<String>())

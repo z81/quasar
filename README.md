@@ -242,6 +242,8 @@ GET дополнительно возвращает `mcp.servers`, `mcp.baseline
 | `LOCAL_TTS_VOICE_EXCITED` | — | Необязательный голос для стиля `excited` |
 | `LOCAL_TTS_VOICE_SAD` | — | Необязательный голос для стиля `sad` |
 | `LOCAL_TTS_VOICE_ANGRY` | — | Необязательный голос для стиля `angry` |
+| `LOCAL_TTS_VOICE_MALE` | — | Голос для `voice=male` |
+| `LOCAL_TTS_VOICE_DAGESTANI` | — | Голос для `voice=dagestani` |
 | `LOCAL_TTS_VOICE_WHISPER` | — | Необязательный голос для стиля `whisper`; пусто — голос из `WHISPER_TTS_LOCAL_VOICE` |
 | `DESIGN_TTS_URL` | — | OpenAI-совместимый адрес VoiceDesign, например `http://192.168.1.133:8091/v1`. Пусто — свободные стили от LLM отключены |
 | `DESIGN_TTS_MODEL` | `qwen3-tts-design` | Модель на сервере VoiceDesign |
@@ -353,6 +355,8 @@ LLM может добавить в JSON поле `"voice"` перед `"text"`:
 - `"excited"` — радостная новость, восторг;
 - `"sad"` — грустная новость, сочувствие;
 - `"angry"` — просьба ответить сердито, строго или недовольно;
+- `"male"` — мужской голос;
+- `"dagestani"` — дагестанский/кавказский акцент;
 - `"whisper"` — тихий или секретный ответ.
 
 `style` обязателен: для обычного ответа LLM пишет `"neutral"`, для эмоции — короткое описание манеры. База голоса задана отдельно в `DESIGN_TTS_PREFIX` (18-летняя A), поэтому в `style` не нужно повторять пол и возраст. Голоса для частых стилей задаются в `LOCAL_TTS_VOICE_LAUGH`, `LOCAL_TTS_VOICE_EXCITED`, `LOCAL_TTS_VOICE_SAD`, `LOCAL_TTS_VOICE_ANGRY`, `LOCAL_TTS_VOICE_WHISPER`; если поле `voice` не задано, используется `LOCAL_TTS_VOICE`.

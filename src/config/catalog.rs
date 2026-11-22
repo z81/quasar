@@ -93,6 +93,8 @@ pub fn definitions() -> Vec<SettingDefinition> {
         field("LOCAL_TTS_VOICE_EXCITED", "Голос для восторга", "Необязательный голос для стиля excited от LLM; пусто — обычный голос.", "tts", "text", ""),
         field("LOCAL_TTS_VOICE_SAD", "Голос для грусти", "Необязательный голос для стиля sad от LLM; пусто — обычный голос.", "tts", "text", ""),
         field("LOCAL_TTS_VOICE_ANGRY", "Голос для злости", "Необязательный голос для стиля angry от LLM; пусто — обычный голос.", "tts", "text", ""),
+        field("LOCAL_TTS_VOICE_MALE", "Мужской голос", "Голос для voice=male; пусто — обычный голос.", "tts", "text", ""),
+        field("LOCAL_TTS_VOICE_DAGESTANI", "Дагестанский голос", "Голос для voice=dagestani; пусто — обычный голос.", "tts", "text", ""),
         field("LOCAL_TTS_VOICE_WHISPER", "Голос для шёпота по стилю", "Необязательный голос для стиля whisper от LLM; пусто — голос шёпота из WHISPER_TTS_LOCAL_VOICE.", "tts", "text", ""),
         field("DESIGN_TTS_URL", "Адрес VoiceDesign", "OpenAI-совместимый адрес VoiceDesign, например http://192.168.1.133:8091/v1. Пусто — свободные стили от LLM отключены.", "tts", "text", ""),
         field("DESIGN_TTS_MODEL", "Модель VoiceDesign", "Имя модели на сервере VoiceDesign.", "tts", "text", "qwen3-tts-design"),

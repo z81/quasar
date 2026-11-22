@@ -30,6 +30,7 @@ mod logging;
 mod server_logs;
 mod home_assistant;
 mod mcp;
+mod opencode;
 mod openrouter;
 mod piper;
 mod player;

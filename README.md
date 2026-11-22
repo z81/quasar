@@ -1,6 +1,6 @@
 # alice-server
 
-Свой сервер для Яндекс.Станции (Quasar) с голосовым ассистентом. Он эмулирует облако Яндекса, с которым общается прошивка станции, а ответы пользователю готовит LLM через [OpenRouter](https://openrouter.ai), напрямую через API Anthropic или через Codex/OpenAI Responses API. Речь распознаётся и синтезируется через OpenRouter или локально: GigaAM, Whisper large-v3 на GPU, Piper, Vosk.
+Свой сервер для Яндекс.Станции (Quasar) с голосовым ассистентом. Он эмулирует облако Яндекса, с которым общается прошивка станции, а ответы пользователю готовит LLM через [OpenRouter](https://openrouter.ai), напрямую через API Anthropic, через Codex/OpenAI Responses API или через подписку OpenCode Go. Речь распознаётся и синтезируется через OpenRouter или локально: GigaAM, Whisper large-v3 на GPU, Piper, Vosk.
 
 [Запуск](#запуск) · [Подключение станции](#подключение-станции) · [Настройка](#настройка) · [Docker Compose](docker/README.md)
 
@@ -65,7 +65,7 @@
 - **Токен OpenRouter** ([openrouter.ai/keys](https://openrouter.ai/settings/keys)), либо ключ Anthropic/токен Codex, если модель отвечает напрямую. Для облачных распознавания и синтеза всё равно нужен OpenRouter.
 - **Docker,** где ffmpeg уже есть в образе. Или Rust и ffmpeg, чтобы собрать сервер из исходников.
 - **По желанию** ([как запустить](docker/README.md)):
-  - ключ API Anthropic или токен Codex, чтобы отвечала модель Anthropic/Codex напрямую;
+  - ключ API Anthropic, токен Codex или ключ OpenCode Go, чтобы отвечала модель Anthropic/Codex/OpenCode напрямую;
   - PostgreSQL;
   - gigastt для распознавания;
   - Piper или Vosk для синтеза;
@@ -194,7 +194,7 @@ GET дополнительно возвращает `mcp.servers`, `mcp.baseline
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
-| `PROCESSOR_PROVIDER` | `openrouter` | Кто отвечает пользователю: `openrouter`, `anthropic` (API Anthropic напрямую) или `codex` (Codex backend / OpenAI Responses API). Речь в любом случае идёт через OpenRouter или локальные серверы |
+| `PROCESSOR_PROVIDER` | `openrouter` | Кто отвечает пользователю: `openrouter`, `anthropic` (API Anthropic напрямую), `codex` (Codex backend / OpenAI Responses API) или `opencode` (OpenCode Go / Console). Речь в любом случае идёт через OpenRouter или локальные серверы |
 | `OPENROUTER_PROCESSOR_MODEL` | `google/gemini-3.8-flash` | Модель OpenRouter, которая отвечает пользователю |
 | `OPENROUTER_PROCESSOR_REASONING` | — | Глубина рассуждений: `none`, `minimal`, `low`, `medium`, `high`. Пустое значение оставляет настройку модели по умолчанию. Если модель не принимает параметр, сервер перестаёт его отправлять |
 | `ANTHROPIC_API_KEY` | — | Ключ API Anthropic. Обязателен при `PROCESSOR_PROVIDER=anthropic` |
@@ -208,6 +208,11 @@ GET дополнительно возвращает `mcp.servers`, `mcp.baseline
 | `CODEX_PROCESSOR_MODEL` | `gpt-5.5` | Модель Codex, которая отвечает пользователю |
 | `CODEX_PROCESSOR_EFFORT` | `low` | `reasoning.effort`: `low`, `medium`, `high`, `xhigh`. Пустое значение оставляет выбор модели |
 | `CODEX_TIMEOUT_MS` | `30000` | Таймаут запросов к Codex |
+| `OPENCODE_API_KEY` | — | API key OpenCode Console (`oc_sk_...`). Обязателен при `PROCESSOR_PROVIDER=opencode` |
+| `OPENCODE_BASE_URL` | `https://opencode.ai/inference/go/openai/v1` | Адрес OpenCode Go. Для pay-as-you-go: `https://opencode.ai/inference/openai/v1` |
+| `OPENCODE_PROCESSOR_MODEL` | `deepseek-v4.1-flash` | Модель OpenCode Go |
+| `OPENCODE_PROCESSOR_REASONING` | — | `reasoning_effort`: `low`, `high`, `max`. Пустое значение оставляет выбор модели |
+| `OPENCODE_TIMEOUT_MS` | `30000` | Таймаут запросов к OpenCode |
 | `PROCESSOR_PROMPT_TEMPLATE_PATH` | `prompt.handlebars` | Шаблон системного промпта |
 | `PROCESSOR_PROMPT_STATE_TEMPLATE_PATH` | `prompt-state.handlebars` | Шаблон сообщения о состоянии |
 | `PROCESSOR_CACHE_SIZE` | `1000` | Сколько ответов помнить в кэше. `0` выключает кэш |
@@ -230,6 +235,19 @@ backend, а `CODEX_ACCOUNT_ID` обычно извлекается из JWT. Е�
 и выберите модель Codex в `CODEX_PROCESSOR_MODEL`, например `gpt-5.2-codex`.
 Access token Codex со временем истекает — тогда обновите `CODEX_TOKEN`. Ключ
 OpenAI API так не истекает.
+
+### OpenCode Go
+
+`PROCESSOR_PROVIDER=opencode` использует подписку OpenCode Go через
+OpenAI-совместимый Chat Completions API. Возьмите personal API key в
+[OpenCode Console](https://opencode.ai/console), вставьте его в
+`OPENCODE_API_KEY`, оставьте `OPENCODE_BASE_URL` по умолчанию и выберите модель
+в `OPENCODE_PROCESSOR_MODEL` — например `deepseek-v4.1-flash`. Quasar сам
+отправляет стабильный `x-opencode-session` для каждого диалога и представляется
+как `alice-server/1.0`, как требует Go.
+
+Для pay-as-you-go с тем же ключом поставьте
+`OPENCODE_BASE_URL=https://opencode.ai/inference/openai/v1`.
 
 ### Распознавание речи
 

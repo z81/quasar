@@ -177,6 +177,17 @@ pub struct CodexConfig {
     pub effort: Option<String>,
 }
 
+/// PROCESSOR_PROVIDER=opencode: the dialog goes to an OpenCode Go
+/// (or pay-as-you-go) Console gateway
+#[derive(Clone)]
+pub struct OpenCodeConfig {
+    pub api_key: String,
+    pub base_url: String,
+    pub timeout_ms: u64,
+    /// `reasoning_effort`; None: not sent, the model's default
+    pub reasoning: Option<String>,
+}
+
 /// Who decides that the user stopped speaking
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EndOfSpeech {
@@ -245,6 +256,8 @@ pub struct Config {
     pub anthropic: Option<AnthropicConfig>,
     /// set with PROCESSOR_PROVIDER=codex
     pub codex: Option<CodexConfig>,
+    /// set with PROCESSOR_PROVIDER=opencode
+    pub opencode: Option<OpenCodeConfig>,
     /// the dialog's model at its provider
     pub processor_model: String,
     /// the dialog LLM's reasoning effort, sent as `reasoning: {effort}`; None:
@@ -285,7 +298,8 @@ impl Config {
 /// An absent optional fallback credential does not disable a healthy local provider.
 pub fn readiness_issues(config: &Config) -> Vec<String> {
     let mut issues = Vec::new();
-    let primary_ready = config.anthropic.is_some() || config.codex.is_some();
+    let primary_ready =
+        config.anthropic.is_some() || config.codex.is_some() || config.opencode.is_some();
     if config.openrouter_api_key.is_empty()
         && (!primary_ready
             || config.stt_provider == SttProvider::OpenRouter
@@ -308,6 +322,13 @@ pub fn readiness_issues(config: &Config) -> Vec<String> {
         .is_some_and(|provider| provider.token.is_empty())
     {
         issues.push("Задайте CODEX_TOKEN для выбранной модели".to_string());
+    }
+    if config
+        .opencode
+        .as_ref()
+        .is_some_and(|provider| provider.api_key.is_empty())
+    {
+        issues.push("Задайте OPENCODE_API_KEY для выбранной модели".to_string());
     }
     if config.stt_provider == SttProvider::GigaAm && config.gigastt_url.is_none() {
         issues.push("Задайте GIGASTT_URL для распознавания речи".to_string());

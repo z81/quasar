@@ -58,7 +58,7 @@ impl SettingDefinition {
 pub fn definitions() -> Vec<SettingDefinition> {
     let field = SettingDefinition::new;
     vec![
-        field("PROCESSOR_PROVIDER", "Провайдер модели", "Сервис, который отвечает на запросы Алисы.", "processor", "select", "openrouter").options(&["openrouter", "anthropic", "codex"]),
+        field("PROCESSOR_PROVIDER", "Провайдер модели", "Сервис, который отвечает на запросы Алисы.", "processor", "select", "openrouter").options(&["openrouter", "anthropic", "codex", "opencode"]),
         field("OPENROUTER_API_KEY", "Ключ OpenRouter", "Для модели и распознавания/синтеза речи, в том числе резервных.", "processor", "password", ""),
         field("OPENROUTER_BASE_URL", "Адрес OpenRouter API", "Базовый HTTP(S) адрес совместимого API.", "processor", "text", "https://openrouter.ai/api/v1"),
         field("OPENROUTER_TIMEOUT_MS", "Таймаут OpenRouter, мс", "Ожидание подключения и данных от API.", "processor", "integer", "10000").range(1., 300_000.),
@@ -75,6 +75,11 @@ pub fn definitions() -> Vec<SettingDefinition> {
         field("CODEX_TIMEOUT_MS", "Таймаут Codex, мс", "Ожидание подключения и данных от API.", "processor", "integer", "30000").range(1., 300_000.),
         field("CODEX_PROCESSOR_MODEL", "Модель Codex", "Используется, когда провайдер модели — Codex, например gpt-5.5.", "processor", "text", "gpt-5.5"),
         field("CODEX_PROCESSOR_EFFORT", "Размышление модели Codex", "Пустое значение оставляет выбор самой модели.", "processor", "select", "low").options(&["", "low", "medium", "high", "xhigh"]),
+        field("OPENCODE_API_KEY", "Ключ OpenCode Go", "API key из OpenCode Console (oc_sk_...).", "processor", "password", ""),
+        field("OPENCODE_BASE_URL", "Адрес OpenCode API", "https://opencode.ai/inference/go/openai/v1 для Go; https://opencode.ai/inference/openai/v1 для pay-as-you-go.", "processor", "text", "https://opencode.ai/inference/go/openai/v1"),
+        field("OPENCODE_PROCESSOR_MODEL", "Модель OpenCode", "Например deepseek-v4.1-flash.", "processor", "text", "deepseek-v4.1-flash"),
+        field("OPENCODE_PROCESSOR_REASONING", "Размышление модели OpenCode", "reasoning_effort; пустое значение оставляет выбор модели.", "processor", "select", "").options(&["", "low", "high", "max"]),
+        field("OPENCODE_TIMEOUT_MS", "Таймаут OpenCode, мс", "Ожидание подключения и данных от API.", "processor", "integer", "30000").range(1., 300_000.),
         field("PROCESSOR_CACHE_SIZE", "Кэш ответов", "Максимальное число ответов в кэше. Ноль отключает кэш.", "processor", "integer", "1000").range(0., 100_000.),
         field("STT_PROVIDER", "Распознавание речи", "GigaAM распознаёт речь локально; OpenRouter используется при сбое, если задан ключ.", "stt", "select", "openrouter").options(&["openrouter", "gigaam"]),
         field("GIGASTT_URL", "Адрес GigaAM", "Адрес gigastt: http:// или ws://, например http://gigastt:9876.", "stt", "text", ""),

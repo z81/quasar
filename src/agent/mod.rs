@@ -21,6 +21,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::anthropic::Anthropic;
 use crate::codex::Codex;
+use crate::opencode::OpenCode;
 use crate::openrouter::{ChatMessage, ChatStream, OpenRouter};
 
 const MAX_AGENT_ITERATIONS: usize = 5;
@@ -116,14 +117,21 @@ pub enum Llm {
     OpenRouter(OpenRouter),
     Anthropic(Anthropic),
     Codex(Codex),
+    OpenCode(OpenCode),
 }
 
 impl Llm {
-    async fn chat_stream(&self, model: &str, messages: &[ChatMessage]) -> Result<ChatStream> {
+    async fn chat_stream(
+        &self,
+        model: &str,
+        messages: &[ChatMessage],
+        session_id: &str,
+    ) -> Result<ChatStream> {
         match self {
             Self::OpenRouter(openrouter) => openrouter.chat_stream(model, messages).await,
             Self::Anthropic(anthropic) => anthropic.chat_stream(model, messages).await,
             Self::Codex(codex) => codex.chat_stream(model, messages).await,
+            Self::OpenCode(opencode) => opencode.chat_stream(model, messages, session_id).await,
         }
     }
 }
@@ -326,7 +334,7 @@ impl Agent {
         let messages = self.state.lock().await.messages.clone();
         let mut stream = tokio::time::timeout(
             ITERATION_TIMEOUT,
-            self.llm.chat_stream(&self.model, &messages),
+            self.llm.chat_stream(&self.model, &messages, &self.session_id),
         )
         .await??;
 

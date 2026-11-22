@@ -119,21 +119,30 @@ async fn prepare(
         .as_ref()
         .map(|url| crate::openrouter::OpenRouter::new(url, "", config.openrouter_timeout_ms, None))
         .transpose()?;
-    let llm = match (&config.anthropic, &config.codex) {
-        (Some(anthropic), _) => crate::agent::Llm::Anthropic(crate::anthropic::Anthropic::new(
+    let llm = if let Some(anthropic) = &config.anthropic {
+        crate::agent::Llm::Anthropic(crate::anthropic::Anthropic::new(
             &anthropic.base_url,
             &anthropic.api_key,
             anthropic.timeout_ms,
             anthropic.effort.as_deref(),
-        )?),
-        (_, Some(codex)) => crate::agent::Llm::Codex(crate::codex::Codex::new(
+        )?)
+    } else if let Some(codex) = &config.codex {
+        crate::agent::Llm::Codex(crate::codex::Codex::new(
             &codex.base_url,
             &codex.token,
             codex.account_id.as_deref(),
             codex.timeout_ms,
             codex.effort.as_deref(),
-        )?),
-        _ => crate::agent::Llm::OpenRouter(openrouter.clone()),
+        )?)
+    } else if let Some(opencode) = &config.opencode {
+        crate::agent::Llm::OpenCode(crate::opencode::OpenCode::new(
+            &opencode.base_url,
+            &opencode.api_key,
+            opencode.timeout_ms,
+            opencode.reasoning.as_deref(),
+        )?)
+    } else {
+        crate::agent::Llm::OpenRouter(openrouter.clone())
     };
     let unchanged_remote = previous.filter(|previous| {
         previous.config.function_server_urls == config.function_server_urls

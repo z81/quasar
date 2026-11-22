@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use anyhow::{bail, ensure, Context, Result};
 
 use super::{
-    definitions, AnthropicConfig, CodexConfig, Config, EndOfSpeech, McpServerConfig, PiperConfig,
-    SttProvider, TtsFormat, TtsProvider, Values,
+    definitions, AnthropicConfig, CodexConfig, Config, EndOfSpeech, McpServerConfig,
+    OpenCodeConfig, PiperConfig, SttProvider, TtsFormat, TtsProvider, Values,
 };
 
 pub(super) fn config(supplied: &Values) -> Result<Config> {
@@ -83,10 +83,20 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
         }
     }
     let values = Parsed(values);
-    for key in ["OPENROUTER_BASE_URL", "ANTHROPIC_BASE_URL", "CODEX_BASE_URL"] {
+    for key in [
+        "OPENROUTER_BASE_URL",
+        "ANTHROPIC_BASE_URL",
+        "CODEX_BASE_URL",
+        "OPENCODE_BASE_URL",
+    ] {
         url(key, &values.required(key)?, &["http", "https"])?;
     }
-    for key in ["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "CODEX_TOKEN"] {
+    for key in [
+        "OPENROUTER_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "CODEX_TOKEN",
+        "OPENCODE_API_KEY",
+    ] {
         if let Some(secret) = values.optional(key) {
             credential(key, &secret)?;
         }
@@ -180,6 +190,18 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
     } else {
         None
     };
+    let opencode = if processor_provider == "opencode" {
+        Some(OpenCodeConfig {
+            api_key: values.text("OPENCODE_API_KEY"),
+            base_url: values.text("OPENCODE_BASE_URL"),
+            timeout_ms: values.integer("OPENCODE_TIMEOUT_MS")?,
+            reasoning: values
+                .optional("OPENCODE_PROCESSOR_REASONING")
+                .map(|value| value.to_ascii_lowercase()),
+        })
+    } else {
+        None
+    };
     let stt_provider = match values.lower("STT_PROVIDER").as_str() {
         "gigaam" => SttProvider::GigaAm,
         _ => SttProvider::OpenRouter,
@@ -261,10 +283,12 @@ pub(super) fn config(supplied: &Values) -> Result<Config> {
         processor_model: values.required(match processor_provider.as_str() {
             "anthropic" => "ANTHROPIC_PROCESSOR_MODEL",
             "codex" => "CODEX_PROCESSOR_MODEL",
+            "opencode" => "OPENCODE_PROCESSOR_MODEL",
             _ => "OPENROUTER_PROCESSOR_MODEL",
         })?,
         anthropic,
         codex,
+        opencode,
         processor_reasoning: values
             .optional("OPENROUTER_PROCESSOR_REASONING")
             .map(|value| value.to_ascii_lowercase()),

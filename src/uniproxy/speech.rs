@@ -253,11 +253,11 @@ fn synthesize(
                         Ok(synthesis) => Ok(synthesis),
                         Err(error) => {
                             tracing::warn!("design TTS failed: {error:#}");
-                            synthesize_local(&context, &text, &pcm, started, None).await
+                            synthesize_local(&context, &text, &pcm, started).await
                         }
                     }
                 } else {
-                    synthesize_local(&context, &text, &pcm, started, None).await
+                    synthesize_local(&context, &text, &pcm, started).await
                 }
             }
             TtsProvider::OpenRouter => synthesize_openrouter(&context, &text, &pcm, started).await,
@@ -385,33 +385,9 @@ async fn synthesize_local(
     text: &str,
     pcm: &mpsc::UnboundedSender<Result<Bytes>>,
     started: Instant,
-    voice: Option<&str>,
 ) -> Result<Synthesis> {
     let config = &context.config;
-    let voice = match voice {
-        Some(value) if value.eq_ignore_ascii_case("laugh") => {
-            config.local_tts_voice_laugh.as_deref().unwrap_or(&config.local_tts_voice)
-        }
-        Some(value) if value.eq_ignore_ascii_case("excited") => {
-            config.local_tts_voice_excited.as_deref().unwrap_or(&config.local_tts_voice)
-        }
-        Some(value) if value.eq_ignore_ascii_case("sad") => {
-            config.local_tts_voice_sad.as_deref().unwrap_or(&config.local_tts_voice)
-        }
-        Some(value) if value.eq_ignore_ascii_case("angry") => {
-            config.local_tts_voice_angry.as_deref().unwrap_or(&config.local_tts_voice)
-        }
-        Some(value) if value.eq_ignore_ascii_case("male") => {
-            config.local_tts_voice_male.as_deref().unwrap_or(&config.local_tts_voice)
-        }
-        Some(value) if value.eq_ignore_ascii_case("dagestani") => {
-            config.local_tts_voice_dagestani.as_deref().unwrap_or(&config.local_tts_voice)
-        }
-        Some(value) if value.eq_ignore_ascii_case("whisper") => {
-            config.local_tts_voice_whisper.as_deref().unwrap_or(config.whisper_tts_local_voice.as_str())
-        }
-        _ => &config.local_tts_voice,
-    };
+    let voice = config.local_tts_voice.as_str();
     let local = context.local_tts.as_ref().context("Локальный синтез речи не настроен")?;
     let speech = local.speech_stream(
         &config.local_tts_model,

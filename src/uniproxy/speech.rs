@@ -231,7 +231,7 @@ fn synthesize(
     context: &Arc<UniproxyContext>,
     text: String,
     style: SpeechStyle,
-    voice: Option<String>,
+    _voice: Option<String>,
     style_instruction: Option<String>,
     syntheses: &mut JoinSet<()>,
 ) -> Pcm {
@@ -248,11 +248,7 @@ fn synthesize(
                 None => synthesize_openrouter(&context, &text, &pcm, started).await,
             },
             TtsProvider::Local => {
-                if let Some(voice) = voice.as_deref() {
-                    synthesize_local(&context, &text, &pcm, started, Some(voice)).await
-                } else if let Some(tag) = style_instruction.as_deref().and_then(style_tag) {
-                    synthesize_local(&context, &text, &pcm, started, Some(tag)).await
-                } else if let (Some(instruction), Some(_)) = (style_instruction.as_deref(), context.design_tts.as_ref()) {
+                if let (Some(instruction), Some(_)) = (style_instruction.as_deref(), context.design_tts.as_ref()) {
                     match synthesize_design(&context, &text, &pcm, started, instruction).await {
                         Ok(synthesis) => Ok(synthesis),
                         Err(error) => {
@@ -428,26 +424,6 @@ async fn synthesize_local(
     Ok(forward(speech, pcm, started).await?.labelled(format!("qwen-local:{voice}")))
 }
 
-/// A free-text style that asks for a gender/regional voice: use a registered
-/// Base voice instead of VoiceDesign's fixed female prefix.
-fn style_tag(instruction: &str) -> Option<&'static str> {
-    let mut male = false;
-    let mut dagestani = false;
-    for word in instruction.split(|character: char| !character.is_alphanumeric()) {
-        let word = word.to_lowercase();
-        if matches!(word.as_str(), "male" | "man" | "masculine" | "boy") || word.starts_with("муж") {
-            male = true;
-        }
-        if matches!(word.as_str(), "dagestan" | "dagestani" | "caucasian" | "caucasus")
-            || word.starts_with("дагестан")
-            || word.starts_with("кавказ")
-        {
-            dagestani = true;
-        }
-    }
-    if dagestani { Some("dagestani") } else if male { Some("male") } else { None }
-}
-
 /// A free-text style from the LLM: VoiceDesign generates the delivery from
 /// the fixed voice prefix plus the requested manner.
 async fn synthesize_design(
@@ -458,11 +434,12 @@ async fn synthesize_design(
     instruction: &str,
 ) -> Result<Synthesis> {
     let design = context.design_tts.as_ref().context("VoiceDesign не настроен")?;
-    let instructions = format!(
-        "{} {}",
-        context.config.design_tts_prefix.trim(),
-        instruction.trim()
-    );
+    let prefix = context.config.design_tts_prefix.trim();
+    let instructions = if prefix.is_empty() {
+        instruction.trim().to_string()
+    } else {
+        format!("{prefix} {}", instruction.trim())
+    };
     let speech = design
         .speech_stream(
             &context.config.design_tts_model,

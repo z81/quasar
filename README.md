@@ -238,14 +238,7 @@ GET дополнительно возвращает `mcp.servers`, `mcp.baseline
 | `LOCAL_TTS_URL` | — | OpenAI-совместимый адрес Qwen3-TTS, например `http://192.168.1.133:8090/v1`. Обязателен при `TTS_PROVIDER=local` |
 | `LOCAL_TTS_MODEL` | `qwen3-tts-ru` | Модель локального синтеза |
 | `LOCAL_TTS_VOICE` | `alice` | Голос локального синтеза |
-| `LOCAL_TTS_VOICE_LAUGH` | — | Необязательный голос для стиля `laugh` от LLM; пусто — обычный голос |
-| `LOCAL_TTS_VOICE_EXCITED` | — | Необязательный голос для стиля `excited` |
-| `LOCAL_TTS_VOICE_SAD` | — | Необязательный голос для стиля `sad` |
-| `LOCAL_TTS_VOICE_ANGRY` | — | Необязательный голос для стиля `angry` |
-| `LOCAL_TTS_VOICE_MALE` | — | Голос для `voice=male` |
-| `LOCAL_TTS_VOICE_DAGESTANI` | — | Голос для `voice=dagestani` |
-| `LOCAL_TTS_VOICE_WHISPER` | — | Необязательный голос для стиля `whisper`; пусто — голос из `WHISPER_TTS_LOCAL_VOICE` |
-| `DESIGN_TTS_URL` | — | OpenAI-совместимый адрес VoiceDesign, например `http://192.168.1.133:8091/v1`. Пусто — свободные стили от LLM отключены |
+| `DESIGN_TTS_URL` | — | OpenAI-совместимый адрес VoiceDesign, например `http://192.168.1.133:8091/v1`. Пусто — стили от LLM отключены |
 | `DESIGN_TTS_MODEL` | `qwen3-tts-design` | Модель на сервере VoiceDesign |
 | `DESIGN_TTS_VOICE` | — | Голос VoiceDesign; обычно пусто, голос задаёт инструкция |
 | `DESIGN_TTS_PREFIX` | 18-летняя A | Фиксированное описание голоса, к которому добавляется стиль от LLM |
@@ -347,23 +340,18 @@ WHISPER_TTS_LOCAL_VOICE=whisper
 
 Сервер должен быть OpenAI-совместимым: `POST /audio/speech` с `response_format=pcm` (s16le, 24 кГц, моно). Если `WHISPER_TTS_URL` пуст, используется ElevenLabs.
 
-## Стиль голоса от LLM
+## Голос от LLM
 
-LLM может добавить в JSON поле `"voice"` перед `"text"`:
+Каждый ответ LLM сопровождает поле `style` — полное английское описание голоса для VoiceDesign. Готовых голосов для стилей нет: LLM сама решает, как звучит ответ.
 
-- `"laugh"` — шутка, смех, ответ на шутку;
-- `"excited"` — радостная новость, восторг;
-- `"sad"` — грустная новость, сочувствие;
-- `"angry"` — просьба ответить сердито, строго или недовольно;
-- `"male"` — мужской голос;
-- `"dagestani"` — дагестанский/кавказский акцент;
-- `"whisper"` — тихий или секретный ответ.
+- `"neutral"` — обычный голос, стабильный Base `LOCAL_TTS_VOICE`;
+- всё остальное — полное описание: пол, возраст, тембр, акцент, манера. Например:
+  - мужской: `A Russian man, 30 years old, deep calm voice. Native Russian pronunciation.`
+  - дагестанский: `A Russian man, 30 years old, speaking with a pronounced Dagestani/Caucasian accent, guttural, distinctive intonation.`
+  - устало: `A young Russian woman, 18 years old, soft low voice, tired, sleepy, low energy, quiet.`
+  - смех: `A young Russian woman, 18 years old, soft low voice, laughing warmly and cheerfully.`
 
-`style` обязателен: для обычного ответа LLM пишет `"neutral"`, для эмоции — короткое описание манеры. База голоса задана отдельно в `DESIGN_TTS_PREFIX` (18-летняя A), поэтому в `style` не нужно повторять пол и возраст. Голоса для частых стилей задаются в `LOCAL_TTS_VOICE_LAUGH`, `LOCAL_TTS_VOICE_EXCITED`, `LOCAL_TTS_VOICE_SAD`, `LOCAL_TTS_VOICE_ANGRY`, `LOCAL_TTS_VOICE_WHISPER`; если поле `voice` не задано, используется `LOCAL_TTS_VOICE`.
-
-Если `DESIGN_TTS_URL` задан, свободный `style` (например, `tired, sleepy, low energy, quiet`) уходит в VoiceDesign: Quasar добавит его к `DESIGN_TTS_PREFIX`. `neutral` и известные `voice` остаются на стабильном Base. Голос свободного стиля может слегка отличаться от обычного, зато манеру выбирает сама LLM.
-
-Акценты и диалекты тоже задаются через `style`, например `Russian speech with a pronounced Dagestani/Caucasian accent, guttural, distinctive intonation`. VoiceDesign не гарантирует точный акцент; если нужен стабильный, лучше записать 5–12 с речи носителя и склонировать её в Base.
+`neutral` идёт в Base, остальное — в VoiceDesign по `DESIGN_TTS_URL`. `DESIGN_TTS_PREFIX` по умолчанию пуст: style используется как есть, без фиксированного женского префикса. Если нужен стабильный акцент, лучше записать 5–12 с речи носителя и склонировать её в Base.
 
 ## Определение шёпота
 

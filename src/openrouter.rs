@@ -164,20 +164,13 @@ impl OpenRouter {
         format: TtsFormat,
         text: &str,
     ) -> Result<impl futures_util::Stream<Item = Result<bytes::Bytes>>> {
-        let mut body = json!({
-            "model": model,
-            "input": text,
-            "voice": voice,
-            "response_format": match format {
-                TtsFormat::Pcm => "pcm",
-                TtsFormat::Mp3 => "mp3",
-            },
+        let mut body = self.speech_body(model, voice, instructions, text);
+        body["response_format"] = json!(match format {
+            TtsFormat::Pcm => "pcm",
+            TtsFormat::Mp3 => "mp3",
         });
         if (speed - 1.0).abs() > f32::EPSILON {
             body["speed"] = json!(speed);
-        }
-        if let Some(instructions) = instructions {
-            body["instructions"] = json!(instructions);
         }
 
         let mut request = self
@@ -197,6 +190,96 @@ impl OpenRouter {
         }
 
         Ok(response.bytes_stream().map(|chunk| chunk.map_err(anyhow::Error::from)))
+    }
+
+    /// Synthesizes a one-shot WAV, used as a cloned voice's reference
+    pub async fn speech_wav(
+        &self,
+        model: &str,
+        voice: &str,
+        instructions: &Option<String>,
+        seed: i64,
+        text: &str,
+    ) -> Result<bytes::Bytes> {
+        let mut body = self.speech_body(model, voice, instructions, text);
+        body["response_format"] = json!("wav");
+        body["seed"] = json!(seed);
+        let mut request = self
+            .client
+            .post(format!("{}/audio/speech", self.base_url))
+            .header("X-Title", "alice-server")
+            .json(&body);
+        if !self.api_key.is_empty() {
+            request = request.bearer_auth(&self.api_key);
+        }
+        let response = request.send().await.context("reference speech request failed")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("reference speech synthesis failed: {status}: {}", readable_error(&body));
+        }
+        response.bytes().await.context("reading reference speech")
+    }
+
+    fn speech_body(&self, model: &str, voice: &str, instructions: &Option<String>, text: &str) -> Value {
+        let mut body = json!({
+            "model": model,
+            "input": text,
+            "voice": voice,
+        });
+        if let Some(instructions) = instructions {
+            body["instructions"] = json!(instructions);
+        }
+        body
+    }
+
+    /// Registers a WAV as a cloned voice of this server
+    pub async fn register_voice(&self, name: &str, ref_text: &str, wav: &[u8]) -> Result<()> {
+        let body = json!({
+            "name": name,
+            "ref_text": ref_text,
+            "wav_b64": base64::engine::general_purpose::STANDARD.encode(wav),
+        });
+        let response = self
+            .client
+            .post(format!("{}/audio/voices", self.base_url))
+            .header("X-Title", "alice-server")
+            .json(&body)
+            .send()
+            .await
+            .context("voice registration request failed")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("voice registration failed: {status}: {}", readable_error(&body));
+        }
+        Ok(())
+    }
+
+    /// The names of the voices this server can synthesize with
+    pub async fn voices(&self) -> Result<Vec<String>> {
+        #[derive(Deserialize)]
+        struct Voice {
+            name: String,
+        }
+        #[derive(Deserialize)]
+        struct Voices {
+            voices: Vec<Voice>,
+        }
+        let response = self
+            .client
+            .get(format!("{}/audio/voices", self.base_url))
+            .header("X-Title", "alice-server")
+            .send()
+            .await
+            .context("voice list request failed")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("voice list failed: {status}: {}", readable_error(&body));
+        }
+        let voices: Voices = response.json().await.context("invalid voice list response")?;
+        Ok(voices.voices.into_iter().map(|voice| voice.name).collect())
     }
 
     /// Transcribes an OGG/Opus utterance (converted to WAV by the caller)

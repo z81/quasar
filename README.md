@@ -342,20 +342,21 @@ WHISPER_TTS_LOCAL_VOICE=whisper
 
 ## Голос от LLM
 
-Каждый ответ LLM сопровождает поле `style` — полное английское описание голоса для VoiceDesign. Готовых голосов для стилей нет: LLM сама решает, как звучит ответ.
+Каждый ответ LLM сопровождает поле `style`. Обычный ответ — `"neutral"`: он озвучивается постоянным голосом из `LOCAL_TTS_VOICE`, поэтому голос не меняется от ответа к ответу и от фразы к фразе.
 
-Обычный ответ:
-`A young Russian woman, 18 years old, soft low-pitched natural voice, calm and friendly. Native Russian pronunciation.`
+Для другого голоса, возраста, акцента или манеры `style` — полное английское описание для VoiceDesign. Готовых голосов для стилей нет: LLM сама решает, как звучит ответ.
 
-Другие примеры:
+Примеры:
 - мужской: `A Russian man, 30 years old, deep calm voice. Native Russian pronunciation.`
 - дагестанский: `A Russian man, 30 years old, speaking with a pronounced Dagestani/Caucasian accent, guttural, distinctive intonation.`
 - устало: `A young Russian woman, 18 years old, soft low voice, tired, sleepy, low energy, quiet.`
 - смех: `A young Russian woman, 18 years old, soft low voice, laughing warmly and cheerfully.`
 
-Все ответы идут в VoiceDesign по `DESIGN_TTS_URL`; `DESIGN_TTS_PREFIX` по умолчанию пуст, style используется как есть. `LOCAL_TTS_VOICE` — только резерв, если style пуст или VoiceDesign недоступен. Если нужен стабильный акцент, лучше записать 5–12 с речи носителя и склонировать её в Base.
+Стиль уходит в VoiceDesign по `DESIGN_TTS_URL`. Quasar один раз генерирует по нему эталонную фразу, клонирует её в Base и дальше озвучивает все куски этого стиля одним голосом. Имя голоса и seed детерминированы: одинаковый `style` даёт один и тот же голос даже после перезапуска. Первый ответ с новым стилем тратит 1–2 с на создание эталона, последующие идут через быстрый Base.
 
-Qwen рекомендует описывать голос естественным языком, а не только списком прилагательных: можно описать персонажа и ситуацию. Официальные примеры instructions: «Speak in an incredulous tone, but with a hint of panic beginning to creep into your voice», «Male, 17 years old, tenor range, gaining confidence — deeper breath support now, though vowels still tighten when nervous». Для стабильного персонажа Qwen предлагает сначала создать голос через VoiceDesign, а потом клонировать его в Base.
+`DESIGN_TTS_PREFIX` по умолчанию пуст, style используется как есть. Если style пуст или VoiceDesign недоступен, остаётся `LOCAL_TTS_VOICE`. Если нужен стабильный акцент, лучше записать 5–12 с речи носителя и склонировать её в Base.
+
+Qwen рекомендует описывать голос естественным языком, а не только списком прилагательных: можно описать персонажа и ситуацию. Официальные примеры instructions: «Speak in an incredulous tone, but with a hint of panic beginning to creep into your voice», «Male, 17 years old, tenor range, gaining confidence — deeper breath support now, though vowels still tighten when nervous». Для стабильного персонажа Qwen предлагает сначала создать голос через VoiceDesign, а потом клонировать его в Base — это и делает Quasar для каждого стиля.
 
 ## Определение шёпота
 

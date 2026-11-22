@@ -15,10 +15,11 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::mpsc;
-use tokio::task::JoinSet;
+use tokio::task::{JoinHandle, JoinSet};
 
 use super::outbox::Outbox;
 use super::UniproxyContext;
@@ -39,6 +40,11 @@ const SPEECH_RATE: u32 = 24_000;
 
 /// At most this much of a chunk's text goes into its log line
 const LOGGED_TEXT_CHARS: usize = 40;
+
+/// The fixed text a VoiceDesign voice is cloned from: long enough for a
+/// stable speaker, short enough not to delay the first answer audio much.
+const DESIGN_REFERENCE_TEXT: &str =
+    "Привет! Меня зовут Алиса. Я внимательно слушаю тебя и готова помочь с любым вопросом.";
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum SpeechStyle {
@@ -122,7 +128,7 @@ async fn stream_speech(
     reference_message_id: &str,
     mut speech_end: Option<SpeechEnd>,
     style: SpeechStyle,
-    voice: Option<&str>,
+    _voice: Option<&str>,
     style_instruction: Option<&str>,
 ) -> Result<()> {
     // dropping the guard closes the stream, dropping the encoder kills ffmpeg
@@ -141,7 +147,20 @@ async fn stream_speech(
             }
         }
     };
-    tokio::try_join!(feed(context, &mut chunks, input, style, voice, style_instruction), drain)?;
+    // A VoiceDesign style gets one cloned Base voice for the whole part, so
+    // every chunk keeps the same speaker. The reference is generated while
+    // the LLM is still writing the first chunks.
+    let prepared = match (style, style_instruction) {
+        (SpeechStyle::Normal, Some(instruction))
+            if context.design_tts.is_some() && context.local_tts.is_some() =>
+        {
+            let context = context.clone();
+            let instruction = instruction.to_owned();
+            Some(tokio::spawn(async move { prepare_design_voice(&context, &instruction).await }))
+        }
+        _ => None,
+    };
+    tokio::try_join!(feed(context, &mut chunks, input, style, style_instruction, prepared), drain)?;
     encoder.finish().await
 }
 
@@ -152,13 +171,14 @@ async fn feed(
     chunks: &mut mpsc::UnboundedReceiver<String>,
     mut input: ChildStdin,
     style: SpeechStyle,
-    voice: Option<&str>,
     style_instruction: Option<&str>,
+    mut prepared: Option<JoinHandle<Result<DesignVoice>>>,
 ) -> Result<()> {
     // dropping the set (on an abort) cancels the requests still running
     let mut syntheses = JoinSet::new();
     let mut waiting = VecDeque::new();
     let mut started: VecDeque<Pcm> = VecDeque::new();
+    let mut design_voice = None;
     let mut more_text = true;
     let mut odd_byte = None;
     loop {
@@ -166,11 +186,22 @@ async fn feed(
             let Some(text) = waiting.pop_front() else {
                 break;
             };
+            if let Some(prepared) = prepared.take() {
+                match prepared.await {
+                    Ok(Ok(voice)) => design_voice = Some(voice.name),
+                    Ok(Err(error)) => {
+                        tracing::warn!("VoiceDesign reference failed: {error:#}; the chunks keep separate voices")
+                    }
+                    Err(error) => {
+                        tracing::warn!("VoiceDesign reference task failed: {error}; the chunks keep separate voices")
+                    }
+                }
+            }
             started.push_back(synthesize(
                 context,
                 text,
                 style,
-                voice.map(|value| value.to_owned()),
+                design_voice.clone(),
                 style_instruction.map(|value| value.to_owned()),
                 &mut syntheses,
             ));
@@ -231,7 +262,7 @@ fn synthesize(
     context: &Arc<UniproxyContext>,
     text: String,
     style: SpeechStyle,
-    _voice: Option<String>,
+    local_voice: Option<String>,
     style_instruction: Option<String>,
     syntheses: &mut JoinSet<()>,
 ) -> Pcm {
@@ -248,16 +279,18 @@ fn synthesize(
                 None => synthesize_openrouter(&context, &text, &pcm, started).await,
             },
             TtsProvider::Local => {
-                if let (Some(instruction), Some(_)) = (style_instruction.as_deref(), context.design_tts.as_ref()) {
+                if let Some(voice) = local_voice.as_deref() {
+                    synthesize_local(&context, &text, &pcm, started, voice).await
+                } else if let (Some(instruction), Some(_)) = (style_instruction.as_deref(), context.design_tts.as_ref()) {
                     match synthesize_design(&context, &text, &pcm, started, instruction).await {
                         Ok(synthesis) => Ok(synthesis),
                         Err(error) => {
                             tracing::warn!("design TTS failed: {error:#}");
-                            synthesize_local(&context, &text, &pcm, started).await
+                            synthesize_local(&context, &text, &pcm, started, &context.config.local_tts_voice).await
                         }
                     }
                 } else {
-                    synthesize_local(&context, &text, &pcm, started).await
+                    synthesize_local(&context, &text, &pcm, started, &context.config.local_tts_voice).await
                 }
             }
             TtsProvider::OpenRouter => synthesize_openrouter(&context, &text, &pcm, started).await,
@@ -385,9 +418,9 @@ async fn synthesize_local(
     text: &str,
     pcm: &mpsc::UnboundedSender<Result<Bytes>>,
     started: Instant,
+    voice: &str,
 ) -> Result<Synthesis> {
     let config = &context.config;
-    let voice = config.local_tts_voice.as_str();
     let local = context.local_tts.as_ref().context("Локальный синтез речи не настроен")?;
     let speech = local.speech_stream(
         &config.local_tts_model,
@@ -400,6 +433,64 @@ async fn synthesize_local(
     Ok(forward(speech, pcm, started).await?.labelled(format!("qwen-local:{voice}")))
 }
 
+/// A Base voice cloned from the deterministic VoiceDesign reference of one
+/// style. The name is derived from the style, so every chunk, part and answer
+/// with that style uses the same speaker.
+struct DesignVoice {
+    name: String,
+}
+
+/// The full VoiceDesign instruction: the optional configured prefix, then the
+/// LLM's description, with whitespace normalized for a stable key.
+fn design_instructions(context: &UniproxyContext, instruction: &str) -> String {
+    let prefix = context.config.design_tts_prefix.trim();
+    let text = if prefix.is_empty() {
+        instruction.trim().to_string()
+    } else {
+        format!("{prefix} {}", instruction.trim())
+    };
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A style's permanent voice name and reference seed: the same prompt always
+/// gets the same reference audio, even after a restart of the Base server.
+fn design_voice_key(instructions: &str) -> (String, i64) {
+    let mut hasher = Sha256::new();
+    hasher.update(b"qwen-design-v1\0");
+    hasher.update(instructions.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(DESIGN_REFERENCE_TEXT.as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&digest[..8]);
+    let hash = u64::from_be_bytes(bytes) & i64::MAX as u64;
+    (format!("design-{hash:016x}"), hash as i64)
+}
+
+/// Generates the style's reference voice once and registers it in Base; later
+/// chunks are cloned from it, so one part never changes speakers.
+async fn prepare_design_voice(context: &UniproxyContext, instruction: &str) -> Result<DesignVoice> {
+    let design = context.design_tts.as_ref().context("VoiceDesign не настроен")?;
+    let base = context.local_tts.as_ref().context("Локальный синтез речи не настроен")?;
+    let instructions = design_instructions(context, instruction);
+    let (name, seed) = design_voice_key(&instructions);
+    if base.voices().await?.iter().any(|voice| voice == &name) {
+        return Ok(DesignVoice { name });
+    }
+    let wav = design
+        .speech_wav(
+            &context.config.design_tts_model,
+            &context.config.design_tts_voice,
+            &Some(instructions),
+            seed,
+            DESIGN_REFERENCE_TEXT,
+        )
+        .await?;
+    base.register_voice(&name, DESIGN_REFERENCE_TEXT, &wav).await?;
+    tracing::info!("VoiceDesign reference '{name}' registered for '{}'", shown(instruction));
+    Ok(DesignVoice { name })
+}
+
 /// A free-text style from the LLM: VoiceDesign generates the delivery from
 /// the fixed voice prefix plus the requested manner.
 async fn synthesize_design(
@@ -410,12 +501,7 @@ async fn synthesize_design(
     instruction: &str,
 ) -> Result<Synthesis> {
     let design = context.design_tts.as_ref().context("VoiceDesign не настроен")?;
-    let prefix = context.config.design_tts_prefix.trim();
-    let instructions = if prefix.is_empty() {
-        instruction.trim().to_string()
-    } else {
-        format!("{prefix} {}", instruction.trim())
-    };
+    let instructions = design_instructions(context, instruction);
     let speech = design
         .speech_stream(
             &context.config.design_tts_model,

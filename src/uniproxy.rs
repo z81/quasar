@@ -651,6 +651,9 @@ impl Connection {
             TextInputKind::PlayButton if !echo => {
                 TextInputKind::Utterance("продолжи музыку".to_string())
             }
+            TextInputKind::Text(text) if crate::player::is_stop_command(&text) => {
+                TextInputKind::Utterance(text)
+            }
             kind => kind,
         };
         let target = |dialog_id: String| ResponseTarget {
@@ -711,15 +714,6 @@ impl Connection {
             }
             TextInputKind::Text(text) => {
                 let request = self.request(target(self.dialog.response_dialog_id(station_dialog_id)), zone);
-                if text.trim().to_lowercase() == "стоп" {
-                    let schedules = self.context.schedules.clone();
-                    let duid = self.device_id.clone();
-                    self.tasks.spawn(async move {
-                        if let Err(error) = crate::schedule_tool::stop_active(&schedules, &duid).await {
-                            tracing::warn!("cannot stop active alarm: {error}");
-                        }
-                    });
-                }
                 match directives::text_command(&text) {
                     Some(command) => {
                         self.tasks.spawn(request.answer_directives(vec![command]));

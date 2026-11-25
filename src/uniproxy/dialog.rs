@@ -580,6 +580,34 @@ impl Request {
                 Err(error) => tracing::warn!("cannot stop active alarm: {error}"),
             }
         }
+        if !turn.external_event && crate::player::is_stop_command(&turn.text) {
+            match crate::player::action(
+                &self.registry, &self.context.remote, &self.device_id,
+                &serde_json::json!({"action":"stop"}),
+            ).await {
+                Ok(receipt) if receipt.delivered > 0 => {
+                    tracing::info!("local music stop sent");
+                    if let Some(feedback) = &self.feedback {
+                        feedback.action("player_stop", "sent", Some("Остановка музыки запрошена")).await;
+                        feedback.completed().await;
+                    }
+                }
+                Ok(_) => {
+                    if let Some(feedback) = &self.feedback {
+                        feedback.failed("Соединение с колонкой потеряно").await;
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!("cannot stop music: {}", error.1);
+                    if let Some(feedback) = &self.feedback { feedback.failed(error.1).await; }
+                }
+            }
+            let _ = parts.send(AgentOutput {
+                directives: Vec::new(), finished: true, should_listen: false, voice: None, style: None,
+                text: OutputText::Complete(String::new()),
+            });
+            return;
+        }
         if !self.context.processor_ready() {
             if let Some(feedback) = &self.feedback {
                 feedback.failed("Языковая модель не настроена. Откройте настройки сервера Quasar.").await;
@@ -859,7 +887,7 @@ fn is_alarm_stop(text: &str) -> bool {
         .find_map(|wake| normalized.strip_prefix(wake))
         .unwrap_or(normalized)
         .trim_matches(|c: char| c.is_whitespace() || c == ',');
-    matches!(normalized, "стоп" | "останови будильник" | "выключи будильник")
+    matches!(normalized, "стоп" | "хватит" | "останови будильник" | "выключи будильник")
 }
 
 /// The per-turn state shown to the LLM: system facts, the speaker, the MCP

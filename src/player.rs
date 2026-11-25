@@ -304,6 +304,31 @@ pub struct PlayerReceipt {
     pub result: String,
 }
 
+/// Exact user commands only: mentions, negations and longer requests still
+/// belong to the dialog agent.
+pub fn is_stop_command(text: &str) -> bool {
+    let normalized = text.to_lowercase();
+    let words: Vec<&str> = normalized
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let mut words = words.as_slice();
+    if words.first().is_some_and(|word| matches!(*word, "алиса" | "яндекс" | "ясмина")) {
+        words = &words[1..];
+    }
+    if words.first() == Some(&"пожалуйста") {
+        words = &words[1..];
+    }
+    if words.last() == Some(&"пожалуйста") {
+        words = &words[..words.len() - 1];
+    }
+    matches!(words,
+        ["стоп" | "хватит"]
+        | ["выключи" | "останови", "музыку" | "радио"]
+        | ["хватит", "музыки"]
+    )
+}
+
 /// Validated management actions. Station queueing and remote-provider results
 /// remain distinct from an acknowledgement by physical playback hardware.
 pub async fn action(
@@ -322,13 +347,12 @@ pub async fn action(
     ))?;
     let generated = registry.player.snapshot(duid).stream_id.as_deref()
         .is_some_and(|id| id.starts_with("quasar-stable-audio-"));
-    if matches!(name, "pause" | "stop" | "resume")
+    if matches!(name, "pause" | "resume")
         && (generated || name == "resume"
             && status(registry, remote, duid).await.source.as_deref() == Some("Stable Audio"))
     {
         let function = match name {
             "pause" => "pause_generated_music",
-            "stop" => "stop_music_radio",
             _ => "resume_generated_music",
         };
         let result = remote.call_by_name(function, &Some(json!({})), duid,
@@ -366,6 +390,18 @@ pub async fn action(
                 directives: vec![directive],
             },
         );
+        // Stop native playback first, then cancel the generator even while
+        // its first track is still preparing and has no station stream ID.
+        if name == "stop" && remote.owns("stop_music_radio") {
+            let result = remote.call_by_name(
+                "stop_music_radio", &Some(json!({})), duid,
+                &json!({"serverType":"quasar", "deviceId":duid}),
+            ).await.map_err(|_| PlayerError(
+                StatusCode::BAD_GATEWAY,
+                "Остановка отправлена колонке, но генератор музыки недоступен",
+            ))?;
+            return Ok(PlayerReceipt { delivered, result });
+        }
         return Ok(PlayerReceipt {
             delivered,
             result: if delivered > 0 {

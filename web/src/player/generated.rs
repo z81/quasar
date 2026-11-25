@@ -118,7 +118,7 @@ pub(super) fn GeneratedMusic(state: ControlState) -> Element {
             }
             div { class: "generated-music-options",
                 label { r#for: "generated-music-duration", "Длина трека",
-                    span { input { id: "generated-music-duration", r#type: "number", min: "10", max: "120", step: "1",
+                    span { input { id: "generated-music-duration", r#type: "text", inputmode: "numeric",
                         value: "{duration}", aria_invalid: seconds.is_none(), oninput: move |event| duration.set(event.value()),
                     } "сек" }
                 }

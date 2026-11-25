@@ -49,6 +49,7 @@ class Session:
     state: str = "preparing"
     queue: deque = field(default_factory=deque)
     current: Path | None = None
+    offset: int = 0
     generating: bool = False
     generated: int = 0
     generation_seconds: float | None = None
@@ -211,29 +212,34 @@ class Bridge:
         listener = secrets.token_hex(8)
         session.listener = listener
         session.state = "playing"
+        started = time.monotonic()
+        sent = 0
         try:
             while session.state == "playing" and revision == session.revision and listener == session.listener:
-                if session.queue:
-                    previous = session.current
-                    session.current = session.queue.popleft()
-                    if previous:
-                        previous.unlink(missing_ok=True)
-                    session.repeating = False
-                    session.changed.set()
-                elif not session.current:
-                    break
-                else:
-                    # A slow generation must not turn an endless radio into silence.
-                    session.repeating = True
-                started = time.monotonic()
-                sent = 0
+                if not session.current or session.offset >= session.current.stat().st_size:
+                    if session.queue:
+                        previous = session.current
+                        session.current = session.queue.popleft()
+                        if previous:
+                            previous.unlink(missing_ok=True)
+                        session.repeating = False
+                        session.changed.set()
+                    elif not session.current:
+                        break
+                    else:
+                        # A slow generation must not turn an endless radio into silence.
+                        session.repeating = True
+                    session.offset = 0
                 with session.current.open("rb") as source:
+                    source.seek(session.offset)
                     while chunk := source.read(4800):
                         if session.state != "playing" or revision != session.revision or listener != session.listener:
                             return
+                        session.offset += len(chunk)
                         yield chunk
                         sent += len(chunk)
-                        # CBR 192 kbps, with up to one second of initial read-ahead.
+                        # One clock for the entire connection: read-ahead must
+                        # not grow by another second at every track boundary.
                         await asyncio.sleep(max(0, sent / 24000 - (time.monotonic() - started) - 1))
                 if not session.radio:
                     session.state = "finished"
@@ -336,6 +342,8 @@ async def command(bridge, duid, name, arguments):
     elif name == "resume_generated_music":
         if not session or session.state not in ("paused", "finished") or not (session.current or session.queue):
             raise HTTPException(409, "Нет готовой музыки для воспроизведения")
+        if session.state == "finished":
+            session.offset = 0
         await bridge.play(session)
     else:
         raise HTTPException(422, "Неизвестная команда")

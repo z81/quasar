@@ -26,6 +26,7 @@ mod dnd_api;
 mod device_access;
 mod device_tools;
 mod gigastt;
+mod generated_music;
 mod logging;
 mod server_logs;
 mod home_assistant;

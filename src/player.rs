@@ -216,11 +216,30 @@ pub fn refresh_message() -> TServerMessage {
 
 /// Structured bridge state is tied to its configured station, so a bridge
 /// cannot accidentally control a different device selected in the UI.
-async fn bridge_state(remote: &RemoteServers, duid: &str) -> Option<Value> {
+async fn bridge_state(remote: &RemoteServers, duid: &str, native: &PlayerStatus) -> Option<Value> {
     let metadata = json!({"serverType":"quasar", "deviceId":duid});
     let entries = remote.state(duid, &metadata).await;
-    let (_, value) = entries.get("player")?;
-    let value: Value = serde_json::from_str(value).ok()?;
+    let bridge = entries.get("player").and_then(|(_, value)| serde_json::from_str::<Value>(value).ok());
+    if let Some((_, value)) = entries.get("generated_music") {
+        if let Ok(mut value) = serde_json::from_str::<Value>(value) {
+            if value["duid"].as_str() == Some(duid)
+                && (native.stream_id.is_some() && value["stream_id"].as_str() == native.stream_id.as_deref()
+                    || value["state"] == "paused"
+                        && !matches!(native.state.as_str(), "playing" | "buffering")
+                        && bridge.as_ref().is_none_or(|p| p["state"] != "playing"))
+                && matches!(value["state"].as_str(), Some("playing" | "buffering" | "paused" | "finished"))
+            {
+                value["source"] = json!("Stable Audio");
+                value["title"] = value["prompt"].clone();
+                value["artist"] = json!(if value["mode"] == "radio" { "AI-радио" } else { "Созданная музыка" });
+                if value["state"] == "finished" {
+                    value["state"] = json!(native.state);
+                }
+                return Some(value);
+            }
+        }
+    }
+    let value = bridge?;
     (value["duid"].as_str() == Some(duid)).then_some(value)
 }
 
@@ -232,8 +251,8 @@ pub async fn status(
     if registry.is_connected(duid) && registry.player.refresh_due(duid) {
         registry.send(duid, StationCommand::RefreshPlayer);
     }
-    let bridge = bridge_state(remote, duid).await;
     let mut player = registry.player.snapshot(duid);
+    let bridge = bridge_state(remote, duid, &player).await;
     player.connected = registry.is_connected(duid);
     player.capabilities.pause = player.connected;
     player.capabilities.set_volume = player.connected;
@@ -264,8 +283,8 @@ pub async fn status(
                 player.cover_url = None;
             }
         }
-        player.capabilities.resume =
-            player.connected && !native_other_source && remote.owns("speaker_player_resume");
+        player.capabilities.resume = player.connected && !native_other_source
+            && remote.owns(if bridge["source"] == "Stable Audio" { "resume_generated_music" } else { "speaker_player_resume" });
         let spotify = bridge["source"].as_str() == Some("Spotify");
         player.capabilities.next =
             player.connected && !native_other_source && spotify && remote.owns("spotify_next");
@@ -301,6 +320,22 @@ pub async fn action(
         StatusCode::UNPROCESSABLE_ENTITY,
         "Не задано действие",
     ))?;
+    let generated = registry.player.snapshot(duid).stream_id.as_deref()
+        .is_some_and(|id| id.starts_with("quasar-stable-audio-"));
+    if matches!(name, "pause" | "stop" | "resume")
+        && (generated || name == "resume"
+            && status(registry, remote, duid).await.source.as_deref() == Some("Stable Audio"))
+    {
+        let function = match name {
+            "pause" => "pause_generated_music",
+            "stop" => "stop_music_radio",
+            _ => "resume_generated_music",
+        };
+        let result = remote.call_by_name(function, &Some(json!({})), duid,
+            &json!({"serverType":"quasar", "deviceId":duid})).await
+            .map_err(|_| PlayerError(StatusCode::BAD_GATEWAY, "Генератор музыки недоступен"))?;
+        return Ok(PlayerReceipt { delivered: 1, result });
+    }
     let directive = match name {
         "set_volume" => {
             let volume = body["volume"]

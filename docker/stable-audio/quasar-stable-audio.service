@@ -1,0 +1,23 @@
+[Unit]
+Description=Quasar Stable Audio music and radio
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/quasar-stable-audio
+EnvironmentFile=/etc/quasar-stable-audio.env
+ExecStart=/opt/stable-audio-venv/bin/python -m uvicorn server:app --host 0.0.0.0 --port 8100 --no-access-log
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=180
+Nice=10
+CPUWeight=20
+MemoryHigh=2500M
+MemoryMax=3G
+MemorySwapMax=4G
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

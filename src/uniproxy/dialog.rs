@@ -590,7 +590,8 @@ impl Request {
             });
             return;
         }
-        let metadata_json = metadata.to_json();
+        let mut metadata_json = metadata.to_json();
+        metadata_json["deviceId"] = serde_json::json!(self.device_id);
         let session_id = agent.session_id().to_string();
         let state = dialog_state(&self.context, &session_id, metadata, &metadata_json, &self.zone, live_context).await;
         let state_prompt = self.context.prompt_generator.generate_state(&state).unwrap_or_else(|error| {

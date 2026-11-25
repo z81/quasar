@@ -321,16 +321,25 @@ fn MusicForStation(
         });
     });
     use_effect(move || {
+        let generated = (state.player)().as_ref().is_some_and(|p| p.source.as_deref() == Some("Stable Audio"));
         let latest = editor
             .status
             .read()
             .as_ref()
-            .and_then(|s| s.external.clone());
+            .and_then(|s| if generated { None } else { s.external.clone() });
         if *external.peek() != latest {
             external.set(latest);
         }
     });
     let mut snapshot = (editor.status)().unwrap_or_default();
+    let generated = (state.player)().as_ref().is_some_and(|p| p.source.as_deref() == Some("Stable Audio"));
+    if generated {
+        snapshot.external = None;
+        snapshot.position_ms = None;
+        snapshot.duration_ms = None;
+        snapshot.playing = false;
+        snapshot.capabilities.clear();
+    }
     if let Some(other) = &snapshot.external {
         snapshot.track = Some(other.track.clone());
         snapshot.position_ms = other.position_ms;
@@ -359,7 +368,7 @@ fn MusicForStation(
     let can_shuffle = can("shuffle");
     let can_repeat = can("repeat");
     let can_queue = can("queue");
-    let can_save = snapshot.authorization.connected
+    let can_save = !generated && snapshot.authorization.connected
         && snapshot
             .authorization
             .missing_scopes

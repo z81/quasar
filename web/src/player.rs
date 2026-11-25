@@ -9,6 +9,7 @@ use crate::{
 };
 
 mod music;
+mod generated;
 
 #[component]
 pub fn PlayerCard(state: ControlState) -> Element {
@@ -17,7 +18,14 @@ pub fn PlayerCard(state: ControlState) -> Element {
 
 #[component]
 pub fn MusicPage(state: ControlState) -> Element {
-    rsx! { PlayerControls { key: "{state.selected}", state, expanded: true } }
+    rsx! {
+        div {
+            PlayerControls { key: "{state.selected}", state, expanded: true }
+        }
+        div {
+            generated::GeneratedMusic { key: "{state.selected}", state }
+        }
+    }
 }
 
 #[component]

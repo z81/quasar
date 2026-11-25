@@ -1,0 +1,14 @@
+# Install the GPU-specific torch/torchaudio build separately; do not let the
+# upstream Stable Audio package replace a working ROCm installation with CUDA.
+einops>=0.8.2
+einops-exts>=0.0.4
+numpy>=2.2.6
+packaging>=26.0
+safetensors>=0.7.0
+tqdm>=4.67.3
+huggingface-hub>=1.7.1
+transformers>=5.8.0
+soundfile>=0.13.1
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+httpx>=0.27,<1

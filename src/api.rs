@@ -52,6 +52,7 @@ pub fn router(state: Arc<ApiState>, auth: Arc<crate::auth::AuthManager>) -> Rout
         .route("/devices/{duid}/push-directive", post(push_directive))
         .route("/devices/{duid}/display", get(display::status).post(display::animate))
         .route("/devices/{duid}/sound", get(sound::status).put(sound::update))
+        .route("/devices/{duid}/generated-music", get(crate::generated_music::status).post(crate::generated_music::action))
         .route("/devices/{duid}/weather", get(crate::weather_api::forecast))
         .route("/weather/locations", get(crate::weather_api::locations))
         .route("/devices/{duid}/weather/location", put(crate::weather_api::set_location))

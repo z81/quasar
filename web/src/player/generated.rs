@@ -58,6 +58,16 @@ fn perform(state: ControlState, mut editor: Editor, body: serde_json::Value) {
 
 #[component]
 pub(super) fn GeneratedMusic(state: ControlState) -> Element {
+    let duid = (state.selected)();
+    rsx! {
+        if !duid.is_empty() {
+            GeneratedForStation { key: "{duid}", state, duid }
+        }
+    }
+}
+
+#[component]
+fn GeneratedForStation(state: ControlState, duid: String) -> Element {
     let mut prompt = use_signal(String::new);
     let mut duration = use_signal(|| "60".to_owned());
     let mut editor = Editor {
@@ -67,27 +77,26 @@ pub(super) fn GeneratedMusic(state: ControlState) -> Element {
         load_error: use_signal(|| None::<String>),
         revision: use_signal(|| 0),
     };
-    use_future(move || async move {
-        let duid = state.selected.peek().clone();
-        if duid.is_empty() {
-            return;
-        }
-        loop {
-            // A poll started before a button press cannot overwrite its receipt.
-            if !*editor.busy.peek() {
-                let revision = *editor.revision.peek();
-                let result = api::get::<Status>(state, &endpoint(&duid)).await;
-                if !*editor.busy.peek() && revision == *editor.revision.peek() {
-                    match result {
-                        Ok(status) => {
-                            editor.status.set(Some(status));
-                            editor.load_error.set(None);
+    use_future(move || {
+        let duid = duid.clone();
+        async move {
+            loop {
+                // A poll started before a button press cannot overwrite its receipt.
+                if !*editor.busy.peek() {
+                    let revision = *editor.revision.peek();
+                    let result = api::get::<Status>(state, &endpoint(&duid)).await;
+                    if !*editor.busy.peek() && revision == *editor.revision.peek() {
+                        match result {
+                            Ok(status) => {
+                                editor.status.set(Some(status));
+                                editor.load_error.set(None);
+                            }
+                            Err(error) => editor.load_error.set(Some(error)),
                         }
-                        Err(error) => editor.load_error.set(Some(error)),
                     }
                 }
+                gloo_timers::future::TimeoutFuture::new(3000).await;
             }
-            gloo_timers::future::TimeoutFuture::new(3000).await;
         }
     });
     let status = (editor.status)();
@@ -103,7 +112,9 @@ pub(super) fn GeneratedMusic(state: ControlState) -> Element {
             "preparing" | "buffering" | "playing" | "paused" | "error"
         )
     });
-    let error = (editor.error)().or_else(|| (editor.load_error)()).or_else(|| status.as_ref().and_then(|s| s.error.clone()));
+    let error = (editor.error)()
+        .or_else(|| (editor.load_error)())
+        .or_else(|| status.as_ref().and_then(|s| s.error.clone()));
     rsx! {
         document::Stylesheet { href: asset!("/assets/generated-music.css") }
         section { class: "generated-music", aria_label: "Генерация музыки",

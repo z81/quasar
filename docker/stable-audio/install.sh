@@ -19,4 +19,5 @@ install -m 644 "$source_dir/quasar-stable-audio.service" /etc/systemd/system/
 # /etc/quasar-stable-audio.env supplies ALICE_API_URL and STREAM_URL (ending in
 # /stream), and ALICE_API_TOKEN if Quasar requires it. Model access is granted
 # separately through Hugging Face; this installer never accepts model terms.
+# Set STABLE_AUDIO_MODEL=medium there to use Medium instead of small-music.
 systemctl daemon-reload

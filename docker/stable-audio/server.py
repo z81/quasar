@@ -93,7 +93,8 @@ class Bridge:
     def status(self, duid):
         session = self.sessions.get(duid)
         result = session.status() if session else {"duid": duid, "state": "idle"}
-        return {**result, "configured": True, "ready": self.ready, "model": "Stable Audio 3 Small Music",
+        model_name = {"small-music": "Small Music", "medium": "Medium"}.get(self.engine.model_name, self.engine.model_name)
+        return {**result, "configured": True, "ready": self.ready, "model": f"Stable Audio 3 {model_name}",
                 "error": result.get("error") or self.error}
 
     async def push(self, session, name, payload):

@@ -1,5 +1,6 @@
 """The model stays in one worker; speech services keep their own environment."""
 
+import json
 import os
 import secrets
 import subprocess
@@ -10,6 +11,7 @@ from pathlib import Path
 class Engine:
     def __init__(self, directory: Path):
         self.directory = directory
+        self.model_name = os.environ.get("STABLE_AUDIO_MODEL", "small-music")
         self.model = None
 
     def load(self):
@@ -22,9 +24,57 @@ class Engine:
         if torch.version.hip:
             torch.backends.cuda.enable_flash_sdp(False)
             torch.backends.cuda.enable_mem_efficient_sdp(False)
-        self.model = StableAudioModel.from_pretrained(
-            "small-music", device=os.environ.get("STABLE_AUDIO_DEVICE", "cuda")
-        )
+            if torch.cuda.get_device_properties(0).gcnArchName.split(":")[0] == "gfx906":
+                from stable_audio_3.models import transformer
+
+                # SAME-L already has a chunked SDPA implementation for GPUs
+                # without Flash Attention; avoid its Triton compilation path.
+                transformer.flex_attention_available = False
+        device = os.environ.get("STABLE_AUDIO_DEVICE", "cuda")
+        if self.model_name == "medium" and device.startswith("cuda"):
+            self.model = self._load_medium(device)
+        else:
+            self.model = StableAudioModel.from_pretrained(self.model_name, device=device)
+
+    def _load_medium(self, device):
+        import torch
+        from safetensors import safe_open
+        from stable_audio_3 import StableAudioModel
+        from stable_audio_3.factory import create_diffusion_cond_from_config
+        from stable_audio_3.loading_utils import remap_state_dict_keys
+        from stable_audio_3.model_configs import all_models
+
+        config_path, checkpoint_path = all_models[self.model_name].resolve()
+        with open(config_path) as source:
+            config = json.load(source)
+        # Construct FP16 parameters directly on the GPU: the VM has 4 GB RAM,
+        # while Medium's FP32 checkpoint alone is over 9 GB.
+        previous_dtype = torch.get_default_dtype()
+        try:
+            torch.set_default_dtype(torch.float16)
+            with torch.device(device):
+                model = create_diffusion_cond_from_config(config)
+        finally:
+            torch.set_default_dtype(previous_dtype)
+
+        # pread avoids reserving the entire file as a writable mmap. Keep
+        # only one CPU tensor at a time and retain strict checkpoint checks.
+        targets = model.state_dict()
+        with safe_open(checkpoint_path, framework="pt", device="cpu", backend="pread") as checkpoint:
+            names = remap_state_dict_keys({key: key for key in checkpoint.keys()}, targets)
+            if names.keys() != targets.keys():
+                raise RuntimeError("Medium checkpoint keys do not match the model")
+            with torch.no_grad():
+                for name, source_name in names.items():
+                    tensor = checkpoint.get_tensor(source_name)
+                    if tensor.shape != targets[name].shape:
+                        raise RuntimeError(f"Medium checkpoint shape mismatch: {name}")
+                    targets[name].copy_(tensor)
+                    del tensor
+        model.half().eval().requires_grad_(False)
+        model.use_lora = False
+        model.lora_names = []
+        return StableAudioModel(model, config, device, True)
 
     def generate(self, prompt: str, duration: int):
         import numpy as np

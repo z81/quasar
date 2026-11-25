@@ -325,6 +325,7 @@ async fn synthesize_whisper(
                 1.0,
                 TtsFormat::Pcm,
                 text,
+                None,
             )
             .await?;
         return Ok(forward(speech, pcm, started).await?.labelled("whisper-local".to_owned()));
@@ -340,6 +341,7 @@ async fn synthesize_whisper(
         1.0,
         TtsFormat::Mp3,
         &text,
+        None,
     ).await?;
     Ok(decode(decoder, speech, pcm, started, &AtomicBool::new(false)).await?
         .labelled("whisper".to_owned()))
@@ -401,7 +403,7 @@ async fn synthesize_openrouter(
     let decoder = encoded.map(|encoded| Transcoder::decode_to_pcm(encoded, rate)).transpose()?;
     let speech = context
         .openrouter
-        .speech_stream(&config.tts_model, &config.tts_voice, &config.tts_instructions, config.tts_speed, config.tts_format, text)
+        .speech_stream(&config.tts_model, &config.tts_voice, &config.tts_instructions, config.tts_speed, config.tts_format, text, None)
         .await?;
     let Some(decoder) = decoder else {
         return forward(speech, pcm, started).await;
@@ -430,6 +432,9 @@ async fn synthesize_local(
         1.0,
         TtsFormat::Pcm,
         text,
+        // Qwen's default 0.9 can substitute consonants in short Russian
+        // replies; 0.65 kept the checked phrases intact with the same voice.
+        Some(0.65),
     ).await?;
     Ok(forward(speech, pcm, started).await?.labelled(format!("qwen-local:{voice}")))
 }
@@ -511,6 +516,7 @@ async fn synthesize_design(
             1.0,
             TtsFormat::Pcm,
             text,
+            None,
         )
         .await?;
     Ok(forward(speech, pcm, started).await?.labelled("qwen-design".to_owned()))

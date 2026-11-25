@@ -163,6 +163,7 @@ impl OpenRouter {
         speed: f32,
         format: TtsFormat,
         text: &str,
+        temperature: Option<f32>,
     ) -> Result<impl futures_util::Stream<Item = Result<bytes::Bytes>>> {
         let mut body = self.speech_body(model, voice, instructions, text);
         body["response_format"] = json!(match format {
@@ -171,6 +172,9 @@ impl OpenRouter {
         });
         if (speed - 1.0).abs() > f32::EPSILON {
             body["speed"] = json!(speed);
+        }
+        if let Some(temperature) = temperature {
+            body["temperature"] = json!(temperature);
         }
 
         let mut request = self

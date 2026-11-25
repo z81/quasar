@@ -1,12 +1,11 @@
 [Unit]
-Description=GigaAM RNNT streaming STT gateway with parallel E2E comparison
-After=network.target gigaam-rnnt-stt.service gigaam-stt.service
-Wants=gigaam-rnnt-stt.service gigaam-stt.service
+Description=GigaAM v3 E2E RNNT streaming STT gateway
+After=network.target gigaam-stt.service
+Wants=gigaam-stt.service
 
 [Service]
 WorkingDirectory=/root
-Environment=GIGAAM_PRIMARY_URL=http://127.0.0.1:8096/inference
-Environment=GIGAAM_SHADOW_URL=http://127.0.0.1:8097/inference
+Environment=GIGAAM_PRIMARY_URL=http://127.0.0.1:8097/inference
 ExecStart=/opt/qwen-venv/bin/python /root/whisper_gigastt.py
 Restart=always
 RestartSec=3

@@ -1,12 +1,9 @@
-# Gigastt-compatible gateway: GigaAM RNNT supplies the final transcript while
-# optional GigaAM E2E recognition compares the same audio independently.
+# Gigastt-compatible gateway backed by GigaAM v3 E2E RNNT.
 
 import asyncio
 import json
 import os
-import re
 import time
-import uuid
 
 import requests
 import webrtcvad
@@ -17,51 +14,20 @@ BYTES_PER_SECOND = SAMPLE_RATE * 2
 FRAME_MS = 20
 FRAME_BYTES = SAMPLE_RATE * 2 * FRAME_MS // 1000  # 640
 PAD_BYTES = int(0.2 * BYTES_PER_SECOND)
-GIGAAM_PRIMARY_URL = os.environ.get("GIGAAM_PRIMARY_URL", "http://127.0.0.1:8096/inference")
-GIGAAM_SHADOW_URL = os.environ.get("GIGAAM_SHADOW_URL", "")
-PRIMARY_MODEL = "gigaam-v3-rnnt"
-SHADOW_MODEL = "gigaam-v3-e2e-rnnt"
-shadow_task = None
+GIGAAM_PRIMARY_URL = os.environ.get("GIGAAM_PRIMARY_URL", "http://127.0.0.1:8097/inference")
+PRIMARY_MODEL = "gigaam-v3-e2e-rnnt"
 
 
-def call_gigaam(pcm: bytes, url: str):
+def call_gigaam(pcm: bytes):
     started = time.monotonic()
     response = requests.post(
-        url,
+        GIGAAM_PRIMARY_URL,
         data=pcm,
         headers={"Content-Type": "application/octet-stream"},
         timeout=(1, 10),
     )
     response.raise_for_status()
     return response.json()["text"], time.monotonic() - started
-
-
-async def compare_shadow(pcm, primary, utterance_id, reason, started):
-    record = {
-        "utterance_id": utterance_id,
-        "reason": reason,
-        "primary": PRIMARY_MODEL,
-        "shadow": SHADOW_MODEL,
-        "audio_seconds": round(len(pcm) / BYTES_PER_SECOND, 3),
-    }
-    try:
-        text, elapsed = await asyncio.to_thread(call_gigaam, pcm, GIGAAM_SHADOW_URL)
-        record[SHADOW_MODEL] = {"text": text, "seconds": round(elapsed, 3)}
-    except Exception as error:
-        record[SHADOW_MODEL] = {"error": str(error)[:300]}
-    try:
-        text, elapsed = await asyncio.shield(primary)
-        record[PRIMARY_MODEL] = {"text": text, "seconds": round(elapsed, 3)}
-    except Exception as error:
-        record[PRIMARY_MODEL] = {"error": str(error)[:300]}
-    record["pair_seconds"] = round(time.monotonic() - started, 3)
-    if "text" in record[PRIMARY_MODEL] and "text" in record[SHADOW_MODEL]:
-        normalized = [
-            " ".join(re.findall(r"\w+", record[name]["text"].casefold().replace("ё", "е")))
-            for name in [PRIMARY_MODEL, SHADOW_MODEL]
-        ]
-        record["agreement"] = normalized[0] == normalized[1]
-    print("asr_comparison " + json.dumps(record, ensure_ascii=False), flush=True)
 
 
 class Session:
@@ -89,7 +55,6 @@ class Session:
             await self.ws.send(json.dumps(message, ensure_ascii=False))
 
     async def final(self, reason: str):
-        global shadow_task
         if self.utterance_start is None or self.last_voice is None:
             await self.send({"type": "final", "text": "", "words": [], "endpoint_reason": reason})
             return
@@ -102,19 +67,8 @@ class Session:
         if len(pcm) < int(0.2 * BYTES_PER_SECOND):
             await self.send({"type": "final", "text": "", "words": [], "endpoint_reason": reason})
             return
-        started = time.monotonic()
-        primary = asyncio.create_task(asyncio.to_thread(call_gigaam, pcm, GIGAAM_PRIMARY_URL))
-        if GIGAAM_SHADOW_URL:
-            # Keep at most one comparison in flight; a slow shadow must never
-            # build a queue or hold up the primary transcript.
-            if shadow_task is None or shadow_task.done():
-                shadow_task = asyncio.create_task(
-                    compare_shadow(pcm, primary, uuid.uuid4().hex, reason, started)
-                )
-            else:
-                print("asr_shadow_skipped: previous comparison still running", flush=True)
         try:
-            text, elapsed = await primary
+            text, elapsed = await asyncio.to_thread(call_gigaam, pcm)
         except Exception as error:
             await self.send({"type": "error", "code": "gigaam_failed", "message": str(error)[:300]})
             return

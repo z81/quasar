@@ -1,0 +1,14 @@
+[Unit]
+Description=Whisper streaming STT gateway with parallel GigaAM comparison
+After=network.target whisper-stt.service gigaam-stt.service
+Wants=whisper-stt.service gigaam-stt.service
+
+[Service]
+WorkingDirectory=/root
+Environment=GIGAAM_SHADOW_URL=http://127.0.0.1:8097/inference
+ExecStart=/opt/qwen-venv/bin/python /root/whisper_gigastt.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

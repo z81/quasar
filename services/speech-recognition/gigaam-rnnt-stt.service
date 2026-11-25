@@ -1,0 +1,16 @@
+[Unit]
+Description=GigaAM v3 RNNT recognition worker (Vulkan)
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/quasar-asr
+Environment=PYTHONUNBUFFERED=1
+Environment=OPENBLAS_NUM_THREADS=2
+Environment=PYTHONPATH=/opt/quasar-asr/transcribe.cpp/bindings/python/src
+Environment=TRANSCRIBE_LIBRARY=/opt/quasar-asr/transcribe.cpp/build/src/libtranscribe.so
+ExecStart=/opt/qwen-venv/bin/python /opt/quasar-asr/gigaam_server.py --model /opt/quasar-asr/models/gigaam-v3-rnnt-F32.gguf --port 8096 --threads 2
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

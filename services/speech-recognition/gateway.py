@@ -1,14 +1,12 @@
-# Gigastt-compatible gateway: Whisper supplies the final transcript while
-# optional GigaAM shadow recognition compares the same audio independently.
+# Gigastt-compatible gateway: GigaAM RNNT supplies the final transcript while
+# optional GigaAM E2E recognition compares the same audio independently.
 
 import asyncio
-import io
 import json
 import os
 import re
 import time
 import uuid
-import wave
 
 import requests
 import webrtcvad
@@ -19,43 +17,17 @@ BYTES_PER_SECOND = SAMPLE_RATE * 2
 FRAME_MS = 20
 FRAME_BYTES = SAMPLE_RATE * 2 * FRAME_MS // 1000  # 640
 PAD_BYTES = int(0.2 * BYTES_PER_SECOND)
-WHISPER_URL = "http://127.0.0.1:8098/inference"
+GIGAAM_PRIMARY_URL = os.environ.get("GIGAAM_PRIMARY_URL", "http://127.0.0.1:8096/inference")
 GIGAAM_SHADOW_URL = os.environ.get("GIGAAM_SHADOW_URL", "")
-LANGUAGE = "ru"
+PRIMARY_MODEL = "gigaam-v3-rnnt"
+SHADOW_MODEL = "gigaam-v3-e2e-rnnt"
 shadow_task = None
 
 
-def wav_bytes(pcm: bytes) -> bytes:
-    out = io.BytesIO()
-    with wave.open(out, "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(SAMPLE_RATE)
-        wav.writeframes(pcm)
-    return out.getvalue()
-
-
-def call_whisper(pcm: bytes):
+def call_gigaam(pcm: bytes, url: str):
     started = time.monotonic()
     response = requests.post(
-        WHISPER_URL,
-        files={"file": ("utterance.wav", wav_bytes(pcm), "audio/wav")},
-        data={
-            "response_format": "verbose_json",
-            "language": LANGUAGE,
-            "temperature": "0",
-        },
-        timeout=60,
-    )
-    response.raise_for_status()
-    body = response.json()
-    return body.get("text", "").strip(), body.get("segments", []), time.monotonic() - started
-
-
-def call_gigaam(pcm: bytes):
-    started = time.monotonic()
-    response = requests.post(
-        GIGAAM_SHADOW_URL,
+        url,
         data=pcm,
         headers={"Content-Type": "application/octet-stream"},
         timeout=(1, 10),
@@ -68,24 +40,25 @@ async def compare_shadow(pcm, primary, utterance_id, reason, started):
     record = {
         "utterance_id": utterance_id,
         "reason": reason,
-        "primary": "whisper",
+        "primary": PRIMARY_MODEL,
+        "shadow": SHADOW_MODEL,
         "audio_seconds": round(len(pcm) / BYTES_PER_SECOND, 3),
     }
     try:
-        text, elapsed = await asyncio.to_thread(call_gigaam, pcm)
-        record["gigaam"] = {"text": text, "seconds": round(elapsed, 3)}
+        text, elapsed = await asyncio.to_thread(call_gigaam, pcm, GIGAAM_SHADOW_URL)
+        record[SHADOW_MODEL] = {"text": text, "seconds": round(elapsed, 3)}
     except Exception as error:
-        record["gigaam"] = {"error": str(error)[:300]}
+        record[SHADOW_MODEL] = {"error": str(error)[:300]}
     try:
-        text, _, elapsed = await asyncio.shield(primary)
-        record["whisper"] = {"text": text, "seconds": round(elapsed, 3)}
+        text, elapsed = await asyncio.shield(primary)
+        record[PRIMARY_MODEL] = {"text": text, "seconds": round(elapsed, 3)}
     except Exception as error:
-        record["whisper"] = {"error": str(error)[:300]}
+        record[PRIMARY_MODEL] = {"error": str(error)[:300]}
     record["pair_seconds"] = round(time.monotonic() - started, 3)
-    if "text" in record["whisper"] and "text" in record["gigaam"]:
+    if "text" in record[PRIMARY_MODEL] and "text" in record[SHADOW_MODEL]:
         normalized = [
             " ".join(re.findall(r"\w+", record[name]["text"].casefold().replace("ё", "е")))
-            for name in ["whisper", "gigaam"]
+            for name in [PRIMARY_MODEL, SHADOW_MODEL]
         ]
         record["agreement"] = normalized[0] == normalized[1]
     print("asr_comparison " + json.dumps(record, ensure_ascii=False), flush=True)
@@ -130,7 +103,7 @@ class Session:
             await self.send({"type": "final", "text": "", "words": [], "endpoint_reason": reason})
             return
         started = time.monotonic()
-        primary = asyncio.create_task(asyncio.to_thread(call_whisper, pcm))
+        primary = asyncio.create_task(asyncio.to_thread(call_gigaam, pcm, GIGAAM_PRIMARY_URL))
         if GIGAAM_SHADOW_URL:
             # Keep at most one comparison in flight; a slow shadow must never
             # build a queue or hold up the primary transcript.
@@ -141,26 +114,12 @@ class Session:
             else:
                 print("asr_shadow_skipped: previous comparison still running", flush=True)
         try:
-            text, segments, elapsed = await primary
+            text, elapsed = await primary
         except Exception as error:
-            await self.send({"type": "error", "code": "whisper_failed", "message": str(error)[:300]})
+            await self.send({"type": "error", "code": "gigaam_failed", "message": str(error)[:300]})
             return
         offset = (self.base_bytes + start) / BYTES_PER_SECOND
-        words = []
-        for segment in segments:
-            words.append(
-                {
-                    "start": offset + float(segment.get("start", 0.0)),
-                    "end": offset + float(segment.get("end", 0.0)),
-                }
-            )
-        if not words:
-            words.append(
-                {
-                    "start": offset,
-                    "end": offset + len(pcm) / BYTES_PER_SECOND,
-                }
-            )
+        words = [{"start": offset, "end": offset + len(pcm) / BYTES_PER_SECOND}]
         print(
             "final %s: %.2f s audio, %.2f s decode: %s"
             % (reason, len(pcm) / BYTES_PER_SECOND, elapsed, text),
@@ -193,7 +152,7 @@ class Session:
                     await self.final("vad")
 
     async def run(self):
-        await self.send({"type": "ready", "supported_rates": [SAMPLE_RATE]})
+        await self.send({"type": "ready", "model": PRIMARY_MODEL, "supported_rates": [SAMPLE_RATE]})
         try:
             async for message in self.ws:
                 if isinstance(message, str):
@@ -229,7 +188,7 @@ async def main():
         max_size=1 << 20,
         ping_interval=20,
     ):
-        print("whisper streaming gateway on 0.0.0.0:8099", flush=True)
+        print("GigaAM streaming gateway on 0.0.0.0:8099", flush=True)
         await asyncio.Future()
 
 

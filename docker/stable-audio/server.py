@@ -242,7 +242,8 @@ class Bridge:
                         # not grow by another second at every track boundary.
                         await asyncio.sleep(max(0, sent / 24000 - (time.monotonic() - started) - 1))
                 if not session.radio:
-                    session.state = "finished"
+                    if session.state == "playing" and revision == session.revision and listener == session.listener:
+                        session.state = "finished"
                     return
         finally:
             if session.listener == listener:
